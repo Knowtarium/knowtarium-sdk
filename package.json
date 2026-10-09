@@ -10,7 +10,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+ssh://git@github.com/Magentix-Studio/knowtarium-sdk.git"
+    "url": "git+ssh://git@github.com/Knowtarium/knowtarium-sdk.git"
   },
   "type": "module",
   "sideEffects": false,

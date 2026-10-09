@@ -20,7 +20,7 @@ These stay as they are until the owner decides; nothing in this repo changes the
 - **Make the repository public, or turn provenance off.** `publishConfig.provenance` is `true`:
   npm then records which GitHub Actions run built the package, and that only works from a public
   repository whose URL matches `repository` in `package.json` (left as it is, the
-  `Magentix-Studio/knowtarium-sdk` URL). From a private repository `npm publish` fails with provenance on.
+  `Knowtarium/knowtarium-sdk` URL). From a private repository `npm publish` fails with provenance on.
   So either publish from a public repository at that URL (or update `repository` to the public
   one), or set `provenance` to `false` until then.
 - **`homepage` and `bugs`** point at `https://knowtarium.com` and `https://knowtarium.com/support`,
