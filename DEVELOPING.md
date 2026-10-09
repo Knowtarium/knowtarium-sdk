@@ -354,7 +354,10 @@ canonicalizer. `pnpm test` runs the crypto tests in Node and again under happy-d
   marks the record applied). An agent's direct write sends `Knowtarium-Agent-Policy-Revision`,
   the policy revision it checked. Note uploads send the base version as `If-Match: "3"` plus
   `Knowtarium-Folder-Id`, downloads return `ETag: "4"`, and 429 or 503 answers carry
-  `Retry-After`. `REQUEST_HEADERS` and `RESPONSE_HEADERS` list them for CORS.
+  `Retry-After`. `REQUEST_HEADERS` and `RESPONSE_HEADERS` list them for CORS. Clients also read
+  a weak `ETag: W/"4"` as version 4 (`parseResponseVersionTag`), since an edge that compresses
+  the answer (Cloudflare) may weaken the tag. `If-Match` stays strong: clients send `"3"`, and
+  `parseVersionTag` (what the server reads it with) accepts nothing else.
 - **Signed envelopes**: a person's note writes and deletes, approvals, rejections, comments, events,
   folder creates and moves, every wrapped workspace key and every key generation
   (`generationSignedAt` and `generationSignature` on workspace creation and rotation, returned as

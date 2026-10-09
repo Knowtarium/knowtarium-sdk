@@ -164,6 +164,21 @@ export interface Tampering {
   agentPolicy?: (policy: AgentPolicy) => AgentPolicy;
   /** Holds a route's answer (already computed) until the promise settles. */
   hold?: (route: RouteName) => Promise<void> | undefined;
+  /** Rewrites the `ETag` of every answer that has one, as an edge proxy might. */
+  etag?: (tag: string) => string;
+}
+
+/** The answer with its `ETag` rewritten. */
+function retagged(answer: FetchResponse, etag: (tag: string) => string): FetchResponse {
+  return {
+    ...answer,
+    headers: {
+      get: (name) => {
+        const value = answer.headers.get(name);
+        return value !== null && name.toLowerCase() === "etag" ? etag(value) : value;
+      },
+    },
+  };
 }
 
 function parseQuery(search: string): URLSearchParamsLike {
@@ -291,7 +306,12 @@ export class FakeServer {
       }
     }
     // the agent policy routes hash with Web Crypto, so they answer asynchronously
-    const settled = answer instanceof Promise ? answer.catch(failed) : Promise.resolve(answer);
+    const settled = (
+      answer instanceof Promise ? answer.catch(failed) : Promise.resolve(answer)
+    ).then((done) => {
+      const etag = this.tamper.etag;
+      return etag === undefined ? done : retagged(done, etag);
+    });
     const held = this.lastRoute === undefined ? undefined : this.tamper.hold?.(this.lastRoute);
     return held === undefined ? settled : held.then(() => settled);
   };

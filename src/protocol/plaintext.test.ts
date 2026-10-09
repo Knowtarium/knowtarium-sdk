@@ -77,6 +77,7 @@ const SAFE_STRINGS = new Set<z.ZodType>([
   protocol.LiveTicket,
   protocol.PendingNonce,
   protocol.VersionTag,
+  protocol.ResponseVersionTag,
   protocol.ErrorMessage,
   protocol.IssuePathKey,
   ...CIPHERTEXT_SCHEMAS,

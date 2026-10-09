@@ -6,6 +6,7 @@ import {
   CreateWorkspaceRequest,
   ListKeysResponse,
   NoteUploadHeaders,
+  NoteVersionHeaders,
   RotateKeyRequest,
   UpdateFolderRequest,
   Workspace,
@@ -138,6 +139,14 @@ describe("notes and the changes feed", () => {
       expect(
         NoteUploadHeaders.safeParse({ "if-match": tag, "knowtarium-folder-id": id("fld") }).success,
       ).toBe(false);
+    }
+  });
+
+  it("reads a response's ETag even when a proxy weakened it", () => {
+    expect(NoteVersionHeaders.parse({ etag: '"4"' }).etag).toBe(4);
+    expect(NoteVersionHeaders.parse({ etag: 'W/"4"' }).etag).toBe(4);
+    for (const tag of ["4", "W/4", 'W/"04"', 'w/"4"', "*"]) {
+      expect(NoteVersionHeaders.safeParse({ etag: tag }).success).toBe(false);
     }
   });
 

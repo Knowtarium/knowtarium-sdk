@@ -19,7 +19,12 @@ import {
 } from "../../protocol/index.js";
 import { EncryptedCache, MemoryCacheAdapter } from "../cache/index.js";
 import { deriveVerification, parseNote } from "../../core/index.js";
-import { isSyncApiError, isVaultError, RequestValidationError } from "../errors/index.js";
+import {
+  InvalidResponseError,
+  isSyncApiError,
+  isVaultError,
+  RequestValidationError,
+} from "../errors/index.js";
 import { newId } from "../platform/ids.js";
 import { fakeSockets } from "../testing/fake-socket.js";
 import { flush } from "../testing/http.js";
@@ -1224,6 +1229,60 @@ describe("agent direct writes (protocol 2)", () => {
         text: "x",
       }),
     ).toMatchObject({ status: "saved", policyRevision: 2 });
+  });
+});
+
+describe("a weakened ETag", () => {
+  // an edge that compresses an answer may turn `ETag: "7"` into `W/"7"`: the same version
+  it('reads W/"n" as version n for a write, an agent\'s write and a version read', async () => {
+    const world = new World();
+    world.server.tamper.etag = (tag) => `W/${tag}`;
+    const web = world.web();
+    const folderId = await createFolder(world, web, "Agents");
+    const noteId: NoteId = newId("note");
+    const saved = await web.engine.writeNote({
+      noteId,
+      folderId,
+      baseVersion: 0,
+      name: "note.md",
+      text: note("first"),
+    });
+    expect(saved).toMatchObject({ status: "saved", note: { version: 1 } });
+
+    const cli = world.cli();
+    await cli.engine.pull();
+    const written = await cli.engine.writeAsAgent({
+      noteId,
+      folderId,
+      baseVersion: 1,
+      name: "note.md",
+      text: note("by the agent"),
+    });
+    expect(written).toMatchObject({ status: "saved", note: { version: 2 } });
+
+    expect(await web.engine.readVersion(noteId, 1)).toMatchObject({
+      version: 1,
+      text: note("first"),
+    });
+  });
+
+  it("still refuses a tag that names no version", async () => {
+    const world = new World();
+    const web = world.web();
+    const noteId: NoteId = newId("note");
+    await web.engine.writeNote({
+      noteId,
+      folderId: world.folderId,
+      baseVersion: 0,
+      name: "note.md",
+      text: note("first"),
+    });
+    for (const tag of ["W/1", 'w/"1"', 'W/"01"', 'W/W/"1"', '"1"x']) {
+      world.server.tamper.etag = () => tag;
+      const error = await web.engine.readVersion(noteId, 1).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(InvalidResponseError);
+      expect(error).toMatchObject({ problem: "headers" });
+    }
   });
 });
 

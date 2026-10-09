@@ -227,10 +227,22 @@ describe("responses", () => {
   });
 
   it("refuses a raw version without a valid ETag", async () => {
-    const { client } = setup([response(200, new Uint8Array(64), { ETag: "W/4" })]);
-    await expect(
-      client.call(routes.getVersion, { params: { workspaceId, noteId, version: 4 } }),
-    ).rejects.toMatchObject({ problem: "headers" });
+    for (const tag of ["W/4", 'w/"4"', 'W/"04"', 'W/W/"4"']) {
+      const { client } = setup([response(200, new Uint8Array(64), { ETag: tag })]);
+      const error = await client
+        .call(routes.getVersion, { params: { workspaceId, noteId, version: 4 } })
+        .catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(InvalidResponseError);
+      expect(error).toMatchObject({ problem: "headers" });
+    }
+  });
+
+  it('reads a weak ETag (W/"7", as a compressing edge sends it) as the same version', async () => {
+    const { client } = setup([response(200, new Uint8Array(64), { ETag: 'W/"7"' })]);
+    const result = await client.call(routes.getVersion, {
+      params: { workspaceId, noteId, version: 7 },
+    });
+    expect(result.version).toBe(7);
   });
 });
 

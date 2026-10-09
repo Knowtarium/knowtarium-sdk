@@ -6,6 +6,7 @@ import {
   envelopeSigningText,
   formatVersionTag,
   envelopeProtocolVersion,
+  parseResponseVersionTag,
   parseVersionTag,
   PROTOCOL_2_ENVELOPE_TYPES,
   PROTOCOL_VERSION,
@@ -322,5 +323,14 @@ describe("version tags", () => {
 
   it.each(["12", '"012"', 'W/"12"', "*", '"a"', ""])("rejects %j", (value) => {
     expect(parseVersionTag(value)).toBeNull();
+  });
+
+  it("reads a response's weak tag as the same version, and refuses anything else", () => {
+    expect(parseResponseVersionTag('"12"')).toBe(12);
+    expect(parseResponseVersionTag('W/"12"')).toBe(12);
+    expect(parseResponseVersionTag(' W/"0" ')).toBe(0);
+    for (const value of ["W/12", 'w/"12"', 'W/"012"', 'W/ "12"', 'W/W/"12"', "W/", "*", null]) {
+      expect(parseResponseVersionTag(value)).toBeNull();
+    }
   });
 });

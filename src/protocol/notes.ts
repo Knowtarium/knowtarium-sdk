@@ -7,6 +7,7 @@ import {
   FOLDER_ID_HEADER,
   headerKey,
   IF_MATCH_HEADER,
+  parseResponseVersionTag,
   parseVersionTag,
 } from "./headers.js";
 import { NoteCiphertext } from "./ciphertext.js";
@@ -35,6 +36,17 @@ export const VersionTag = z
   .string()
   .refine((value) => parseVersionTag(value) !== null, { error: 'Expected a version tag like "3"' })
   .transform((value) => parseVersionTag(value) ?? 0);
+
+/**
+ * A version entity tag in a response's `ETag`, parsed to the number: `"3"`, or `W/"3"` from a
+ * proxy that weakened it (`parseResponseVersionTag`).
+ */
+export const ResponseVersionTag = z
+  .string()
+  .refine((value) => parseResponseVersionTag(value) !== null, {
+    error: 'Expected a version tag like "3"',
+  })
+  .transform((value) => parseResponseVersionTag(value) ?? 0);
 
 /** A note as the server knows it: IDs, the current version, its size and who wrote it. */
 export const NoteMeta = z.object({
@@ -131,7 +143,7 @@ export const NoteDeleteHeaders = z
 export type NoteDeleteHeaders = z.infer<typeof NoteDeleteHeaders>;
 
 /** Headers of a raw note download and of a note write's response. */
-export const NoteVersionHeaders = z.object({ [headerKey(ETAG_HEADER)]: VersionTag });
+export const NoteVersionHeaders = z.object({ [headerKey(ETAG_HEADER)]: ResponseVersionTag });
 export type NoteVersionHeaders = z.infer<typeof NoteVersionHeaders>;
 
 /**

@@ -26,7 +26,10 @@ export function needsCsrfHeader(method: string): boolean {
  */
 export const IF_MATCH_HEADER = "If-Match";
 
-/** On note downloads and writes: the note version as an entity tag (`ETag: "4"`). */
+/**
+ * On note downloads and writes: the note version as an entity tag (`ETag: "4"`). Clients also
+ * read a weak `W/"4"` (`parseResponseVersionTag`), since a proxy may weaken it.
+ */
 export const ETAG_HEADER = "ETag";
 
 /** On 429 and 503 responses: seconds to wait before retrying. */
@@ -108,8 +111,22 @@ export function formatVersionTag(version: number): string {
   return `"${String(version)}"`;
 }
 
-/** Reads a version entity tag (`"3"`); null when it isn't one. */
+/**
+ * Reads a version entity tag (`"3"`); null when it isn't one. This is what a request's `If-Match`
+ * must be: strong only.
+ */
 export function parseVersionTag(value: string | null | undefined): number | null {
   const match = /^"(0|[1-9][0-9]{0,14})"$/.exec(value?.trim() ?? "");
+  return match?.[1] === undefined ? null : Number(match[1]);
+}
+
+/**
+ * Reads the version in a response's `ETag`: `"3"`, or the weak `W/"3"` an edge proxy may turn it
+ * into when it compresses the response (Cloudflare does), which names the same version. Null when
+ * it is neither. Only for reading responses: a request's `If-Match` stays strong
+ * (`parseVersionTag`).
+ */
+export function parseResponseVersionTag(value: string | null | undefined): number | null {
+  const match = /^(?:W\/)?"(0|[1-9][0-9]{0,14})"$/.exec(value?.trim() ?? "");
   return match?.[1] === undefined ? null : Number(match[1]);
 }

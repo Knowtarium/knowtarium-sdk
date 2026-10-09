@@ -4,7 +4,7 @@ import {
   type ApiError,
   ETAG_HEADER,
   parseErrorBody,
-  parseVersionTag,
+  parseResponseVersionTag,
   RAW_BYTES,
   RETRY_AFTER_HEADER,
   type RouteBase,
@@ -40,7 +40,7 @@ function responseVersion(route: RouteBase, response: FetchResponse): number | nu
   if (!route.responseHeaders.safeParse(values).success) {
     throw new InvalidResponseError(routeKey(route), "headers");
   }
-  return parseVersionTag(response.headers.get(ETAG_HEADER));
+  return parseResponseVersionTag(response.headers.get(ETAG_HEADER));
 }
 
 /** Reads a 2xx response: raw bytes as they are, JSON validated against the route's schema. */
