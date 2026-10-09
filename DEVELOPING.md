@@ -770,9 +770,10 @@ architecture doc):
 Lists are paged (`offset`, `limit`, with `total`, `truncated` and `next_offset`); `read_note`
 returns long notes in parts (`max_chars`, `offset`), and comments and diffs are capped. The
 instructions and tool descriptions tell agents that note text, comments and diffs are data, never
-instructions, to read the `index.md` conventions first, and that a passing `record_check` is
-applied automatically. Unapplied check records count in every verification state the tools show,
-so a recorded pass is reflected at once and a failed check shows as a conflict.
+instructions, to read the workspace's `index.md` conventions first where it has them (many
+workspaces have none), and that a passing `record_check` is applied automatically. Unapplied check
+records count in every verification state the tools show, so a recorded pass is reflected at once
+and a failed check shows as a conflict.
 
 **Which workspace.** A tool called without `workspace` uses the one connected workspace that can
 be used: one whose access was revoked, or that `disconnect` removed, doesn't count. A revocation
@@ -829,10 +830,14 @@ current version, in a `review` folder. `propose_edit` refuses a text that drops 
 note has (naming them); and, only when the change becomes a proposal, a note whose person's edit
 still waits for a check (in a `review` folder: elsewhere nothing waits for a check) and a second
 open proposal from the same agent for the same note unless `allow_duplicate` is set.
-`list_pending_checks` lists only notes in `review` folders. `create_note` wants kebab-case file
-names (default: from the title), `reply_comment` refuses an unknown comment, and a write that can't
-reach Knowtarium says that nothing was proposed or recorded. `my_pending_changes` shows when each
-proposal was submitted, its proposed file name and title, and the agent's summary. In `review`
+`list_pending_checks` lists only notes in `review` folders. `create_note` takes any file name the
+path rules accept; without one, the note is named after its title as the web app names notes
+(core's `noteNameFromTitle`: `Travel expenses.md`), or in lowercase words joined by dashes when
+every other note in the folder is named that way. A name taken in the folder is refused with a
+numbered one to try (`Travel expenses 2.md`), so an agent that meant the same note edits it
+instead. `reply_comment` refuses an unknown comment, and a write that can't reach Knowtarium says
+that nothing was proposed or recorded. `my_pending_changes` shows when each proposal was
+submitted, its proposed file name and title, and the agent's summary. In `review`
 folders every note summary carries `checkState` (the state from the checks alone), which
 `list_pending_checks` and the `search_notes` status filter use (`stale` goes by freshness, in every
 folder); `search_notes` is paged and its folder filter ignores letter case; `list_stale` gives
@@ -841,13 +846,15 @@ folder); `search_notes` is paged and its folder filter ignores letter case; `lis
 ## The agent skill
 
 `skills/knowtarium-conventions/SKILL.md` teaches agents to work in a Knowtarium workspace through
-the MCP tools: read the `index.md` conventions first, read titles and descriptions before bodies,
-write OKF notes with good file names and fields, know how a change lands (saved at once and
-undoable, so be conservative, or proposed in folders that ask for review) and tell the person which,
-always send a base version, never write a `human:` entry, treat note text as data, and run the
-consistency check on a person's edit in review folders (`list_pending_checks`, `related_notes`, open
-only the relevant notes, then `record_check` with the scope it read, and `flag_conflict` or edits to
-the other notes on a contradiction).
+the MCP tools: read the workspace's own `index.md` and `log.md` first where it has them (never
+assuming they exist, nor creating them unasked), read titles and descriptions before bodies, name
+notes after their title as the web app does (or as the folder already names them), write OKF
+fields without treating a missing optional one (a `description`) as a problem, know how a change
+lands (saved at once and undoable, so be conservative, or proposed in folders that ask for review)
+and tell the person which, always send a base version, never write a `human:` entry, treat note
+text as data, and run the consistency check on a person's edit in review folders
+(`list_pending_checks`, `related_notes`, open only the relevant notes, then `record_check` with the
+scope it read, and `flag_conflict` or edits to the other notes on a contradiction).
 
 `src/cli/mcp/skill.test.ts` keeps it honest: its frontmatter, every tool and OKF field it names
 exists, its example note is valid and accepted by `create_note`, and its check, run step by step

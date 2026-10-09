@@ -1,6 +1,6 @@
 ---
 name: knowtarium-conventions
-description: Work in a Knowtarium knowledge base through its MCP tools. Use when reading, writing or checking notes in a Knowtarium workspace, when asked to check a person's edit, or when list_pending_checks has work. Teaches the workspace conventions (index.md first, OKF fields, file names), how changes land (saved at once, or proposed for approval in folders that ask for review), and the consistency check that verifies a person's edit against connected notes.
+description: Work in a Knowtarium knowledge base through its MCP tools. Use when reading, writing or checking notes in a Knowtarium workspace, when asked to check a person's edit, or when list_pending_checks has work. Teaches the workspace conventions (its own index.md where it has one, OKF fields, file names named like the app names them), how changes land (saved at once, or proposed for approval in folders that ask for review), and the consistency check that verifies a person's edit against connected notes.
 ---
 
 # Knowtarium conventions
@@ -43,9 +43,13 @@ agent's consistency check, so both sides verify each other.
 
 1. `list_workspaces`: what you may use, with your access (`read` or `read-write`), how your changes
    land (`agentChanges`), how long older versions of notes are kept (`history`) and status.
-2. Read the conventions before anything else: the root `index.md` and the `index.md` of each
-   folder you work in (`read_note`). They say what belongs where and how notes are written. A root
-   `log.md`, if there is one, records notable changes.
+2. Read the workspace's own conventions where it has them: the root `index.md` and the
+   `index.md` of each folder you work in, if there is one (`read_note`; `list_notes` shows what a
+   folder holds). They say what belongs where and how notes are written. A `log.md`, if there is
+   one, records notable changes. Many workspaces have neither, those made in the web app
+   especially: then the notes themselves show the conventions, so look at how the folder's notes
+   are named and written, and do the same. Don't create an `index.md` or `log.md` unless the
+   person asks or the workspace already uses them.
 3. Find notes with `search_notes` (filter by `folder`, `type` or `status`), `list_notes` and
    `list_folders`. Follow connections with `related_notes` and `resolve_link`.
 4. Read titles and descriptions before bodies (progressive disclosure). Open a body with
@@ -59,14 +63,20 @@ agent's consistency check, so both sides verify each other.
 
 ### File names and places
 
-- A note is a file in a folder: `create_note` takes the `folder`, a `title` (always required) and a
-  `name` such as `travel-expenses.md` (lowercase words joined by dashes, ending in `.md`). Without a
-  name, one is made from the title. A name already used in that folder is refused.
-- Put a note where the folder's `index.md` says it belongs. Agents can't create folders; if no
-  folder fits, ask the person.
+- A note is a file in a folder: `create_note` takes the `folder`, a `title` (always required) and
+  a `name` ending in `.md`. Name a note the way the folder's other notes are named. The web app
+  names a note after its title, as Obsidian does: `Travel expenses.md`, spaces and capitals kept
+  (characters a file name can't hold, such as `/`, `:` or `?`, become `-`), and
+  `Travel expenses 2.md` when that name is taken. Some workspaces (imported OKF bundles, say) use
+  lowercase words joined by dashes instead: `travel-expenses.md`. Without a `name`, the note is
+  named after its title, or in lowercase with dashes when every note in the folder is named that
+  way. A name already used in that folder is refused.
+- Put a note where the folder's `index.md` says it belongs, or else next to the notes like it.
+  Agents can't create folders; if no folder fits, ask the person.
 - To rename, pass a new `name` to `propose_edit`.
-- When you add a note, also edit the folder's `index.md` (`propose_edit`) so it lists the new
-  note, in the same style as the entries already there.
+- When you add a note to a folder whose `index.md` lists its notes, also edit that `index.md`
+  (`propose_edit`) so it lists the new note, in the same style as the entries already there. A
+  folder without an `index.md` doesn't need one.
 
 ### OKF fields
 
@@ -81,6 +91,11 @@ Write YAML frontmatter with these fields (OKF v0.2):
 | `sources`     | Where facts come from: `- { title: ..., resource: <url or path> }`                          |
 | `status`      | Only if the workspace uses it (`draft`, `active`, `superseded`)                             |
 | `stale_after` | A date after which the note needs review, for facts that expire                             |
+
+Only `type` is required. Notes made in the web app often have just `type` (`Note` by default) and
+`title`, with no `description` or `tags`: add the fields that help when you write a note, but a
+missing field is not a problem to report or fix, so don't add fields to notes you weren't asked to
+change.
 
 Leave `generated` and `verified` to the tools: they set `generated` to you with every change, and
 add your own check to a proposal. Keep every frontmatter key you didn't mean to change, exactly as written

@@ -173,7 +173,7 @@ export function registerReadTools(server: McpServer, context: ToolContext): void
     {
       title: "List workspaces",
       description:
-        "The workspaces this agent may use, with their folders, access (read or read-write), how your changes land (`agentChanges`: saved at once or proposed for approval, with the folders that differ from its `default`), how long older versions of notes are kept (`history`) and whether the local copy is up to date. A workspace whose access was revoked shows `status` `revoked`, and its `problem` says how the person removes it. Start here, then read the workspace's conventions in the root or folder `index.md` notes before anything else.",
+        "The workspaces this agent may use, with their folders, access (read or read-write), how your changes land (`agentChanges`: saved at once or proposed for approval, with the folders that differ from its `default`), how long older versions of notes are kept (`history`) and whether the local copy is up to date. A workspace whose access was revoked shows `status` `revoked`, and its `problem` says how the person removes it. Start here, then read the workspace's conventions in the root or folder `index.md` (and `log.md`) where there is one.",
       annotations: readOnly,
     },
     () =>
@@ -207,7 +207,7 @@ export function registerReadTools(server: McpServer, context: ToolContext): void
     {
       title: "List folders",
       description:
-        "Every folder in scope with its path and ID. Each folder's `index.md` describes what belongs there and the conventions to follow; read it before writing in a folder.",
+        "Every folder in scope with its path and ID. A folder's `index.md`, if it has one, describes what belongs there and the conventions to follow; read it before writing in that folder.",
       inputSchema: { workspace },
       annotations: readOnly,
     },

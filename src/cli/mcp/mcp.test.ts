@@ -980,16 +980,18 @@ describe("the MCP tools' guardrails", () => {
     );
   });
 
-  it("asks for kebab-case names, known comments, and says when nothing was proposed offline", async () => {
+  it("names notes like the web app or the folder, knows comments, and says when nothing was proposed offline", async () => {
     const { world, ids } = await seeded();
     const { call } = await connect(world);
+    // a name as the web app gives it, from the title, is accepted as it is
     const upper = await call("create_note", {
       folder: "Research",
       name: "Travel Expenses.md",
       title: "Travel expenses",
       text: "x",
     });
-    expect(upper.text).toMatch(/`travel-expenses\.md`/);
+    expect(upper.error).toBe(false);
+    expect(upper.json()).toMatchObject({ name: "Travel Expenses.md" });
     const unknown = await call("reply_comment", {
       note: ids.pricing,
       comment_id: "cmt_nope",
@@ -1011,6 +1013,49 @@ describe("the MCP tools' guardrails", () => {
     });
     expect(proposal.error).toBe(true);
     expect(proposal.text).toMatch(/can't be reached, so nothing was proposed/);
+  });
+
+  it("names a note without a name after its title, in the folder's own style", async () => {
+    const { world } = await seeded();
+    const web = world.web();
+    // a folder made in the web app: notes named after their titles
+    const request = prepareFolder(world.signer, world.key, {
+      workspaceId: world.workspaceId,
+      parentId: null,
+      name: "Meetings",
+      rootFolderId: null,
+    });
+    await web.api.call(routes.createFolder, {
+      params: { workspaceId: world.workspaceId },
+      body: request,
+    });
+    await web.engine.writeNote({
+      noteId: newId("note"),
+      folderId: request.id,
+      baseVersion: 0,
+      name: "Note One.md",
+      text: "---\ntype: Note\ntitle: Note One\n---\nThe first meeting.\n",
+    });
+    const { call } = await connect(world, { direct: true });
+    const create = async (folder: string, title: string) =>
+      call("create_note", { folder, title, text: "Agreed on: the plan." });
+    // like the web app: the title, spaces and capitals kept, unsafe characters replaced
+    expect((await create("Meetings", "Q3: plans / goals")).json()).toMatchObject({
+      mode: "written",
+      name: "Q3- plans - goals.md",
+    });
+    // a folder whose notes are all lowercase words joined by dashes keeps that style
+    expect((await create("Archive", "Old Plans")).json()).toMatchObject({
+      mode: "written",
+      name: "old-plans.md",
+    });
+    // a clash is refused, suggesting a numbered name in the same style
+    const again = await create("Meetings", "Note One");
+    expect(again.error).toBe(true);
+    expect(again.text).toMatch(/Meetings\/Note One\.md exists already/);
+    expect(again.text).toContain("`Note One 2.md`");
+    const kebab = await create("Archive", "Old pricing");
+    expect(kebab.text).toContain("`old-pricing-2.md`");
   });
 
   it("lists stale notes with ISO dates", async () => {

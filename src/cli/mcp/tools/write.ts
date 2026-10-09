@@ -5,7 +5,9 @@ import { z } from "zod";
 import {
   addVerified,
   fileNameOf,
+  isReservedFile,
   normalizeNoteName,
+  noteNameFromTitle,
   noteTitle,
   lineDiff,
   newComment,
@@ -99,15 +101,33 @@ function fileName(
   }
   const taken = session.view.noteNamed(folderId, normalized, except);
   if (taken !== undefined) {
+    // numbered in the name's own style, as the web app numbers a title's name (`Pricing 2.md`)
+    const another = `${normalized.slice(0, -".md".length)}${KEBAB_NAME.test(normalized) ? "-" : " "}2.md`;
     throw new ToolError(
-      `${session.view.pathOf(taken.noteId)} exists already. Pick another name, or propose an edit to that note.`,
+      `${session.view.pathOf(taken.noteId)} exists already. If it covers the same thing, propose an edit to that note; otherwise pick another name (\`${another}\`, say).`,
     );
   }
   return normalized;
 }
 
-/** Kebab-case: lowercase words joined by dashes, ending in `.md` (the conventions' rule). */
+/** Lowercase words joined by dashes, ending in `.md`, as many OKF bundles name their notes. */
 const KEBAB_NAME = /^[\p{Ll}\p{Lo}\p{N}]+(?:-[\p{Ll}\p{Lo}\p{N}]+)*\.md$/u;
+
+/**
+ * The file name of a new note the agent gave no name: its title, as the web app names notes
+ * (`Travel expenses.md`, with characters a file name can't hold replaced), or lowercase words
+ * joined by dashes (`travel-expenses.md`) when every other note in the folder is named that way,
+ * so the folder keeps its own style. `index.md` and `log.md` don't count.
+ */
+function defaultNoteName(session: WorkspaceSession, folderId: FolderId, title: string): string {
+  const names = [...session.view.notes.values()]
+    .filter((note) => note.folderId === folderId)
+    .map((note) => fileNameOf(session.view.pathOf(note.noteId)))
+    .filter((name) => !isReservedFile(name));
+  return names.length > 0 && names.every((name) => KEBAB_NAME.test(name))
+    ? kebabNoteName(title)
+    : noteNameFromTitle(title);
+}
 
 /**
  * A kebab-case file name from a title (`Travel expenses 2026` -> `travel-expenses-2026.md`):
@@ -479,7 +499,7 @@ export function registerWriteTools(server: McpServer, context: ToolContext): voi
     {
       title: "Edit a note",
       description:
-        "Change a note: send the whole new file (frontmatter and body), based on the version you read; pass `name` to rename its file too. Depending on the folder, the change is saved at once (the person sees it as edited by you and can undo it) or proposed for the person's approval in Knowtarium; the result's `mode` says which (`written` or `proposed`). Keep every frontmatter key you didn't mean to change and follow the folder's `index.md` conventions; `generated` is set for you (and your own check, where the change is proposed). If the note changed since you read it, the change is refused: read it again and redo it.",
+        "Change a note: send the whole new file (frontmatter and body), based on the version you read; pass `name` to rename its file too. Depending on the folder, the change is saved at once (the person sees it as edited by you and can undo it) or proposed for the person's approval in Knowtarium; the result's `mode` says which (`written` or `proposed`). Keep every frontmatter key you didn't mean to change and follow the folder's conventions (its `index.md`, if it has one, and how its notes are written); `generated` is set for you (and your own check, where the change is proposed). If the note changed since you read it, the change is refused: read it again and redo it.",
       inputSchema: {
         workspace,
         note: noteRef,
@@ -570,7 +590,7 @@ export function registerWriteTools(server: McpServer, context: ToolContext): voi
     {
       title: "Create a note",
       description:
-        "Add a new note to a folder: a file name and the whole file, or just a title and body (a `type` and `title` are added); follow the folder's `index.md` conventions. Depending on the folder, it is saved at once (the person sees it as made by you and can undo it) or proposed for the person's approval; the result's `mode` says which (`written` or `proposed`). Search first, so you don't duplicate a note that exists.",
+        "Add a new note to a folder: a file name and the whole file, or just a title and body (a `type` and `title` are added); follow the folder's conventions (its `index.md`, if it has one, and how its notes are named and written). Depending on the folder, it is saved at once (the person sees it as made by you and can undo it) or proposed for the person's approval; the result's `mode` says which (`written` or `proposed`). Search first, so you don't duplicate a note that exists.",
       inputSchema: {
         workspace,
         folder: z
@@ -582,7 +602,7 @@ export function registerWriteTools(server: McpServer, context: ToolContext): voi
           .string()
           .optional()
           .describe(
-            "The file name within the folder: lowercase words joined by dashes, ending in `.md` (`travel-expenses.md`); default: from the title.",
+            "The file name within the folder, ending in `.md`: named like the folder's other notes, which in the web app is the title (`Travel expenses.md`). Default: the title, or lowercase words joined by dashes (`travel-expenses.md`) when every note in the folder is named that way.",
           ),
         title: z.string().min(1).max(200),
         text: z.string().describe("The note: a full OKF file with frontmatter, or just the body."),
@@ -615,12 +635,11 @@ export function registerWriteTools(server: McpServer, context: ToolContext): voi
         const data = note.frontmatter?.data ?? {};
         if (!("type" in data)) note = setType(note, args.type ?? "Note");
         if (!("title" in data)) note = setTitle(note, args.title);
-        if (args.name !== undefined && !KEBAB_NAME.test(args.name)) {
-          throw new ToolError(
-            `File names are lowercase words joined by dashes, ending in \`.md\`: use \`${kebabNoteName(args.name.replace(/\.md$/i, ""))}\`, say.`,
-          );
-        }
-        const name = fileName(session, folderId, args.name ?? kebabNoteName(args.title));
+        const name = fileName(
+          session,
+          folderId,
+          args.name ?? defaultNoteName(session, folderId, args.title),
+        );
         const checked = checkedText(note.text, null);
         return commit(
           session,
