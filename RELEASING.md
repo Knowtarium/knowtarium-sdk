@@ -17,15 +17,13 @@ These stay as they are until the owner decides; nothing in this repo changes the
 - **License: MIT** (owner, 2026-10-07). `package.json` says `"license": "MIT"` and `LICENSE` holds
   the text, copyright Magentix Studio UG (haftungsbeschränkt). npm ships `LICENSE` with the package
   on its own.
-- **Make the repository public, or turn provenance off.** `publishConfig.provenance` is `true`:
-  npm then records which GitHub Actions run built the package, and that only works from a public
-  repository whose URL matches `repository` in `package.json` (left as it is, the
-  `Knowtarium/knowtarium-sdk` URL). From a private repository `npm publish` fails with provenance on.
-  So either publish from a public repository at that URL (or update `repository` to the public
-  one), or set `provenance` to `false` until then.
-- **`homepage` and `bugs`** point at `https://knowtarium.com` and `https://knowtarium.com/support`,
-  placeholders until those pages exist. So does the privacy policy URL in
-  `extras/extras.config.json`.
+- **Public repository, provenance on** (owner, 2026-10-09). `publishConfig.provenance` is `true`:
+  npm records which GitHub Actions run built the package. That works because the repository is
+  public and its URL, `Knowtarium/knowtarium-sdk`, matches `repository` in `package.json`; keep the
+  two in step if the repository ever moves.
+- **`homepage` and `bugs`**: `homepage` is `https://knowtarium.com`; `bugs` points at this
+  repository's GitHub issues, with support@knowtarium.com as the email. The privacy policy URL in
+  `extras/extras.config.json` is `https://knowtarium.com/privacy`, which is live.
 
 ## Order
 

@@ -6,7 +6,8 @@
   "description": "Connect your AI agents to your Knowtarium workspace, end-to-end encrypted: the knowtarium CLI and MCP server, and the Knowtarium SDK.",
   "homepage": "https://knowtarium.com",
   "bugs": {
-    "url": "https://knowtarium.com/support"
+    "url": "https://github.com/Knowtarium/knowtarium-sdk/issues",
+    "email": "support@knowtarium.com"
   },
   "repository": {
     "type": "git",
