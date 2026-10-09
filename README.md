@@ -21,8 +21,10 @@ You need Node.js 20 or later (22 or 24 recommended). Then, in a terminal:
 npx knowtarium connect
 ```
 
-This opens your browser so you can approve this computer in your workspace. Then it offers to add
-Knowtarium to the agents it finds. Restart an agent after adding it so it picks up the new server.
+This opens your browser so you can approve this computer in your workspace. Then it lists the
+agents it finds, all ticked: press Enter to add Knowtarium to all of them, or untick some first
+(arrows move, space toggles, `a` toggles all, Esc adds none). Restart an agent after adding it so
+it picks up the new server.
 
 To keep the command around, install it globally with `npm install -g knowtarium` and run
 `knowtarium connect`.

@@ -2,10 +2,13 @@
 export const USAGE: Readonly<Record<string, string>> = {
   connect: `  knowtarium connect [--no-agents] [--yes] [--dry-run]
       Connect this computer to a workspace (opens the browser), then add
-      Knowtarium to the agents found here. \`login\` does the same.`,
+      Knowtarium to the agents found here, which you pick from a list (all
+      ticked). \`login\` does the same.`,
   agents: `  knowtarium agents [--yes] [--dry-run] [--agent <id>]...
       Add the MCP server to Claude Code, Claude Desktop, Cursor, Codex or OpenCode
-      (ids: claude-code, claude-desktop, cursor, codex, opencode).`,
+      (ids: claude-code, claude-desktop, cursor, codex, opencode). Without --yes
+      or --agent, pick the agents found from a list: all start ticked; arrows
+      (or j/k) move, space toggles, a toggles all, Enter confirms, Esc cancels.`,
   status: `  knowtarium status [--offline] [--json]
       Show the connected workspaces, their scope, token and cache.`,
   disconnect: `  knowtarium disconnect [--workspace <id>] [--all]

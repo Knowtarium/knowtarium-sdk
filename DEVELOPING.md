@@ -714,6 +714,17 @@ the previous file is copied to `<name>.knowtarium-backup-<time>` (the last three
 its permissions; a second run changes nothing; `--dry-run` writes nothing; an unknown `--agent`
 id is an error.
 
+`connect` and `agents` ask which of the agents found to add with a checkbox list (`CliIo.choose`)
+when stdin and stdout are both terminals: every agent starts ticked, so Enter at once adds them
+all; up and down (or k and j) move, space toggles, `a` toggles all, Esc adds none. It needs no
+dependency: `src/cli/choose.ts` is the list as a pure state machine (each key a new state, and
+the lines to draw), and `io.ts` drives it in raw mode with readline's keypress events, draws it
+again in place after each key and leaves a one-line summary. Raw mode and the cursor are put back
+on every way out, an error or a signal included; Ctrl+C puts them back, then interrupts the
+process as it would anywhere else. Without both terminals it asks the old yes-or-no question for
+all of them (`false` without a terminal at all), and `--yes`, `--agent` and `--dry-run` ask
+nothing.
+
 **Protocol versions.** When the API answers `unsupported_protocol`, a command (and the MCP
 server) says to update knowtarium, unless every version the error lists in `supportedVersions` is
 older than this package's `PROTOCOL_VERSION`: then the server is behind, and the message says so

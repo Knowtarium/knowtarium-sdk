@@ -16,6 +16,10 @@ export class TestIo implements CliIo {
   readonly errors: string[] = [];
   readonly opened: string[] = [];
   answers: boolean[] = [];
+  /** What each checkbox list returns, in turn; null (the default) is "no terminal". */
+  choices: (number[] | null)[] = [];
+  /** The labels of every checkbox list shown. */
+  readonly offered: (readonly string[])[] = [];
   interactive = true;
   onOpen: ((url: string) => void) | undefined;
 
@@ -29,6 +33,11 @@ export class TestIo implements CliIo {
 
   confirm(): Promise<boolean> {
     return Promise.resolve(this.answers.shift() ?? false);
+  }
+
+  choose(_question: string, labels: readonly string[]): Promise<number[] | null> {
+    this.offered.push(labels);
+    return Promise.resolve(this.choices.shift() ?? null);
   }
 
   openUrl(url: string): Promise<void> {

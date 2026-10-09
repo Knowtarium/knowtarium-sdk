@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mcpCommand } from "../commands/mcp.js";
 import { cliEnvironment } from "../env.js";
 import { COMMANDS } from "../run.js";
-import { temporaryFolder } from "../testing/context.js";
+import { temporaryFolder, testContext } from "../testing/context.js";
 import { configureAgents, detectAgents } from "./configure.js";
 import { handAdd } from "../commands/agents.js";
 import { upsertJsonServer } from "./json-config.js";
@@ -278,5 +278,65 @@ describe("configs it can't edit", () => {
     await write(join(home, ".config", "opencode", "opencode.jsonc"), '{ "theme": "dark" }\n');
     const [edited] = await configureAgents([opencode], server);
     expect(edited).toMatchObject({ status: "added" });
+  });
+});
+
+describe("choosing the agents", () => {
+  /** A context whose user home has Claude Code, Cursor and Codex installed. */
+  async function threeAgents() {
+    const created = await temporaryFolder();
+    cleanup = created.cleanup;
+    const context = testContext(created.path, () => Promise.reject(new Error("offline")));
+    const home = join(created.path, "user");
+    for (const folder of [".claude", ".cursor", ".codex"]) {
+      await mkdir(join(home, folder), { recursive: true });
+    }
+    const has = async (path: string) =>
+      (await readFile(join(home, path), "utf8").catch(() => "")).includes("knowtarium");
+    const added = async () =>
+      [
+        (await has(".claude.json")) && "claude-code",
+        (await has(join(".cursor", "mcp.json"))) && "cursor",
+        (await has(join(".codex", "config.toml"))) && "codex",
+      ].filter(Boolean);
+    return { context, added };
+  }
+
+  it("adds only the agents left ticked", async () => {
+    const { context, added } = await threeAgents();
+    context.io.choices = [[0, 2]];
+    expect(await COMMANDS["agents"]?.(context, [])).toBe(0);
+    expect(context.io.offered).toEqual([["Claude Code", "Cursor", "Codex"]]);
+    expect(await added()).toEqual(["claude-code", "codex"]);
+    expect(context.io.lines.filter((line) => line.startsWith("added to"))).toHaveLength(2);
+  });
+
+  it("changes nothing when the person cancels or unticks everything", async () => {
+    const { context, added } = await threeAgents();
+    context.io.choices = [[]];
+    expect(await COMMANDS["agents"]?.(context, [])).toBe(0);
+    expect(context.io.lines).toEqual([
+      "No agent was changed. Run `knowtarium agents` to add Knowtarium later.",
+    ]);
+    expect(await added()).toEqual([]);
+  });
+
+  it("asks yes or no for all of them without a terminal for the list", async () => {
+    const { context, added } = await threeAgents();
+    context.io.answers = [true];
+    expect(await COMMANDS["agents"]?.(context, [])).toBe(0);
+    expect(context.io.offered).toHaveLength(1);
+    expect(await added()).toEqual(["claude-code", "cursor", "codex"]);
+  });
+
+  it("shows no list with --yes, --agent or --dry-run", async () => {
+    const { context, added } = await threeAgents();
+    expect(await COMMANDS["agents"]?.(context, ["--dry-run"])).toBe(0);
+    expect(await added()).toEqual([]);
+    expect(await COMMANDS["agents"]?.(context, ["--agent", "cursor"])).toBe(0);
+    expect(await added()).toEqual(["cursor"]);
+    expect(await COMMANDS["agents"]?.(context, ["--yes"])).toBe(0);
+    expect(await added()).toEqual(["claude-code", "cursor", "codex"]);
+    expect(context.io.offered).toEqual([]);
   });
 });

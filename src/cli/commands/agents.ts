@@ -7,7 +7,7 @@ import {
   type ServerCommand,
   serverCommand,
 } from "../agents/server-entry.js";
-import { AGENT_IDS, type AgentId, agentTargets } from "../agents/targets.js";
+import { AGENT_IDS, type AgentId, type AgentTarget, agentTargets } from "../agents/targets.js";
 import type { CliContext } from "../context.js";
 
 function describe(result: AgentResult): string {
@@ -39,8 +39,19 @@ export function handAdd(result: AgentResult, server: ServerCommand): string {
 }
 
 /**
- * Adds the MCP server to the detected agents: all with `yes`, the named ones with `only`, else
- * after asking once. Prints what it did (or would do, with `dryRun`).
+ * Which of the agents found to add, asked once: a checkbox list with every agent ticked in a
+ * terminal, else (stdin or stdout isn't one) a yes-or-no question for all of them.
+ */
+async function askWhich(context: CliContext, found: AgentTarget[]): Promise<AgentTarget[]> {
+  const names = found.map((target) => target.name);
+  const ticked = await context.io.choose("Add Knowtarium to which agents?", names);
+  if (ticked !== null) return found.filter((_, index) => ticked.includes(index));
+  return (await context.io.confirm(`Add Knowtarium to ${names.join(", ")}?`)) ? found : [];
+}
+
+/**
+ * Adds the MCP server to the detected agents: all with `yes` (or `dryRun`), the named ones with
+ * `only`, else the ones the person picks. Prints what it did (or would do, with `dryRun`).
  */
 export async function setUpAgents(
   context: CliContext,
@@ -62,17 +73,15 @@ export async function setUpAgents(
     io.out(`Add this MCP server to your agent by hand: ${commandLine(server)}`);
     return [];
   }
-  const names = chosen.map((target) => target.name).join(", ");
-  const go =
-    options.yes === true ||
-    options.only !== undefined ||
-    options.dryRun === true ||
-    (await context.io.confirm(`Add Knowtarium to ${names}?`));
-  if (!go) {
+  const picked =
+    options.yes === true || options.only !== undefined || options.dryRun === true
+      ? chosen
+      : await askWhich(context, chosen);
+  if (picked.length === 0) {
     io.out("No agent was changed. Run `knowtarium agents` to add Knowtarium later.");
     return [];
   }
-  const results = await configureAgents(chosen, server, { dryRun: options.dryRun === true });
+  const results = await configureAgents(picked, server, { dryRun: options.dryRun === true });
   for (const result of results) {
     io.out(`${options.dryRun === true ? "would be " : ""}${describe(result)}`);
     if (result.backup !== undefined) io.out(`  previous file saved as ${result.backup}`);
