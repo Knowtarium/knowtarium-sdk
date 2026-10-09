@@ -691,6 +691,107 @@ describe("the MCP server's states", () => {
     expect((await call("list_notes", { workspace: bad.world.workspaceId })).error).toBe(true);
   });
 
+  it("uses the one workspace that can be used when another's access was revoked", async () => {
+    const good = await seeded();
+    const bad = await seeded();
+    const a = await connect(good.world);
+    // revoked after a sync, so its local copy (and its name, the same as the other's) remains
+    const warm = await connect(bad.world);
+    bad.world.server.tokenRevoked = true;
+    const b = await connect(bad.world, { cacheRoot: warm.cacheRoot });
+    expect(b.session.status).toBe("revoked");
+    const { call } = await serve([a.session, b.session]);
+    const listed = (await call("list_notes")).json() as { total: number };
+    expect(listed.total).toBe(3);
+    expect((await call("list_folders")).json()).toMatchObject([
+      { path: "Archive" },
+      { path: "Research" },
+    ]);
+    // list_workspaces says what is wrong with the other one, and how the person removes it
+    const workspaces = (await call("list_workspaces")).json() as {
+      status: string;
+      problem: string;
+    }[];
+    expect(workspaces).toMatchObject([
+      { id: good.world.workspaceId, status: "ready" },
+      { id: bad.world.workspaceId, name: "Clients", notes: 3, status: "revoked" },
+    ]);
+    expect(workspaces[1]?.problem).toContain(
+      `npx knowtarium disconnect --workspace ${bad.world.workspaceId}`,
+    );
+    // its own ID still reaches it, to hear why it can't answer
+    const named = await call("list_notes", { workspace: bad.world.workspaceId });
+    expect(named.error).toBe(true);
+    expect(named.text).toContain(`npx knowtarium disconnect --workspace ${bad.world.workspaceId}`);
+    // a name both have is never guessed: both IDs, with their states
+    const ambiguous = await call("list_notes", { workspace: "clients" });
+    expect(ambiguous.error).toBe(true);
+    expect(ambiguous.text).toMatch(/2 connected workspaces are called clients/);
+    expect(ambiguous.text).toContain(`${good.world.workspaceId} ("Clients"), ready`);
+    expect(ambiguous.text).toContain(`${bad.world.workspaceId} ("Clients"), access revoked`);
+  });
+
+  it("waits for a workspace's first sync to learn that its access was revoked", async () => {
+    const good = await seeded();
+    const bad = await seeded();
+    bad.world.server.tokenRevoked = true;
+    const a = await connect(good.world);
+    const slow: typeof bad.world.server.fetch = async (url, init) => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return bad.world.server.fetch(url, init);
+    };
+    const b = await connect(bad.world, { wait: false, fetch: slow });
+    expect(b.session.status).toBe("loading");
+    const { call } = await serve([a.session, b.session]);
+    expect((await call("list_notes")).error).toBe(false);
+    expect(b.session.status).toBe("revoked");
+  });
+
+  it("asks which workspace when several can be used, by ID; a shared name is refused", async () => {
+    const one = await seeded();
+    const two = await seeded();
+    const a = await connect(one.world);
+    const b = await connect(two.world);
+    const { call } = await serve([a.session, b.session]);
+    const asked = await call("list_notes");
+    expect(asked.error).toBe(true);
+    expect(asked.text).toMatch(/Several workspaces are connected; pass `workspace`/);
+    expect(asked.text).toContain(`${one.world.workspaceId} ("Clients"), ready`);
+    expect(asked.text).toContain(`${two.world.workspaceId} ("Clients"), ready`);
+    const shared = await call("list_notes", { workspace: "Clients" });
+    expect(shared.error).toBe(true);
+    expect(shared.text).toContain(one.world.workspaceId);
+    expect(shared.text).toContain(two.world.workspaceId);
+    expect((await call("list_notes", { workspace: two.world.workspaceId })).error).toBe(false);
+    const unknown = await call("list_notes", { workspace: "Elsewhere" });
+    expect(unknown.text).toMatch(/No connected workspace is called Elsewhere/);
+  });
+
+  it("leaves out a workspace disconnected meanwhile, and says so when none can be used", async () => {
+    const one = await seeded();
+    const two = await seeded();
+    const a = await connect(one.world);
+    let saved = true;
+    const b = await connect(two.world, { stillConnected: () => Promise.resolve(saved) });
+    const both = await serve([a.session, b.session]);
+    expect((await both.call("list_notes")).error).toBe(true);
+    saved = false;
+    expect((await both.call("list_notes")).error).toBe(false);
+    expect(b.session.status).toBe("disconnected");
+
+    one.world.server.tokenRevoked = true;
+    two.world.server.tokenRevoked = true;
+    const c = await connect(one.world);
+    const d = await connect(two.world);
+    const { call } = await serve([c.session, d.session]);
+    const none = await call("list_notes");
+    expect(none.error).toBe(true);
+    expect(none.text).toMatch(/None of the connected workspaces can be used/);
+    expect(none.text).toContain(`npx knowtarium disconnect --workspace ${one.world.workspaceId}`);
+    expect(none.text).toContain(`npx knowtarium disconnect --workspace ${two.world.workspaceId}`);
+    expect(none.text).toMatch(/npx knowtarium connect/);
+  });
+
   it("answers before the first sync ends, saying the results may be partial", async () => {
     const { world } = await seeded();
     let release!: () => void;

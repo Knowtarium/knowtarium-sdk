@@ -196,7 +196,7 @@ export class WorkspaceSession {
       }
     });
     this.engine.on("revoked", () => {
-      this.settle("revoked", describeFailure(new RevokedSignal()));
+      this.settle("revoked", revokedProblem(workspaceId));
     });
   }
 
@@ -341,7 +341,7 @@ export class WorkspaceSession {
 
   private fail(error: unknown): void {
     if (isSyncApiError(error, "token_revoked") || isSyncApiError(error, "unauthenticated")) {
-      this.settle("revoked", describeFailure(error));
+      this.settle("revoked", revokedProblem(this.workspaceId));
       return;
     }
     this.failures++;
@@ -385,15 +385,15 @@ export class WorkspaceSession {
         ? this.sync()
         : undefined);
     if (pending === undefined) return;
-    let timer: NodeJS.Timeout | undefined;
-    await Promise.race([
-      pending,
-      new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, this.deps.retryWaitMs ?? 10_000);
-        timer.unref();
-      }),
-    ]);
-    clearTimeout(timer);
+    await within(pending, this.deps.retryWaitMs ?? 10_000);
+  }
+
+  /**
+   * Waits, at most `maxMs`, for the first sync to end (or fail), so the status says whether this
+   * agent's access was revoked: the first pull is where that shows. Never rejects.
+   */
+  async firstSync(maxMs: number): Promise<void> {
+    if (this.started !== undefined) await within(this.started, maxMs);
   }
 
   /**
@@ -543,14 +543,34 @@ export class WorkspaceSession {
   }
 }
 
-/** Marks the engine's own revocation (it saw `token_revoked`). */
-class RevokedSignal extends Error {}
+/** Settles when `promise` does or after `ms`, whichever comes first. */
+async function within(promise: Promise<void>, ms: number): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  await Promise.race([
+    promise,
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, ms);
+      timer.unref();
+    }),
+  ]);
+  clearTimeout(timer);
+}
+
+/** The command that removes a connection from this computer. */
+export function disconnectCommandFor(workspaceId: string): string {
+  return `npx knowtarium disconnect --workspace ${workspaceId}`;
+}
+
+/**
+ * Why a revoked workspace can't answer, with both ways out: remove the connection (the access was
+ * taken away on purpose, or its account is gone) or connect it again.
+ */
+function revokedProblem(workspaceId: WorkspaceId): string {
+  return `This agent's access to workspace ${workspaceId} was revoked (in the web app, or its account was deleted), so this connection can't be used any more. To remove it from this computer, run \`${disconnectCommandFor(workspaceId)}\`; to keep using the workspace, run \`npx knowtarium connect\` to connect it again. Then restart the agent.`;
+}
 
 /** A sentence for a failed API call, saying what to do. */
 export function describeFailure(error: unknown): string {
-  if (error instanceof RevokedSignal) {
-    return "This agent's access was revoked. Run `npx knowtarium connect` to connect again, then restart the agent so it picks up the new connection.";
-  }
   if (error instanceof NetworkError) {
     return "Knowtarium can't be reached right now; answers come from the local encrypted copy.";
   }

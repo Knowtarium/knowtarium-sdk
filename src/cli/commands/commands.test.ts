@@ -122,6 +122,10 @@ describe("commands", () => {
     world.server.tokenRevoked = true;
     expect(await run("status")).toBe(1);
     expect(context.io.lines.join("\n")).toContain("(revoked)");
+    // and how to remove the connection, or connect it again
+    expect(context.io.lines.join("\n")).toContain(
+      `run \`knowtarium disconnect --workspace ${world.workspaceId}\` to remove it`,
+    );
   });
 
   it("disconnects: revokes the token and wipes the local keys and cache", async () => {

@@ -774,6 +774,16 @@ instructions, to read the `index.md` conventions first, and that a passing `reco
 applied automatically. Unapplied check records count in every verification state the tools show,
 so a recorded pass is reflected at once and a failed check shows as a conflict.
 
+**Which workspace.** A tool called without `workspace` uses the one connected workspace that can
+be used: one whose access was revoked, or that `disconnect` removed, doesn't count. A revocation
+shows on the first pull, so with more than one candidate the call first waits (up to 5 seconds)
+for workspaces still on their first sync. With several left it asks for the ID, listing each with
+its name and state; with none, it lists why. `workspace` is an ID, or a name (letter case ignored)
+only one connected workspace has: a name several share is refused with their IDs and states, never
+guessed. A revoked workspace's `problem` (in `list_workspaces`, and from any tool that names it)
+says to remove it with `npx knowtarium disconnect --workspace <id>` or connect it again, and
+`status` says the same under the revoked token.
+
 Writes: the CLI validates the OKF frontmatter, refuses any new `human:` entry, sets `generated` to
 the agent and adds the agent's own check, then commits the change (`commit` in `mcp/tools/write.ts`,
 the one path `propose_edit` and `create_note` share). A connection with its own signing key and the

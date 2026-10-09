@@ -5,7 +5,7 @@ import { type Actor, deriveVerification, fileNameOf } from "../../../core/index.
 import type { NoteSnapshot } from "../../../client/index.js";
 import type { AgentPolicyViewResult } from "../../../protocol/index.js";
 import { isUnreachable } from "../key-cache.js";
-import { describeFailure, type WorkspaceSession } from "../session.js";
+import { describeFailure, disconnectCommandFor, type WorkspaceSession } from "../session.js";
 
 /** What every tool works with. */
 export interface ToolContext {
@@ -33,7 +33,9 @@ export const NOT_CONNECTED =
 export const workspaceArg = z
   .string()
   .optional()
-  .describe("The workspace ID or name; only needed when several are connected.");
+  .describe(
+    "The workspace ID (or its name, when no other connected workspace has it); only needed when several connected workspaces can be used.",
+  );
 
 /** A note argument. */
 export const noteRef = z
@@ -174,33 +176,97 @@ function unusable(session: WorkspaceSession): string | null {
 }
 
 /**
- * The session for a workspace argument (optional when only one workspace is connected), once it
- * can answer (a failed one first tries again, see `WorkspaceSession.retryOnCall`): refused with the reason when nothing is connected, the access was revoked, the
- * workspace was disconnected, or there is no local copy yet.
+ * How long a call without `workspace` waits for workspaces still on their first sync, to learn
+ * which of them can be used (a revoked token shows on the first pull).
+ */
+const FIRST_SYNC_WAIT_MS = 5_000;
+
+/** A session's state as a refusal lists it, with the fix when it can't be used. */
+function stateOf(session: WorkspaceSession): string {
+  switch (session.status) {
+    case "revoked":
+      return `access revoked; \`${disconnectCommandFor(session.workspaceId)}\` removes it`;
+    case "disconnected":
+      return "disconnected on this computer";
+    default:
+      return session.status;
+  }
+}
+
+/** A workspace as a refusal lists it: its ID, its name when known, and its state. */
+function described(session: WorkspaceSession): string {
+  const name = session.view.name;
+  return `${session.workspaceId}${name === null ? "" : ` ("${name}")`}, ${stateOf(session)}`;
+}
+
+/**
+ * The workspace a call without `workspace` means: the only connected one, or else the only one
+ * that can still be used. A workspace whose access was revoked, or that `knowtarium disconnect`
+ * removed, is never a candidate; with several left, the agent is asked to pick one by ID.
+ */
+async function defaultSession(context: ToolContext): Promise<WorkspaceSession> {
+  const candidates = () => context.sessions.filter((session) => !session.ended);
+  if (context.sessions.length > 1 && candidates().length > 1) {
+    // revocation shows on the first sync, and a disconnect when a session looks for its connection
+    await Promise.all(
+      context.sessions.map(async (session) => {
+        await session.firstSync(FIRST_SYNC_WAIT_MS);
+        await session.connected();
+      }),
+    );
+  }
+  const usable = context.sessions.length === 1 ? context.sessions : candidates();
+  const [only] = usable;
+  if (usable.length === 1 && only !== undefined) return only;
+  if (usable.length === 0) {
+    throw new ToolError(
+      `None of the connected workspaces can be used: ${context.sessions.map(described).join("; ")}. Ask the person to run \`npx knowtarium connect\` to connect a workspace again, then restart the agent.`,
+    );
+  }
+  const ended = context.sessions.filter((session) => session.ended);
+  throw new ToolError(
+    `Several workspaces are connected; pass \`workspace\` with the ID of the one you mean: ${usable.map(described).join("; ")}.${ended.length === 0 ? "" : ` Not counted, since they can't be used: ${ended.map(described).join("; ")}.`}`,
+  );
+}
+
+/**
+ * The session a `workspace` argument names: a workspace ID, else a name (letter case ignored)
+ * that exactly one connected workspace has. A name several have is refused with their IDs, never
+ * guessed.
+ */
+function namedSession(context: ToolContext, workspace: string): WorkspaceSession {
+  const byId = context.sessions.find((session) => session.workspaceId === workspace);
+  if (byId !== undefined) return byId;
+  const named = context.sessions.filter(
+    (session) => session.view.name?.toLowerCase() === workspace.toLowerCase(),
+  );
+  const [only] = named;
+  if (named.length > 1) {
+    throw new ToolError(
+      `${String(named.length)} connected workspaces are called ${workspace}; pass \`workspace\` with the ID of the one you mean: ${named.map(described).join("; ")}.`,
+    );
+  }
+  if (only === undefined) {
+    throw new ToolError(
+      `No connected workspace is called ${workspace}. Connected: ${context.sessions.map(described).join("; ")}.`,
+    );
+  }
+  return only;
+}
+
+/**
+ * The session for a workspace argument (optional when only one connected workspace can be used),
+ * once it can answer (a failed one first tries again, see `WorkspaceSession.retryOnCall`):
+ * refused with the reason when nothing is connected, the name is ambiguous, the access was
+ * revoked, the workspace was disconnected, or there is no local copy yet.
  */
 export async function sessionFor(
   context: ToolContext,
   workspace: string | undefined,
 ): Promise<WorkspaceSession> {
   if (context.sessions.length === 0) throw new ToolError(context.notConnected ?? NOT_CONNECTED);
-  let found: WorkspaceSession | undefined;
-  if (workspace === undefined) {
-    const [only] = context.sessions;
-    if (context.sessions.length !== 1 || only === undefined) {
-      throw new ToolError(
-        `Several workspaces are connected; pass \`workspace\` (one of ${context.sessions.map((session) => session.workspaceId).join(", ")}).`,
-      );
-    }
-    found = only;
-  } else {
-    found = context.sessions.find(
-      (session) =>
-        session.workspaceId === workspace ||
-        session.view.name?.toLowerCase() === workspace.toLowerCase(),
-    );
-  }
-  if (found === undefined)
-    throw new ToolError(`No connected workspace is called ${workspace ?? ""}.`);
+  const found =
+    workspace === undefined ? await defaultSession(context) : namedSession(context, workspace);
   await found.connected();
   // a failed workspace tries again now rather than at its next scheduled retry
   await found.retryOnCall();

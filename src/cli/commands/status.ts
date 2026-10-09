@@ -115,6 +115,11 @@ export async function statusCommand(context: CliContext, argv: readonly string[]
       `  access    ${entry.access}${entry.folderIds.length > 0 ? `, folders ${entry.folderIds.join(", ")}` : ", whole workspace"}`,
     );
     io.out(`  changes   ${describeAgentChanges(entry.agentChanges)}`);
+    if (entry.token === "revoked") {
+      io.out(
+        `            (its access was revoked in the web app, or its account was deleted: run \`knowtarium disconnect --workspace ${entry.workspaceId}\` to remove it from this computer, or \`knowtarium connect\` to connect it again)`,
+      );
+    }
     if (entry.agentChanges.writes === "propose") {
       io.out(
         "            (made before agents could write directly, or the owner didn't vouch for its signing key: run `knowtarium connect` again, then restart your agents, to let them write directly where the workspace allows it)",
