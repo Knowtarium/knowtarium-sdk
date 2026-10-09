@@ -1,0 +1,643 @@
+{
+  "description": "Known-answer vectors for knowtarium/crypto. Bytes are lowercase hex unless a field says otherwise (KDF salts and signatures are base64url). An implementation of the Knowtarium formats must reproduce every output and reject every tampered or invalid input with the given error. Canonical JSON and signed envelope vectors are in envelope-vectors.json.",
+  "formats": {
+    "envelope": 1,
+    "wrap": 1,
+    "signedEvent": 1,
+    "recoveryCode": 1,
+    "connectPayload": 1
+  },
+  "kdf": [
+    {
+      "name": "ascii password",
+      "password": "correct horse battery staple",
+      "params": {
+        "algorithm": "argon2id13",
+        "opsLimit": 3,
+        "memLimit": 67108864,
+        "salt": "EBESExQVFhcYGRobHB0eHw"
+      },
+      "masterKey": "1a563099620be88a73c7bd53da0b313e98060493b58ba22254a065c3d7db26c3",
+      "loginHash": "c213ce50d2a94ba6a26268cd4fb7401dd7fef83b6737d712d3510f6d000cb01c",
+      "keyEncryptionKey": "a1af3106b2bb432d0fb779a4f9eb1eb451d90cf512a22f33a284e43c26d9d0b1"
+    },
+    {
+      "name": "unicode password, composed",
+      "password": "pässwörd ☃ 密码",
+      "params": {
+        "algorithm": "argon2id13",
+        "opsLimit": 3,
+        "memLimit": 67108864,
+        "salt": "EBESExQVFhcYGRobHB0eHw"
+      },
+      "masterKey": "6e96ed55f9b221e698101f5551e199ba0371cb442cbb37deb521e35ca817d1b9",
+      "loginHash": "6098edf6e9634e405059a4ad0cd84e1f053428acda74816e41166e4f7f170eb3",
+      "keyEncryptionKey": "9196f24871b8359c2c6fc6f70e45ce7522ce37c7408c16a5c6a423b8885c4706"
+    },
+    {
+      "name": "unicode password, decomposed (NFKC gives the composed one)",
+      "password": "pässwörd ☃ 密码",
+      "params": {
+        "algorithm": "argon2id13",
+        "opsLimit": 3,
+        "memLimit": 67108864,
+        "salt": "EBESExQVFhcYGRobHB0eHw"
+      },
+      "masterKey": "6e96ed55f9b221e698101f5551e199ba0371cb442cbb37deb521e35ca817d1b9",
+      "loginHash": "6098edf6e9634e405059a4ad0cd84e1f053428acda74816e41166e4f7f170eb3",
+      "keyEncryptionKey": "9196f24871b8359c2c6fc6f70e45ce7522ce37c7408c16a5c6a423b8885c4706"
+    },
+    {
+      "name": "full-width password (NFKC gives the ascii one)",
+      "password": "ｃｏｒｒｅｃｔ horse battery staple",
+      "params": {
+        "algorithm": "argon2id13",
+        "opsLimit": 3,
+        "memLimit": 67108864,
+        "salt": "EBESExQVFhcYGRobHB0eHw"
+      },
+      "masterKey": "1a563099620be88a73c7bd53da0b313e98060493b58ba22254a065c3d7db26c3",
+      "loginHash": "c213ce50d2a94ba6a26268cd4fb7401dd7fef83b6737d712d3510f6d000cb01c",
+      "keyEncryptionKey": "a1af3106b2bb432d0fb779a4f9eb1eb451d90cf512a22f33a284e43c26d9d0b1"
+    }
+  ],
+  "recovery": [
+    {
+      "name": "sequential key",
+      "recoveryKey": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+      "recoveryCode": "M2GT-58X4-MPKA-FA59-NANT-SBDE-NYRB-3CNK-PJTV-DDXR-Q6XB-QF5X-QTZT-G2GK",
+      "authHash": "311b9aef6a9a9b432cef956f75aaabc71bb9ba3641c9d8d4cf4a05b5737c3051",
+      "keyEncryptionKey": "af8bb2512291044b6dce3a500d3a801f032f733cd2f62f6b4e20bd7178914537"
+    },
+    {
+      "name": "all-zero key",
+      "recoveryKey": "0000000000000000000000000000000000000000000000000000000000000000",
+      "recoveryCode": "0000-0000-0000-0000-0000-0000-0000-0000-0000-0000-0000-0000-000C-GVG3",
+      "authHash": "0bb1b5ba5d0292c7fee5ce54e21fbb8ee83759faa9ac4b14e912d2c406ff3d38",
+      "keyEncryptionKey": "626295cc8a5678af90e6d4010d21d00f07f98307061b57a5e0cb2faa8be9b622"
+    }
+  ],
+  "invalidRecoveryCodes": [
+    {
+      "name": "one character changed",
+      "code": "02GT-58X4-MPKA-FA59-NANT-SBDE-NYRB-3CNK-PJTV-DDXR-Q6XB-QF5X-QTZT-G2GK"
+    },
+    {
+      "name": "one checksum character changed",
+      "code": "M2GT-58X4-MPKA-FA59-NANT-SBDE-NYRB-3CNK-PJTV-DDXR-Q6XB-QF5X-QTZT-G2G0"
+    },
+    {
+      "name": "one group missing",
+      "code": "58X4-MPKA-FA59-NANT-SBDE-NYRB-3CNK-PJTV-DDXR-Q6XB-QF5X-QTZT-G2GK"
+    },
+    {
+      "name": "a U, which is not in the alphabet",
+      "code": "U2GT-58X4-MPKA-FA59-NANT-SBDE-NYRB-3CNK-PJTV-DDXR-Q6XB-QF5X-QTZT-G2GK"
+    },
+    {
+      "name": "empty",
+      "code": ""
+    }
+  ],
+  "accountKeys": {
+    "encryptionPrivateKey": "303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f",
+    "encryptionPublicKey": "34e42d4af5ef94a07a3a84201b889d4cd1a743cb27b11b6a10438a8feb8e5847",
+    "signingSeed": "505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f",
+    "signingPublicKey": "3f7708d5f5cc2bc633b59d2b3a2ed92e7479220c6f08ade208bebcd8580ab93b",
+    "wrapped": [
+      {
+        "name": "by the password of kdf[0]",
+        "purpose": "password",
+        "keyEncryptionKey": "a1af3106b2bb432d0fb779a4f9eb1eb451d90cf512a22f33a284e43c26d9d0b1",
+        "nonce": "707172737475767778797a7b7c7d7e7f8081828384858687",
+        "wrapped": "01707172737475767778797a7b7c7d7e7f8081828384858687710783ad171201576d2cf1167dabeeeb1b1b75920fe48eb1b96330f9b05405de49085d51b3606494f44503bf36f5d40a8bcd911c01858e3148e369813f2babe53c64b827560e3737ca106ac40c20bfd6"
+      },
+      {
+        "name": "by the recovery key of recovery[0]",
+        "purpose": "recovery",
+        "keyEncryptionKey": "af8bb2512291044b6dce3a500d3a801f032f733cd2f62f6b4e20bd7178914537",
+        "nonce": "909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7",
+        "wrapped": "01909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a751ef795cb111618b0028718c06cc10dc1249a3d5a62c1432678b4dee121290bbc92c71675bca5c6320abf18d97c717a4a1a837e4bc4d639f021bd09114826116138c980383d3071866267dd82d37cfc2"
+      }
+    ]
+  },
+  "envelope": [
+    {
+      "name": "empty note body",
+      "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "generation": 1,
+      "nonce": "404142434445464748494a4b4c4d4e4f5051525354555657",
+      "context": {
+        "kind": "note",
+        "workspaceId": "ws_01J9Z3ABC",
+        "id": "note_01J9Z3"
+      },
+      "contextEncoding": "000000046e6f74650000000c77735f30314a395a334142430000000b6e6f74655f30314a395a33",
+      "plaintext": "",
+      "blob": "0100000001404142434445464748494a4b4c4d4e4f50515253545556573ffdb3a834d5525a57f14ff1b2a5a338"
+    },
+    {
+      "name": "note text",
+      "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "generation": 1,
+      "nonce": "404142434445464748494a4b4c4d4e4f5051525354555657",
+      "context": {
+        "kind": "note",
+        "workspaceId": "ws_01J9Z3ABC",
+        "id": "note_01J9Z3"
+      },
+      "contextEncoding": "000000046e6f74650000000c77735f30314a395a334142430000000b6e6f74655f30314a395a33",
+      "plaintext": "2d2d2d0a7469746c653a2048656c6c6f0a2d2d2d0a426f6479207769746820c3bc6ec3af63c3b664c3a90a",
+      "blob": "0100000001404142434445464748494a4b4c4d4e4f5051525354555657f914287aa4890d7aeacea7f6caf009fd989780e9191b3cfe13118a2c7d6c0353aa97c1c1365132743c1bfec390723a285870cf38bb17766fdaa32d"
+    },
+    {
+      "name": "attachment chunk, generation 7",
+      "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "generation": 7,
+      "nonce": "404142434445464748494a4b4c4d4e4f5051525354555657",
+      "context": {
+        "kind": "attachment_chunk",
+        "workspaceId": "ws_01J9Z3ABC",
+        "id": "att_42",
+        "chunkIndex": 1,
+        "chunkCount": 3
+      },
+      "contextEncoding": "000000106174746163686d656e745f6368756e6b0000000c77735f30314a395a33414243000000066174745f34320000000100000003",
+      "plaintext": "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f1011121314151617",
+      "blob": "0100000007404142434445464748494a4b4c4d4e4f505152535455565724c8f78324158fe1770d7d4553619b6d92bbafc7175c559d6238f74e05092d9f06e8107d41879207020615850d46e07fe6aea29156abe3ca"
+    },
+    {
+      "name": "workspace name, large generation",
+      "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "generation": 4294967294,
+      "nonce": "404142434445464748494a4b4c4d4e4f5051525354555657",
+      "context": {
+        "kind": "workspace_name",
+        "workspaceId": "ws_01J9Z3ABC",
+        "id": "ws_01J9Z3ABC"
+      },
+      "contextEncoding": "0000000e776f726b73706163655f6e616d650000000c77735f30314a395a334142430000000c77735f30314a395a33414243",
+      "plaintext": "436c69656e7473",
+      "blob": "01fffffffe404142434445464748494a4b4c4d4e4f505152535455565797556c15be940a81199568612a90fda8cee4b4c902dfe2"
+    },
+    {
+      "name": "search index, generation 3",
+      "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "generation": 3,
+      "nonce": "404142434445464748494a4b4c4d4e4f5051525354555657",
+      "context": {
+        "kind": "search_index",
+        "workspaceId": "ws_01J9Z3ABC",
+        "id": "ws_01J9Z3ABC"
+      },
+      "contextEncoding": "0000000c7365617263685f696e6465780000000c77735f30314a395a334142430000000c77735f30314a395a33414243",
+      "plaintext": "7b2276657273696f6e223a312c22646f63756d656e74436f756e74223a322c22696e646578223a7b22717561727465726c79223a5b312c325d7d7d",
+      "blob": "0100000003404142434445464748494a4b4c4d4e4f5051525354555657af1b7315a2931079e1d6bd8f83be01fdf1cfc0a17d2d10f51f5f896733360fb27f97660b2db0be6bddc3812d78aebf83f7125fd234b498aeeb8175fb74b29aeda79fd8bf988a00a07d4ed6"
+    },
+    {
+      "name": "agent name, generation 2",
+      "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "generation": 2,
+      "nonce": "404142434445464748494a4b4c4d4e4f5051525354555657",
+      "context": {
+        "kind": "agent_name",
+        "workspaceId": "ws_01J9Z3ABC",
+        "id": "tok_01J9Z3DEF"
+      },
+      "contextEncoding": "0000000a6167656e745f6e616d650000000c77735f30314a395a334142430000000d746f6b5f30314a395a33444546",
+      "plaintext": "4c6170746f7020c2b720436c6175646520436f6465",
+      "blob": "0100000002404142434445464748494a4b4c4d4e4f505152535455565798587504bf9059d438d4c4d2cee901f7b2f9c2a07684098381acff88a4e93ec06a062b2a57"
+    },
+    {
+      "name": "graph layout, generation 1",
+      "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "generation": 1,
+      "nonce": "404142434445464748494a4b4c4d4e4f5051525354555657",
+      "context": {
+        "kind": "graph_layout",
+        "workspaceId": "ws_01J9Z3ABC",
+        "id": "ws_01J9Z3ABC"
+      },
+      "contextEncoding": "0000000c67726170685f6c61796f75740000000c77735f30314a395a334142430000000c77735f30314a395a33414243",
+      "plaintext": "7b226e6f74655f30314a395a33223a5b31322e352c2d34305d7d",
+      "blob": "0100000001404142434445464748494a4b4c4d4e4f5051525354555657af1b6b1fa4852626bebebee49cbe5fc9a38883f13f7467aa374c24e2990cfc16260277ffea1b2b59c89f"
+    },
+    {
+      "name": "attachment metadata, generation 1",
+      "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "generation": 1,
+      "nonce": "606162636465666768696a6b6c6d6e6f7071727374757677",
+      "context": {
+        "kind": "attachment_meta",
+        "workspaceId": "ws_01J9Z3ABC",
+        "id": "att_01J9Z3DIAGRAM:fld_01J9Z3ASSETS"
+      },
+      "contextEncoding": "0000000f6174746163686d656e745f6d6574610000000c77735f30314a395a33414243000000226174745f30314a395a334449414752414d3a666c645f30314a395a33415353455453",
+      "plaintext": "7b226e616d65223a226469616772616d2e706e67222c2273697a654279746573223a34383231332c2274797065223a22696d6167652f706e67227d",
+      "blob": "0100000001606162636465666768696a6b6c6d6e6f7071727374757677cefbdf473b6d76120173944e660262d31c8ef54b2c7dd01739674334ec050192c5cde360cbd854a65d4fdee453596edbd451aae5ff6562db96e3d2bd84493212d57cb312586cee2f3155ca"
+    }
+  ],
+  "tamperedEnvelopes": [
+    {
+      "name": "format version changed",
+      "blob": "0000000001404142434445464748494a4b4c4d4e4f5051525354555657f914287aa4890d7aeacea7f6caf009fd989780e9191b3cfe13118a2c7d6c0353aa97c1c1365132743c1bfec390723a285870cf38bb17766fdaa32d",
+      "context": {
+        "kind": "note",
+        "workspaceId": "ws_01J9Z3ABC",
+        "id": "note_01J9Z3"
+      },
+      "error": "unsupported_version",
+      "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "generation": 1
+    },
+    {
+      "name": "key generation changed",
+      "blob": "0100000000404142434445464748494a4b4c4d4e4f5051525354555657f914287aa4890d7aeacea7f6caf009fd989780e9191b3cfe13118a2c7d6c0353aa97c1c1365132743c1bfec390723a285870cf38bb17766fdaa32d",
+      "context": {
+        "kind": "note",
+        "workspaceId": "ws_01J9Z3ABC",
+        "id": "note_01J9Z3"
+      },
+      "error": "key_generation_mismatch",
+      "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "generation": 1
+    },
+    {
+      "name": "first nonce byte flipped",
+      "blob": "0100000001414142434445464748494a4b4c4d4e4f5051525354555657f914287aa4890d7aeacea7f6caf009fd989780e9191b3cfe13118a2c7d6c0353aa97c1c1365132743c1bfec390723a285870cf38bb17766fdaa32d",
+      "context": {
+        "kind": "note",
+        "workspaceId": "ws_01J9Z3ABC",
+        "id": "note_01J9Z3"
+      },
+      "error": "decryption_failed",
+      "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "generation": 1
+    },
+    {
+      "name": "last nonce byte flipped",
+      "blob": "0100000001404142434445464748494a4b4c4d4e4f5051525354555656f914287aa4890d7aeacea7f6caf009fd989780e9191b3cfe13118a2c7d6c0353aa97c1c1365132743c1bfec390723a285870cf38bb17766fdaa32d",
+      "context": {
+        "kind": "note",
+        "workspaceId": "ws_01J9Z3ABC",
+        "id": "note_01J9Z3"
+      },
+      "error": "decryption_failed",
+      "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "generation": 1
+    },
+    {
+      "name": "first ciphertext byte flipped",
+      "blob": "0100000001404142434445464748494a4b4c4d4e4f5051525354555657f814287aa4890d7aeacea7f6caf009fd989780e9191b3cfe13118a2c7d6c0353aa97c1c1365132743c1bfec390723a285870cf38bb17766fdaa32d",
+      "context": {
+        "kind": "note",
+        "workspaceId": "ws_01J9Z3ABC",
+        "id": "note_01J9Z3"
+      },
+      "error": "decryption_failed",
+      "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "generation": 1
+    },
+    {
+      "name": "last tag byte flipped",
+      "blob": "0100000001404142434445464748494a4b4c4d4e4f5051525354555657f914287aa4890d7aeacea7f6caf009fd989780e9191b3cfe13118a2c7d6c0353aa97c1c1365132743c1bfec390723a285870cf38bb17766fdaa3ad",
+      "context": {
+        "kind": "note",
+        "workspaceId": "ws_01J9Z3ABC",
+        "id": "note_01J9Z3"
+      },
+      "error": "decryption_failed",
+      "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "generation": 1
+    },
+    {
+      "name": "another note id",
+      "blob": "0100000001404142434445464748494a4b4c4d4e4f5051525354555657f914287aa4890d7aeacea7f6caf009fd989780e9191b3cfe13118a2c7d6c0353aa97c1c1365132743c1bfec390723a285870cf38bb17766fdaa32d",
+      "context": {
+        "kind": "note",
+        "workspaceId": "ws_01J9Z3ABC",
+        "id": "note_01J9Z4"
+      },
+      "error": "decryption_failed",
+      "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "generation": 1
+    },
+    {
+      "name": "another workspace",
+      "blob": "0100000001404142434445464748494a4b4c4d4e4f5051525354555657f914287aa4890d7aeacea7f6caf009fd989780e9191b3cfe13118a2c7d6c0353aa97c1c1365132743c1bfec390723a285870cf38bb17766fdaa32d",
+      "context": {
+        "kind": "note",
+        "workspaceId": "ws_other",
+        "id": "note_01J9Z3"
+      },
+      "error": "decryption_failed",
+      "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "generation": 1
+    },
+    {
+      "name": "another kind",
+      "blob": "0100000001404142434445464748494a4b4c4d4e4f5051525354555657f914287aa4890d7aeacea7f6caf009fd989780e9191b3cfe13118a2c7d6c0353aa97c1c1365132743c1bfec390723a285870cf38bb17766fdaa32d",
+      "context": {
+        "kind": "pending_change",
+        "workspaceId": "ws_01J9Z3ABC",
+        "id": "note_01J9Z3"
+      },
+      "error": "decryption_failed",
+      "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "generation": 1
+    },
+    {
+      "name": "truncated to the header and nonce",
+      "blob": "0100000001404142434445464748494a4b4c4d4e4f5051525354555657",
+      "context": {
+        "kind": "note",
+        "workspaceId": "ws_01J9Z3ABC",
+        "id": "note_01J9Z3"
+      },
+      "error": "malformed_envelope",
+      "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "generation": 1
+    },
+    {
+      "name": "last byte removed",
+      "blob": "0100000001404142434445464748494a4b4c4d4e4f5051525354555657f914287aa4890d7aeacea7f6caf009fd989780e9191b3cfe13118a2c7d6c0353aa97c1c1365132743c1bfec390723a285870cf38bb17766fdaa3",
+      "context": {
+        "kind": "note",
+        "workspaceId": "ws_01J9Z3ABC",
+        "id": "note_01J9Z3"
+      },
+      "error": "decryption_failed",
+      "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "generation": 1
+    },
+    {
+      "name": "a byte appended",
+      "blob": "0100000001404142434445464748494a4b4c4d4e4f5051525354555657f914287aa4890d7aeacea7f6caf009fd989780e9191b3cfe13118a2c7d6c0353aa97c1c1365132743c1bfec390723a285870cf38bb17766fdaa32d00",
+      "context": {
+        "kind": "note",
+        "workspaceId": "ws_01J9Z3ABC",
+        "id": "note_01J9Z3"
+      },
+      "error": "decryption_failed",
+      "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "generation": 1
+    }
+  ],
+  "attachments": [
+    {
+      "name": "10 bytes in chunks of 4",
+      "key": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+      "generation": 2,
+      "workspaceId": "ws_01J9Z3ABC",
+      "attachmentId": "att_42",
+      "chunkBytes": 4,
+      "plaintext": "00010203040506070809",
+      "chunks": [
+        "0100000002606162636465666768696a6b6c6d6e6f7071727374757677d1011037d0f34291eac890956ecffe99e9fc8ecd",
+        "01000000026162636465666768696a6b6c6d6e6f70717273747576777849ba7bbda96c82e616675a72cc33410b1221c328",
+        "010000000262636465666768696a6b6c6d6e6f70717273747576777879a2fcf16c507da5ea7e6c7489b3185c3ee7e0"
+      ]
+    }
+  ],
+  "tamperedAttachments": [
+    {
+      "name": "last chunk dropped",
+      "chunks": [
+        "0100000002606162636465666768696a6b6c6d6e6f7071727374757677d1011037d0f34291eac890956ecffe99e9fc8ecd",
+        "01000000026162636465666768696a6b6c6d6e6f70717273747576777849ba7bbda96c82e616675a72cc33410b1221c328"
+      ],
+      "key": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+      "generation": 2,
+      "workspaceId": "ws_01J9Z3ABC",
+      "attachmentId": "att_42",
+      "error": "decryption_failed"
+    },
+    {
+      "name": "chunks swapped",
+      "chunks": [
+        "01000000026162636465666768696a6b6c6d6e6f70717273747576777849ba7bbda96c82e616675a72cc33410b1221c328",
+        "0100000002606162636465666768696a6b6c6d6e6f7071727374757677d1011037d0f34291eac890956ecffe99e9fc8ecd",
+        "010000000262636465666768696a6b6c6d6e6f70717273747576777879a2fcf16c507da5ea7e6c7489b3185c3ee7e0"
+      ],
+      "key": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+      "generation": 2,
+      "workspaceId": "ws_01J9Z3ABC",
+      "attachmentId": "att_42",
+      "error": "decryption_failed"
+    },
+    {
+      "name": "a chunk repeated",
+      "chunks": [
+        "0100000002606162636465666768696a6b6c6d6e6f7071727374757677d1011037d0f34291eac890956ecffe99e9fc8ecd",
+        "01000000026162636465666768696a6b6c6d6e6f70717273747576777849ba7bbda96c82e616675a72cc33410b1221c328",
+        "010000000262636465666768696a6b6c6d6e6f70717273747576777879a2fcf16c507da5ea7e6c7489b3185c3ee7e0",
+        "010000000262636465666768696a6b6c6d6e6f70717273747576777879a2fcf16c507da5ea7e6c7489b3185c3ee7e0"
+      ],
+      "key": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+      "generation": 2,
+      "workspaceId": "ws_01J9Z3ABC",
+      "attachmentId": "att_42",
+      "error": "decryption_failed"
+    },
+    {
+      "name": "first chunk only",
+      "chunks": [
+        "0100000002606162636465666768696a6b6c6d6e6f7071727374757677d1011037d0f34291eac890956ecffe99e9fc8ecd"
+      ],
+      "key": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+      "generation": 2,
+      "workspaceId": "ws_01J9Z3ABC",
+      "attachmentId": "att_42",
+      "error": "decryption_failed"
+    }
+  ],
+  "workspaceKeyWraps": [
+    {
+      "name": "generation 3 for an agent",
+      "recipientPrivateKey": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf",
+      "recipientPublicKey": "dc2cca31e8e43bbd91dff7e475cca3347eb478107d5bd765aba4ae4a30c35d44",
+      "workspaceId": "ws_01J9Z3ABC",
+      "generation": 3,
+      "key": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+      "wrapped": "969fdc8f0a1e7c6f24fd9214e8eb4628a039024dfe2b08940f09fa4894db3c31bfdad04f941bb89325079d875f2547fa52cb9f3cbf349c9d16bf6a8d0ff61d501a98b5d9c422d8ba9dce609d8871b56b5fb9514bccc39e93e3b2a0617c45452078"
+    }
+  ],
+  "signedEvents": [
+    {
+      "name": "approved",
+      "signingSeed": "505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f",
+      "publicKey": "3f7708d5f5cc2bc633b59d2b3a2ed92e7479220c6f08ade208bebcd8580ab93b",
+      "event": {
+        "type": "approved",
+        "actor": "human:usr_01J9",
+        "workspace": "ws_01J9Z3ABC",
+        "note": "note_01J9Z3",
+        "pendingChange": "pc_77",
+        "version": 12,
+        "at": "2026-09-30T12:00:00Z"
+      },
+      "message": "6b6e6f7774617269756d2d6576656e742d76310a7b226163746f72223a2268756d616e3a7573725f30314a39222c226174223a22323032362d30392d33305431323a30303a30305a222c226e6f7465223a226e6f74655f30314a395a33222c2270656e64696e674368616e6765223a2270635f3737222c2274797065223a22617070726f766564222c2276657273696f6e223a31322c22776f726b7370616365223a2277735f30314a395a33414243227d",
+      "signature": "80i5eUkRvvfSry99hH5jkM3HI4pJ89gSwxJ2KY4tPjstuH9NvA5JJle-31igUKBpQvmf0wZGjInugkKEEXreDQ"
+    },
+    {
+      "name": "comment",
+      "signingSeed": "505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f",
+      "publicKey": "3f7708d5f5cc2bc633b59d2b3a2ed92e7479220c6f08ade208bebcd8580ab93b",
+      "event": {
+        "type": "comment",
+        "actor": "human:usr_01J9",
+        "note": "note_01J9Z3",
+        "version": 12,
+        "body": "This number doesn't match the Q3 report. Ré-check ✓",
+        "anchor": {
+          "claim": "^src-3",
+          "note": "note_01J9Z3"
+        },
+        "at": "2026-09-30T12:05:00Z"
+      },
+      "message": "6b6e6f7774617269756d2d6576656e742d76310a7b226163746f72223a2268756d616e3a7573725f30314a39222c22616e63686f72223a7b22636c61696d223a225e7372632d33222c226e6f7465223a226e6f74655f30314a395a33227d2c226174223a22323032362d30392d33305431323a30353a30305a222c22626f6479223a2254686973206e756d62657220646f65736e2774206d6174636820746865205133207265706f72742e2052c3a92d636865636b20e29c93222c226e6f7465223a226e6f74655f30314a395a33222c2274797065223a22636f6d6d656e74222c2276657273696f6e223a31327d",
+      "signature": "WGDVI8xh4LhRgFcnSM-U72_GTpnzrtQG9YQSxqQOiLzcgQOPLH6zyQFZeGZxxfvdnvVA21uT-EmYaBz3KLMmDQ"
+    }
+  ],
+  "signedWrappedKeys": [
+    {
+      "name": "workspaceKeyWraps[0], signed by the accountKeys owner",
+      "ownerAccountId": "usr_01J9",
+      "ownerSigningPublicKey": "3f7708d5f5cc2bc633b59d2b3a2ed92e7479220c6f08ade208bebcd8580ab93b",
+      "workspaceId": "ws_01J9Z3ABC",
+      "recipientPrivateKey": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf",
+      "recipientPublicKey": "dc2cca31e8e43bbd91dff7e475cca3347eb478107d5bd765aba4ae4a30c35d44",
+      "wrapped": "969fdc8f0a1e7c6f24fd9214e8eb4628a039024dfe2b08940f09fa4894db3c31bfdad04f941bb89325079d875f2547fa52cb9f3cbf349c9d16bf6a8d0ff61d501a98b5d9c422d8ba9dce609d8871b56b5fb9514bccc39e93e3b2a0617c45452078",
+      "signed": {
+        "version": 1,
+        "envelope": {
+          "type": "wrapped_key",
+          "accountId": "usr_01J9",
+          "workspaceId": "ws_01J9Z3ABC",
+          "recipient": "3CzKMejkO72R3_fkdcyjNH60eBB9W9dlq6SuSjDDXUQ",
+          "holder": "account",
+          "generation": 3,
+          "ciphertextSha256": "70028f17358f4d34036688aacfe8f882097e1d4410f735de43b9ddaf7f7430e3",
+          "createdAt": "2026-09-30T12:03:00.000Z"
+        },
+        "signature": "PEBtxBIymjdC_mcbigRHiFCgslozJ4iWiLnZvsSFEZqRfPayB_drxUS5dcT_hz5SGfAX7jIZhlZivXXauOcLBA"
+      },
+      "signedGeneration": {
+        "version": 1,
+        "envelope": {
+          "type": "key_generation",
+          "accountId": "usr_01J9",
+          "workspaceId": "ws_01J9Z3ABC",
+          "generation": 3,
+          "recipientsHash": "12db43a633fe6aea2d176a0a2087c8fc6943a8283203addf1d504def81a88ab2",
+          "keyCommitment": "dae1564f8ca8b6490f9bac24fbfa3d88cbbcf8ca15b285604c59004aeaeafb9d",
+          "createdAt": "2026-09-30T12:02:00.000Z"
+        },
+        "signature": "mto8RVD_m7OLVtLBOykORz588dIi5aVA9s_EqwKFEANxO0k1ZIwR1kuYM9VS6EEdiUv_IA8wpaXzjQuYzU6RDA"
+      },
+      "generation": 3,
+      "key": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"
+    }
+  ],
+  "confirmationCodes": [
+    {
+      "name": "the connect vector's keys",
+      "cliPublicKey": "736845d54e87de09d6bb114aa7042c50a4a015bd9901d1a0026f5956533a1519",
+      "ownerSigningPublicKey": "3f7708d5f5cc2bc633b59d2b3a2ed92e7479220c6f08ade208bebcd8580ab93b",
+      "code": "4KP5-4KHA"
+    },
+    {
+      "name": "all-zero keys",
+      "cliPublicKey": "0000000000000000000000000000000000000000000000000000000000000000",
+      "ownerSigningPublicKey": "0000000000000000000000000000000000000000000000000000000000000000",
+      "code": "W2B3-2PZ8"
+    }
+  ],
+  "connectPayloads": [
+    {
+      "name": "token, owner key and the workspace key for the CLI",
+      "secret": "d0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeef",
+      "payloadKey": "40ef255f63a56380e8572a148680f2b4a6e347e82334524f179cd54db90b5c83",
+      "cliPrivateKey": "e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+      "cliPublicKey": "736845d54e87de09d6bb114aa7042c50a4a015bd9901d1a0026f5956533a1519",
+      "nonce": "b0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7",
+      "payload": {
+        "token": "kt_agent_01J9example",
+        "ownerSigningPublicKey": "3f7708d5f5cc2bc633b59d2b3a2ed92e7479220c6f08ade208bebcd8580ab93b",
+        "wrapped": "6ab2b6cd842f260a9995f8c5039b4a42a793d6d1eace03cb0e3bf09510305b3e0e23264f2a88b5cb49d318f671865ffacf87595992bd3040d62776845ab266c82a358e96f5e6c5f55c53756c889fd65cefbd4fed8920a1435a1497eb74f1e50362",
+        "signed": {
+          "version": 1,
+          "envelope": {
+            "type": "wrapped_key",
+            "accountId": "usr_01J9",
+            "workspaceId": "ws_01J9Z3ABC",
+            "recipient": "c2hF1U6H3gnWuxFKpwQsUKSgFb2ZAdGgAm9ZVlM6FRk",
+            "holder": "tok_0f0f0f0f0f0f0f0f0f0f0f0f0f",
+            "generation": 3,
+            "ciphertextSha256": "fe46b56b87d1c9ef2738f94c4548c984783d70db84ad35549beafc7d1b1eb381",
+            "createdAt": "2026-09-30T12:10:00.000Z"
+          },
+          "signature": "AKgjkgQl7B7ae7XOXGl6aM5qZSSJaDfH4IJfobS09iwPvB6YnKvcqRw78ag-cSU0rNTWiF4fvNp5DHSbvMqwCg"
+        },
+        "signedGeneration": {
+          "version": 1,
+          "envelope": {
+            "type": "key_generation",
+            "accountId": "usr_01J9",
+            "workspaceId": "ws_01J9Z3ABC",
+            "generation": 3,
+            "recipientsHash": "44f2742dbfa5029042c61f5f59dfb8d868d2b3afeac0fde722e9a2ce422e0a0f",
+            "keyCommitment": "dae1564f8ca8b6490f9bac24fbfa3d88cbbcf8ca15b285604c59004aeaeafb9d",
+            "createdAt": "2026-09-30T12:02:00.000Z"
+          },
+          "signature": "xyiadR30srT2VX2UIzWsjRfF7BDbV1A48pXMBaCoXV-7RdKCTvsrZ0nc-P21DwAXYs3836wLzub3aotsAFebBA"
+        }
+      },
+      "sealed": "01b0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c791eecbd56a5034c7df1cc2f18a61774b41b2142fc54c856182c6a52fddccbc70ec2aca2297e3b992f83abdd9fa2f818d697a39e275f6398f2fd51e77fabdcfef429a547826befc7992d2dbbdaa853e7cdd4717260669fa6873d9229c7659b1031c5b9068242290fe99532ba8ac81319b5cc66dd7d0132b10b1784065f8ece045378c22e941a1f51031628fef635c8e2fe373f2cf9e038b26c0b6f6c8b54b041cd513f40159fa92c735c6bb5f215440a3485a45dd35334503f74c4961601aa5bc99209fcc30f363cdde5085c56dd2ae7afd33dbb5167946b18392debd7da697391daafab34a91b14e9349e80ff4a961f63aca50acc51f55aac27e8578ab3e50f83257c7e4b3e5e228299d639425fa362f731871fc1f2a37f001dab52a56f8eb9faa71157e18919f75a84c3c67c623824d7c9500ba42c181ee679d804e1f757a8043ea3f04b60fef8c236d327ea412ed89418203bc6e96a62b01832b4f4ada1e1994bb45c99634ed26346c681ab2ade2539434f14167a45a62ee78f1b3a0ce9ed56c5c74cd54f1ce59168e94bc08574d120f308fad8e93d63b9d0c36f73da5eb10e32b64813d765a0d3e250f07d687176d6b0475698f8c484350c810b8b678c4382f78112ec23d665cf8967fe23474424c3546c417ac15b7e1201a78b204f05d0392bc17d1d2cb8a48d5297cd857c485bd3c2d7e85045ab4004f0a9730526da0088f9ae784f3e9f4b8fdf13b1242e0d1c094705cea3c22181d2a45ed9160a0c865e1c3c42d56c4346f3d4e38eeb956332de67f96a9162ccc75524fa254daa7dae663a857b2c686119d315ab83ba2362799ef074015ca1aaa95bf0ac38421de97bddf7cd0a81369812e68038a985c2000c8bb71a2118638e67fd247c8304947a763d6db652004bb2b7a40431bd1c651e3cc82d65918e2a38ae182a155d5af22fc8d875e88320b5c88a1b30fe1b1a3d05e5898a6e4c8736718d34f267b350fd293df18f1d40ffcbcfa02e6a2d8b7b40bae5ad657828696f51e0244c0827ae084a120314afed0e81ed7df8d54a5ed320536c1a00cee8660a81939ce27f7bb12084d470b3e1c2905bdf1fdde2f80a044b888aec737e783d56a59005c2d0ce497d3d88e15f5b687e7b958dbd624012489f54bca89aa986df63bc2267158257a9b33b4947e5c40115bd125a598380cdf911886693402607704f6b8caf2f4c4636136381c42c698fcc8aafa2fad20b5ee6f73d89f2caa38e53baa3cda20e862b2912ba1c1d0156c5228fe9cb2970518c4f686cd5789f51f349979754854abef3e53a2d92263b381b681d72d5fed9d9c8be4a7ae7c68d219118c1eaa22f568efdabac7fcd213f72cae31e057834fdb70b05c54dfc4c803797c22f8fc5e3e48176ea768ff7e3b7c02cb3125351141e824160bafe3edf8e407b66bfa03f44cf202f965a4ed46c22f1ea0b2ae8f164d1bd08a7b6c422f845c5f634d3b5686b653273b57ade4b229a9eb3a5020c5375d422f22bd771fda0e6505fcd43a317c28b25ba81ac0b37dad0946ade62a9f966de7d1d50b62d885622b46b2909adbbc9cd1df5cd85c8b33a5f121da9779bb02603a5ba6a55fb4c3ece634a089189ed883f78402c89e1c8662a0c7",
+      "expected": {
+        "ownerAccountId": "usr_01J9",
+        "workspaceId": "ws_01J9Z3ABC",
+        "generation": 3,
+        "key": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "confirmationCode": "4KP5-4KHA"
+      }
+    }
+  ],
+  "tamperedConnectPayloads": [
+    {
+      "name": "a ciphertext byte flipped",
+      "sealed": "01b0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c791eecbd56a5034c7df1cc2f18a61774a41b2142fc54c856182c6a52fddccbc70ec2aca2297e3b992f83abdd9fa2f818d697a39e275f6398f2fd51e77fabdcfef429a547826befc7992d2dbbdaa853e7cdd4717260669fa6873d9229c7659b1031c5b9068242290fe99532ba8ac81319b5cc66dd7d0132b10b1784065f8ece045378c22e941a1f51031628fef635c8e2fe373f2cf9e038b26c0b6f6c8b54b041cd513f40159fa92c735c6bb5f215440a3485a45dd35334503f74c4961601aa5bc99209fcc30f363cdde5085c56dd2ae7afd33dbb5167946b18392debd7da697391daafab34a91b14e9349e80ff4a961f63aca50acc51f55aac27e8578ab3e50f83257c7e4b3e5e228299d639425fa362f731871fc1f2a37f001dab52a56f8eb9faa71157e18919f75a84c3c67c623824d7c9500ba42c181ee679d804e1f757a8043ea3f04b60fef8c236d327ea412ed89418203bc6e96a62b01832b4f4ada1e1994bb45c99634ed26346c681ab2ade2539434f14167a45a62ee78f1b3a0ce9ed56c5c74cd54f1ce59168e94bc08574d120f308fad8e93d63b9d0c36f73da5eb10e32b64813d765a0d3e250f07d687176d6b0475698f8c484350c810b8b678c4382f78112ec23d665cf8967fe23474424c3546c417ac15b7e1201a78b204f05d0392bc17d1d2cb8a48d5297cd857c485bd3c2d7e85045ab4004f0a9730526da0088f9ae784f3e9f4b8fdf13b1242e0d1c094705cea3c22181d2a45ed9160a0c865e1c3c42d56c4346f3d4e38eeb956332de67f96a9162ccc75524fa254daa7dae663a857b2c686119d315ab83ba2362799ef074015ca1aaa95bf0ac38421de97bddf7cd0a81369812e68038a985c2000c8bb71a2118638e67fd247c8304947a763d6db652004bb2b7a40431bd1c651e3cc82d65918e2a38ae182a155d5af22fc8d875e88320b5c88a1b30fe1b1a3d05e5898a6e4c8736718d34f267b350fd293df18f1d40ffcbcfa02e6a2d8b7b40bae5ad657828696f51e0244c0827ae084a120314afed0e81ed7df8d54a5ed320536c1a00cee8660a81939ce27f7bb12084d470b3e1c2905bdf1fdde2f80a044b888aec737e783d56a59005c2d0ce497d3d88e15f5b687e7b958dbd624012489f54bca89aa986df63bc2267158257a9b33b4947e5c40115bd125a598380cdf911886693402607704f6b8caf2f4c4636136381c42c698fcc8aafa2fad20b5ee6f73d89f2caa38e53baa3cda20e862b2912ba1c1d0156c5228fe9cb2970518c4f686cd5789f51f349979754854abef3e53a2d92263b381b681d72d5fed9d9c8be4a7ae7c68d219118c1eaa22f568efdabac7fcd213f72cae31e057834fdb70b05c54dfc4c803797c22f8fc5e3e48176ea768ff7e3b7c02cb3125351141e824160bafe3edf8e407b66bfa03f44cf202f965a4ed46c22f1ea0b2ae8f164d1bd08a7b6c422f845c5f634d3b5686b653273b57ade4b229a9eb3a5020c5375d422f22bd771fda0e6505fcd43a317c28b25ba81ac0b37dad0946ade62a9f966de7d1d50b62d885622b46b2909adbbc9cd1df5cd85c8b33a5f121da9779bb02603a5ba6a55fb4c3ece634a089189ed883f78402c89e1c8662a0c7",
+      "secret": "d0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeef",
+      "error": "decryption_failed",
+      "cliPrivateKey": "e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff"
+    },
+    {
+      "name": "a nonce byte flipped",
+      "sealed": "01b0b1b3b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c791eecbd56a5034c7df1cc2f18a61774b41b2142fc54c856182c6a52fddccbc70ec2aca2297e3b992f83abdd9fa2f818d697a39e275f6398f2fd51e77fabdcfef429a547826befc7992d2dbbdaa853e7cdd4717260669fa6873d9229c7659b1031c5b9068242290fe99532ba8ac81319b5cc66dd7d0132b10b1784065f8ece045378c22e941a1f51031628fef635c8e2fe373f2cf9e038b26c0b6f6c8b54b041cd513f40159fa92c735c6bb5f215440a3485a45dd35334503f74c4961601aa5bc99209fcc30f363cdde5085c56dd2ae7afd33dbb5167946b18392debd7da697391daafab34a91b14e9349e80ff4a961f63aca50acc51f55aac27e8578ab3e50f83257c7e4b3e5e228299d639425fa362f731871fc1f2a37f001dab52a56f8eb9faa71157e18919f75a84c3c67c623824d7c9500ba42c181ee679d804e1f757a8043ea3f04b60fef8c236d327ea412ed89418203bc6e96a62b01832b4f4ada1e1994bb45c99634ed26346c681ab2ade2539434f14167a45a62ee78f1b3a0ce9ed56c5c74cd54f1ce59168e94bc08574d120f308fad8e93d63b9d0c36f73da5eb10e32b64813d765a0d3e250f07d687176d6b0475698f8c484350c810b8b678c4382f78112ec23d665cf8967fe23474424c3546c417ac15b7e1201a78b204f05d0392bc17d1d2cb8a48d5297cd857c485bd3c2d7e85045ab4004f0a9730526da0088f9ae784f3e9f4b8fdf13b1242e0d1c094705cea3c22181d2a45ed9160a0c865e1c3c42d56c4346f3d4e38eeb956332de67f96a9162ccc75524fa254daa7dae663a857b2c686119d315ab83ba2362799ef074015ca1aaa95bf0ac38421de97bddf7cd0a81369812e68038a985c2000c8bb71a2118638e67fd247c8304947a763d6db652004bb2b7a40431bd1c651e3cc82d65918e2a38ae182a155d5af22fc8d875e88320b5c88a1b30fe1b1a3d05e5898a6e4c8736718d34f267b350fd293df18f1d40ffcbcfa02e6a2d8b7b40bae5ad657828696f51e0244c0827ae084a120314afed0e81ed7df8d54a5ed320536c1a00cee8660a81939ce27f7bb12084d470b3e1c2905bdf1fdde2f80a044b888aec737e783d56a59005c2d0ce497d3d88e15f5b687e7b958dbd624012489f54bca89aa986df63bc2267158257a9b33b4947e5c40115bd125a598380cdf911886693402607704f6b8caf2f4c4636136381c42c698fcc8aafa2fad20b5ee6f73d89f2caa38e53baa3cda20e862b2912ba1c1d0156c5228fe9cb2970518c4f686cd5789f51f349979754854abef3e53a2d92263b381b681d72d5fed9d9c8be4a7ae7c68d219118c1eaa22f568efdabac7fcd213f72cae31e057834fdb70b05c54dfc4c803797c22f8fc5e3e48176ea768ff7e3b7c02cb3125351141e824160bafe3edf8e407b66bfa03f44cf202f965a4ed46c22f1ea0b2ae8f164d1bd08a7b6c422f845c5f634d3b5686b653273b57ade4b229a9eb3a5020c5375d422f22bd771fda0e6505fcd43a317c28b25ba81ac0b37dad0946ade62a9f966de7d1d50b62d885622b46b2909adbbc9cd1df5cd85c8b33a5f121da9779bb02603a5ba6a55fb4c3ece634a089189ed883f78402c89e1c8662a0c7",
+      "secret": "d0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeef",
+      "error": "decryption_failed",
+      "cliPrivateKey": "e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff"
+    },
+    {
+      "name": "another secret (a server forging the relay)",
+      "sealed": "01b0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c791eecbd56a5034c7df1cc2f18a61774b41b2142fc54c856182c6a52fddccbc70ec2aca2297e3b992f83abdd9fa2f818d697a39e275f6398f2fd51e77fabdcfef429a547826befc7992d2dbbdaa853e7cdd4717260669fa6873d9229c7659b1031c5b9068242290fe99532ba8ac81319b5cc66dd7d0132b10b1784065f8ece045378c22e941a1f51031628fef635c8e2fe373f2cf9e038b26c0b6f6c8b54b041cd513f40159fa92c735c6bb5f215440a3485a45dd35334503f74c4961601aa5bc99209fcc30f363cdde5085c56dd2ae7afd33dbb5167946b18392debd7da697391daafab34a91b14e9349e80ff4a961f63aca50acc51f55aac27e8578ab3e50f83257c7e4b3e5e228299d639425fa362f731871fc1f2a37f001dab52a56f8eb9faa71157e18919f75a84c3c67c623824d7c9500ba42c181ee679d804e1f757a8043ea3f04b60fef8c236d327ea412ed89418203bc6e96a62b01832b4f4ada1e1994bb45c99634ed26346c681ab2ade2539434f14167a45a62ee78f1b3a0ce9ed56c5c74cd54f1ce59168e94bc08574d120f308fad8e93d63b9d0c36f73da5eb10e32b64813d765a0d3e250f07d687176d6b0475698f8c484350c810b8b678c4382f78112ec23d665cf8967fe23474424c3546c417ac15b7e1201a78b204f05d0392bc17d1d2cb8a48d5297cd857c485bd3c2d7e85045ab4004f0a9730526da0088f9ae784f3e9f4b8fdf13b1242e0d1c094705cea3c22181d2a45ed9160a0c865e1c3c42d56c4346f3d4e38eeb956332de67f96a9162ccc75524fa254daa7dae663a857b2c686119d315ab83ba2362799ef074015ca1aaa95bf0ac38421de97bddf7cd0a81369812e68038a985c2000c8bb71a2118638e67fd247c8304947a763d6db652004bb2b7a40431bd1c651e3cc82d65918e2a38ae182a155d5af22fc8d875e88320b5c88a1b30fe1b1a3d05e5898a6e4c8736718d34f267b350fd293df18f1d40ffcbcfa02e6a2d8b7b40bae5ad657828696f51e0244c0827ae084a120314afed0e81ed7df8d54a5ed320536c1a00cee8660a81939ce27f7bb12084d470b3e1c2905bdf1fdde2f80a044b888aec737e783d56a59005c2d0ce497d3d88e15f5b687e7b958dbd624012489f54bca89aa986df63bc2267158257a9b33b4947e5c40115bd125a598380cdf911886693402607704f6b8caf2f4c4636136381c42c698fcc8aafa2fad20b5ee6f73d89f2caa38e53baa3cda20e862b2912ba1c1d0156c5228fe9cb2970518c4f686cd5789f51f349979754854abef3e53a2d92263b381b681d72d5fed9d9c8be4a7ae7c68d219118c1eaa22f568efdabac7fcd213f72cae31e057834fdb70b05c54dfc4c803797c22f8fc5e3e48176ea768ff7e3b7c02cb3125351141e824160bafe3edf8e407b66bfa03f44cf202f965a4ed46c22f1ea0b2ae8f164d1bd08a7b6c422f845c5f634d3b5686b653273b57ade4b229a9eb3a5020c5375d422f22bd771fda0e6505fcd43a317c28b25ba81ac0b37dad0946ade62a9f966de7d1d50b62d885622b46b2909adbbc9cd1df5cd85c8b33a5f121da9779bb02603a5ba6a55fb4c3ece634a089189ed883f78402c89e1c8662a0c7",
+      "secret": "d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0",
+      "error": "decryption_failed",
+      "cliPrivateKey": "e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff"
+    },
+    {
+      "name": "an unknown version",
+      "sealed": "00b0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c791eecbd56a5034c7df1cc2f18a61774b41b2142fc54c856182c6a52fddccbc70ec2aca2297e3b992f83abdd9fa2f818d697a39e275f6398f2fd51e77fabdcfef429a547826befc7992d2dbbdaa853e7cdd4717260669fa6873d9229c7659b1031c5b9068242290fe99532ba8ac81319b5cc66dd7d0132b10b1784065f8ece045378c22e941a1f51031628fef635c8e2fe373f2cf9e038b26c0b6f6c8b54b041cd513f40159fa92c735c6bb5f215440a3485a45dd35334503f74c4961601aa5bc99209fcc30f363cdde5085c56dd2ae7afd33dbb5167946b18392debd7da697391daafab34a91b14e9349e80ff4a961f63aca50acc51f55aac27e8578ab3e50f83257c7e4b3e5e228299d639425fa362f731871fc1f2a37f001dab52a56f8eb9faa71157e18919f75a84c3c67c623824d7c9500ba42c181ee679d804e1f757a8043ea3f04b60fef8c236d327ea412ed89418203bc6e96a62b01832b4f4ada1e1994bb45c99634ed26346c681ab2ade2539434f14167a45a62ee78f1b3a0ce9ed56c5c74cd54f1ce59168e94bc08574d120f308fad8e93d63b9d0c36f73da5eb10e32b64813d765a0d3e250f07d687176d6b0475698f8c484350c810b8b678c4382f78112ec23d665cf8967fe23474424c3546c417ac15b7e1201a78b204f05d0392bc17d1d2cb8a48d5297cd857c485bd3c2d7e85045ab4004f0a9730526da0088f9ae784f3e9f4b8fdf13b1242e0d1c094705cea3c22181d2a45ed9160a0c865e1c3c42d56c4346f3d4e38eeb956332de67f96a9162ccc75524fa254daa7dae663a857b2c686119d315ab83ba2362799ef074015ca1aaa95bf0ac38421de97bddf7cd0a81369812e68038a985c2000c8bb71a2118638e67fd247c8304947a763d6db652004bb2b7a40431bd1c651e3cc82d65918e2a38ae182a155d5af22fc8d875e88320b5c88a1b30fe1b1a3d05e5898a6e4c8736718d34f267b350fd293df18f1d40ffcbcfa02e6a2d8b7b40bae5ad657828696f51e0244c0827ae084a120314afed0e81ed7df8d54a5ed320536c1a00cee8660a81939ce27f7bb12084d470b3e1c2905bdf1fdde2f80a044b888aec737e783d56a59005c2d0ce497d3d88e15f5b687e7b958dbd624012489f54bca89aa986df63bc2267158257a9b33b4947e5c40115bd125a598380cdf911886693402607704f6b8caf2f4c4636136381c42c698fcc8aafa2fad20b5ee6f73d89f2caa38e53baa3cda20e862b2912ba1c1d0156c5228fe9cb2970518c4f686cd5789f51f349979754854abef3e53a2d92263b381b681d72d5fed9d9c8be4a7ae7c68d219118c1eaa22f568efdabac7fcd213f72cae31e057834fdb70b05c54dfc4c803797c22f8fc5e3e48176ea768ff7e3b7c02cb3125351141e824160bafe3edf8e407b66bfa03f44cf202f965a4ed46c22f1ea0b2ae8f164d1bd08a7b6c422f845c5f634d3b5686b653273b57ade4b229a9eb3a5020c5375d422f22bd771fda0e6505fcd43a317c28b25ba81ac0b37dad0946ade62a9f966de7d1d50b62d885622b46b2909adbbc9cd1df5cd85c8b33a5f121da9779bb02603a5ba6a55fb4c3ece634a089189ed883f78402c89e1c8662a0c7",
+      "secret": "d0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeef",
+      "error": "unsupported_version",
+      "cliPrivateKey": "e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff"
+    },
+    {
+      "name": "no signed key generation",
+      "sealed": "01b0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c791eecbd56a5034c7df1cc2f18a61774b41b2142fc54c856182c6a52fddccbc70ec2aca2297e3b992f83abdd9fa2f818d697a39e275f6398f2fd51e77fabdcfef429a547826befc7992d2dbbdaa853e7cdd4717260669fa6873d9229c7659b1031c5b9068242290fe99532ba8ac81319b5cc66dd7d0132b10b1784065f8ece045378c22e941a1f51031628fef635c8e2fe373f2cf9e038b26c0b6f6c8b54b041cd513f40159fa92c735c6bb5f215440a3485a45dd35334503f74c4961601aa5bc99209fcc30f363cdde5085c56dd2ae7afd33dbb5167946b18392debd7da697391daafab34a91b14e9349e80ff4a961f63aca50acc51f55aac27e8578ab3e50f83257c7e4b3e5e228299d639425fa362f731871fc1f2a37f001dab52a56f8eb9faa71157e18919f75a84c3c67c623824d7c9500ba42c181ee679d804e1f757a8043ea3f04b60fef8c236d327ea412ed89418203bc6e96a62b01832b4f4ada1e1994bb45c99634ed26346c681ab2ade2539434f14167a45a62ee78f1b3a0ce9ed56c5c74cd54f1ce59168e94bc08574d120f308fad8e93d63b9d0c36f73da5eb10e32b64813d765a0d3e250f07d687176d6b0475698f8c484350c810b8b678c4382f78112ec23d665cf8967fe23474424c3546c417ac15b7e1201a78b204f05d0392bc17d1d2cb8a48d5297cd857c485bd3c2d7e85045ab4004f0a9730526da0088f9ae784f3e9f4b8fdf13b1242e0d1c094705cea3c22181d2a45ed9160a0c865e1c3c42d56c4346f3d4e38eeb956332de67f96a9162ccc75524fa254daa7dae663a857b2c686119d315ab83ba2362799ef074015ca1aaa95bf0ac38421de97bddf7cd0a81369812e68038a985c2000c8bb71a2118638e67fd247c8304947a763d6db652004bb2b7a40431bd1c651e3cc82d65918e2a38ae182a155d5af22fc8d875e88320b5c88a1b30fe1b1a3d05e5898a6e4c87367494c1fa45722f83aa987b8a85ec8240865",
+      "secret": "d0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeef",
+      "error": "malformed_envelope",
+      "cliPrivateKey": "e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff"
+    }
+  ]
+}

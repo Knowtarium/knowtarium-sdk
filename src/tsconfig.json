@@ -1,0 +1,6 @@
+{
+  // The library entries run in browsers, Node and Cloudflare Workers: no Node or DOM types here.
+  "extends": "../tsconfig.base.json",
+  "include": ["."],
+  "exclude": ["cli"]
+}

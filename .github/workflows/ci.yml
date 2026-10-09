@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # cancel superseded PR runs, but let every push to main finish
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    name: Check and build (${{ matrix.os }})
+    strategy:
+      # every platform reports, even when one fails
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      # Reads the pnpm version from "packageManager" in package.json.
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      # lint, format check, typecheck and tests
+      - run: pnpm check
+        env:
+          # the timing limits are written for the quiet Linux runner; elsewhere they get slack
+          KNOWTARIUM_PERF: ${{ matrix.os == 'ubuntu-latest' && 'strict' || '' }}
+      - run: pnpm build
+      # imports every subpath export from dist/ and runs the binary
+      - run: pnpm test:dist
+
+  node-versions:
+    name: CLI and bundle on Node 20 and 22
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      # Reads the pnpm version from "packageManager" in package.json.
+      - uses: pnpm/action-setup@v6
+
+      # The Node versions to check, from actions/setup-node (nothing downloaded by hand): the
+      # lowest one engines and the Claude Desktop bundle declare, and the next LTS line. Each
+      # binary's path is kept for check-node.js.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20.0.0
+      - run: echo "NODE_20=$(command -v node)" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: echo "NODE_22=$(command -v node)" >> "$GITHUB_ENV"
+
+      # The development Node builds; set up last, so it is the one on PATH.
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      # a labeled development bundle (never distributed), so the unpacked .mcpb is checked too
+      - run: pnpm build:extras --dev
+      # the built CLI and the bundle's server: --version, validate, status --offline, an MCP exchange
+      - run: node scripts/check-node.js "$NODE_20" "$NODE_22" "$(command -v node)"

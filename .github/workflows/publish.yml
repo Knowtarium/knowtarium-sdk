@@ -1,0 +1,60 @@
+name: Publish
+
+# Publishes knowtarium to npm when a version tag (v1.2.3) is pushed; see RELEASING.md.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  # npm provenance: the registry records which workflow run built the package
+  id-token: write
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      # the owner decides when the package goes public: until then this fails, by design
+      - name: Refuse a package that isn't ready to publish
+        run: |
+          private=$(node -p "require('./package.json').private === true")
+          version=$(node -p "require('./package.json').version")
+          if [ "$private" = "true" ]; then
+            echo "::error::package.json is private; drop \"private\": true to publish (RELEASING.md)"
+            exit 1
+          fi
+          if [ "$version" = "0.0.0" ]; then
+            echo "::error::the version is the 0.0.0 placeholder; set the release version (RELEASING.md)"
+            exit 1
+          fi
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME doesn't match package.json version $version"
+            exit 1
+          fi
+
+      # Reads the pnpm version from "packageManager" in package.json.
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - run: pnpm install --frozen-lockfile
+      # lint, format check, typecheck and tests
+      - run: pnpm check
+        env:
+          KNOWTARIUM_PERF: strict
+      # prepublishOnly builds and runs test:dist (which also checks the shrinkwrap) first
+      - run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

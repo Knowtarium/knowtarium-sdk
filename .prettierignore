@@ -1,0 +1,6 @@
+pnpm-lock.yaml
+dist-extras/
+npm-shrinkwrap.json
+
+# fixtures are byte-exact inputs for round-trip tests
+test/fixtures/

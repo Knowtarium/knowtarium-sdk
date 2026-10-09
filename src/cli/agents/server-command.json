@@ -1,0 +1,4 @@
+{
+  "npxArgs": ["-y", "knowtarium@{version}", "mcp"],
+  "windowsPrefix": ["cmd", "/c"]
+}

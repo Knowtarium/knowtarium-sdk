@@ -1,0 +1,17 @@
+# secrets and local config
+.env
+.env.*
+!.env.example
+.dev.vars*
+
+# dependencies and build output
+node_modules/
+dist/
+dist-extras/
+coverage/
+*.tsbuildinfo
+.wrangler/
+
+# os and editor
+.DS_Store
+*.log

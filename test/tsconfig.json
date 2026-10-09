@@ -1,0 +1,6 @@
+{
+  // The shared test helpers. Like the library, they get no Node or DOM types: fixtures are
+  // inlined by Vite's import.meta.glob, so they run in any test runner.
+  "extends": "../tsconfig.base.json",
+  "include": ["."]
+}

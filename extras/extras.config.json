@@ -1,0 +1,22 @@
+{
+  "displayName": "Knowtarium",
+  "description": "Your Knowtarium knowledge base in Claude: search, read and write notes (or propose changes where a folder asks for approval), and check a person's edits against connected notes. End-to-end encrypted.",
+  "author": {
+    "name": "Knowtarium",
+    "url": "https://knowtarium.com"
+  },
+  "homepage": "https://knowtarium.com",
+  "repository": "https://github.com/Magentix-Studio/knowtarium-sdk",
+  "privacyPolicy": "https://knowtarium.com/privacy",
+  "bundleNodeMinimum": "20.0.0",
+  "keyringPlatforms": [
+    "darwin-arm64",
+    "darwin-x64",
+    "win32-x64-msvc",
+    "win32-arm64-msvc",
+    "linux-x64-gnu",
+    "linux-arm64-gnu",
+    "linux-x64-musl",
+    "linux-arm64-musl"
+  ]
+}
