@@ -7,7 +7,8 @@ on:
 
 permissions:
   contents: read
-  # npm provenance: the registry records which workflow run built the package
+  # npm trusted publishing (no token) and provenance: the registry checks and records which workflow
+  # run built the package
   id-token: write
 
 concurrency:
@@ -54,7 +55,7 @@ jobs:
       - run: pnpm check
         env:
           KNOWTARIUM_PERF: strict
-      # prepublishOnly builds and runs test:dist (which also checks the shrinkwrap) first
+      # prepublishOnly builds and runs test:dist (which also checks the shrinkwrap) first. npm signs in
+      # through trusted publishing (npm 11.5.1 or later, which Node 24 ships): npmjs.com trusts this
+      # repository's publish.yml for knowtarium, so no token is stored anywhere.
       - run: npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

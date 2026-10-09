@@ -39,9 +39,11 @@ These stay as they are until the owner decides; nothing in this repo changes the
 4. Commit, then tag and push the tag: `git tag v<version> && git push origin v<version>`. The
    publish workflow (`.github/workflows/publish.yml`) checks that the package isn't private, that
    the version isn't `0.0.0` and that the tag matches it, runs `pnpm check`, then `npm publish`,
-   whose `prepublishOnly` builds and runs `pnpm test:dist`. It needs the `NPM_TOKEN` repository
-   secret: an npm granular access token that can publish `knowtarium` (with 2FA for writes, an
-   automation token or one allowed to bypass it). The bundles point at this version, so npm comes
+   whose `prepublishOnly` builds and runs `pnpm test:dist`. It signs in to npm through trusted
+   publishing, with no token: on npmjs.com, `knowtarium`'s settings name this repository
+   (`Knowtarium/knowtarium-sdk`) and the workflow file `publish.yml` as its trusted publisher, and
+   npm checks that GitHub Actions run before it accepts the package. Renaming the workflow file or
+   moving the repository means updating that setting. The bundles point at this version, so npm comes
    first.
 5. `pnpm build:extras`: now that `knowtarium@<version>` is on npm, it builds the release bundle and
    plugin into `dist-extras/` and validates them (`mcpb validate`, a started server answering
