@@ -1,4 +1,9 @@
-# knowtarium
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Knowtarium/knowtarium-sdk/main/.github/assets/logo-dark.png">
+    <img alt="Knowtarium" src="https://raw.githubusercontent.com/Knowtarium/knowtarium-sdk/main/.github/assets/logo-light.png" width="324">
+  </picture>
+</h1>
 
 Connect your AI agents to your [Knowtarium](https://knowtarium.com) workspace, end-to-end
 encrypted.
