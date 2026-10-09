@@ -10,7 +10,13 @@ import {
   searchDocumentOf,
   type SearchField,
 } from "./document.js";
-import { type Highlight, highlightsIn, type Snippet, snippetOf } from "./snippet.js";
+import {
+  type Highlight,
+  highlightsIn,
+  labelledSnippetOf,
+  type Snippet,
+  snippetOf,
+} from "./snippet.js";
 import { normalizeTerm, tokenize } from "./terms.js";
 
 const FORMAT = "knowtarium-search-index";
@@ -27,8 +33,8 @@ const BOOST: Readonly<Record<SearchField, number>> = {
   body: 1,
 };
 
-/** The fields a snippet may come from, in order of preference (title and path show anyway). */
-const SNIPPET_FIELDS = ["body", "description", "properties", "tags"] as const;
+/** The fields of the note's own text a snippet comes from, in order of preference. */
+const SNIPPET_FIELDS = ["body", "description"] as const;
 
 const ENGINE_OPTIONS: Options<SearchDocument> = {
   idField: "id",
@@ -84,7 +90,12 @@ export interface SearchHit {
   readonly terms: readonly string[];
   /** Matched words in `title`. */
   readonly titleHighlights: readonly Highlight[];
-  /** A window of the best matching field; `null` when only the title or path matched. */
+  /**
+   * A window of the note's text around a match: the body, else the description. Without one,
+   * `null` when the title or path matched (they show the match themselves); else, when only tags
+   * or other frontmatter values matched, the matching value labelled with its key (`tags: ...`,
+   * `status: draft`), so a field never reads as the note's text.
+   */
   readonly snippet: Snippet | null;
 }
 
@@ -304,6 +315,9 @@ export class SearchIndex {
       snippet = snippetOf(field, document[field], terms, snippetLength);
       if (snippet !== null) break;
     }
+    if (snippet === null && !matched.has("title") && !matched.has("path")) {
+      snippet = fieldSnippet(document, matched, terms, snippetLength);
+    }
     return [
       {
         id: document.id,
@@ -334,6 +348,28 @@ export class SearchIndex {
     };
     return JSON.stringify(serialized);
   }
+}
+
+/**
+ * The snippet of a hit that matched only in its tags or other frontmatter values: the first value
+ * with a matched word, labelled with its key.
+ */
+function fieldSnippet(
+  document: SearchDocument,
+  matched: ReadonlySet<string>,
+  terms: ReadonlySet<string>,
+  length: number | undefined,
+): Snippet | null {
+  if (matched.has("tags")) {
+    const tags = labelledSnippetOf("tags", "tags", document.tagList.join(", "), terms, length);
+    if (tags !== null) return tags;
+  }
+  if (!matched.has("properties")) return null;
+  for (const [key, values] of document.propertyEntries) {
+    const snippet = labelledSnippetOf("properties", key, values, terms, length);
+    if (snippet !== null) return snippet;
+  }
+  return null;
 }
 
 /** Builds a search index of the given notes. */

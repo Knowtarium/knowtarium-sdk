@@ -1,5 +1,6 @@
-// Snippets: a short window of a matched field, with the positions of the matched words, so the web
-// app can render highlights without parsing anything (and without HTML in the index).
+// Snippets: a short window of the note's text around a match, with the positions of the matched
+// words, so the web app can render highlights without parsing anything (and without HTML in the
+// index).
 import { tokensWithPositions } from "./terms.js";
 
 /** A highlighted range, as UTF-16 offsets into the text it belongs to (`[start, end)`). */
@@ -11,7 +12,10 @@ export interface Highlight {
 export interface Snippet {
   /** The field the text comes from. */
   readonly field: string;
-  /** The window, with line breaks and tabs turned into spaces. */
+  /**
+   * The window, with line breaks and tabs turned into spaces. From tags or another frontmatter
+   * key, it starts with the key's name (`tags: pricing, plans`, `status: draft`).
+   */
   readonly text: string;
   readonly highlights: readonly Highlight[];
   /** Whether text was cut before or after the window (show an ellipsis). */
@@ -73,5 +77,29 @@ export function snippetOf(
     highlights,
     truncatedStart: text.slice(0, start).trim() !== "",
     truncatedEnd: start + window.length < text.trimEnd().length,
+  };
+}
+
+/**
+ * A snippet of a frontmatter value, labelled with its key (`status: draft`) so it doesn't read as
+ * the note's text; `null` when the value has no matched word.
+ */
+export function labelledSnippetOf(
+  field: string,
+  label: string,
+  source: string,
+  terms: ReadonlySet<string>,
+  length = 160,
+): Snippet | null {
+  const window = snippetOf(field, source, terms, length);
+  if (window === null) return null;
+  const prefix = `${label}: `;
+  return {
+    ...window,
+    text: `${prefix}${window.text}`,
+    highlights: window.highlights.map(({ start, end }) => ({
+      start: start + prefix.length,
+      end: end + prefix.length,
+    })),
   };
 }

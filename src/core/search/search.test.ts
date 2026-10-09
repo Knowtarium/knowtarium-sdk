@@ -54,7 +54,10 @@ describe("searching the fixture workspace", () => {
     const hits = index.search("growth");
     expect(paths(hits)).toEqual(["notes/custom-keys.md"]);
     expect(hits[0]?.fields).toEqual(["properties"]);
-    expect(hits[0]?.snippet?.field).toBe("properties");
+    // the value, labelled with its key, so it doesn't read as the note's text
+    const snippet = hits[0]?.snippet;
+    expect(snippet).toMatchObject({ field: "properties", text: "owner: Sara, growth" });
+    expect(highlighted(snippet?.text ?? "", snippet?.highlights ?? [])).toEqual(["growth"]);
     expect(paths(index.search("third quarter"))).toEqual(["notes/custom-keys.md"]);
   });
 
@@ -119,6 +122,66 @@ describe("searching the fixture workspace", () => {
     expect(snippet?.truncatedEnd).toBe(true);
     expect(snippet?.text.length).toBeLessThanOrEqual(200);
     expect(highlighted(snippet?.text ?? "", snippet?.highlights ?? [])).toEqual(["needle"]);
+  });
+});
+
+describe("snippets", () => {
+  const index = createSearchIndex(
+    createWorkspace([
+      // as the web app makes notes: a title, the default type, no description
+      {
+        id: "one",
+        path: "Note One.md",
+        text: "---\ntitle: Note One\ntype: Note\n---\nThe first meeting, about pricing.\n",
+      },
+      {
+        id: "two",
+        path: "Meeting.md",
+        text: "---\ntitle: Meeting\ntype: Note\n---\nWe wrote a note about churn.\n",
+      },
+      {
+        id: "three",
+        path: "Plans.md",
+        text: "---\ntitle: Plans\ntype: Note\ndescription: Our note on the yearly plans\nstatus: draft\ntags: [roadmap]\n---\nTwo plans.\n",
+      },
+    ]).notes.values(),
+  );
+  const hitOf = (query: string, id: string) =>
+    index.search(query).find((hit) => hit.id === id) ?? null;
+
+  it("come from the body, with the match in context, before any frontmatter value", () => {
+    const hit = hitOf("note", "two");
+    expect(hit?.fields).toEqual(expect.arrayContaining(["body", "properties"]));
+    expect(hit?.snippet).toMatchObject({ field: "body", text: "We wrote a note about churn." });
+    expect(highlighted(hit?.snippet?.text ?? "", hit?.snippet?.highlights ?? [])).toEqual(["note"]);
+  });
+
+  it("come from the description when the body doesn't match", () => {
+    const hit = hitOf("note", "three");
+    expect(hit?.snippet).toMatchObject({
+      field: "description",
+      text: "Our note on the yearly plans",
+    });
+  });
+
+  it("are left out when the title matched and the text didn't, never taken from `type`", () => {
+    const hit = hitOf("note", "one");
+    expect(hit?.fields).toEqual(expect.arrayContaining(["title", "properties"]));
+    expect(highlighted(hit?.title ?? "", hit?.titleHighlights ?? [])).toEqual(["Note"]);
+    expect(hit?.snippet).toBeNull();
+  });
+
+  it("show a frontmatter value with its key only when nothing else matched", () => {
+    expect(hitOf("draft", "three")?.snippet).toMatchObject({
+      field: "properties",
+      text: "status: draft",
+      highlights: [{ start: 8, end: 13 }],
+    });
+    expect(hitOf("roadmap", "three")?.snippet).toMatchObject({
+      field: "tags",
+      text: "tags: roadmap",
+      highlights: [{ start: 6, end: 13 }],
+    });
   });
 });
 

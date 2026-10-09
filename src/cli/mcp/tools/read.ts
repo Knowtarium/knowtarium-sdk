@@ -262,7 +262,7 @@ export function registerReadTools(server: McpServer, context: ToolContext): void
     {
       title: "Search notes",
       description:
-        "Full-text search over the notes in scope (titles, descriptions, tags, properties and bodies), best matches first, with snippets, a page at a time. Filter by folder, type or verification status.",
+        "Full-text search over the notes in scope (titles, descriptions, tags, properties and bodies), best matches first, a page at a time, each with where it matched (`matched`) and a `snippet` of its text around the match: from the body, else the description; null when only the title or path matched; a frontmatter value with its key (`status: draft`) when only that matched. Filter by folder, type or verification status.",
       inputSchema: {
         workspace,
         query: z.string().min(1).describe("Words to find; every word must match (prefixes count)."),
@@ -301,6 +301,7 @@ export function registerReadTools(server: McpServer, context: ToolContext): void
             if (note === undefined) return null;
             return {
               ...summaryOf(session, note, now, policy),
+              matched: hit.fields,
               snippet: hit.snippet?.text ?? null,
             };
           })

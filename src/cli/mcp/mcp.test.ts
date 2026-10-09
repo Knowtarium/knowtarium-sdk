@@ -263,6 +263,17 @@ describe("the MCP server", () => {
       notes: { title: string }[];
     };
     expect(hits.map((hit) => hit.title).sort()).toEqual(["Old pricing", "Pricing"]);
+    // snippets come from the text; `type: Note` shows, labelled, only when nothing else matched
+    const { notes: typed } = (await call("search_notes", { query: "note" })).json() as {
+      notes: { title: string; matched: string[]; snippet: string | null }[];
+    };
+    expect(typed).toHaveLength(3);
+    for (const hit of typed)
+      expect(hit).toMatchObject({ matched: ["properties"], snippet: "type: Note" });
+    const { notes: priced } = (await call("search_notes", { query: "pricing" })).json() as {
+      notes: { title: string; matched: string[]; snippet: string | null }[];
+    };
+    expect(priced.find((hit) => hit.title === "Pricing")).toMatchObject({ snippet: null });
     const read = (await call("read_note", { note: "Research/pricing.md" })).json() as Record<
       string,
       unknown

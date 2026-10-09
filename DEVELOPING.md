@@ -840,8 +840,9 @@ that nothing was proposed or recorded. `my_pending_changes` shows when each prop
 submitted, its proposed file name and title, and the agent's summary. In `review`
 folders every note summary carries `checkState` (the state from the checks alone), which
 `list_pending_checks` and the `search_notes` status filter use (`stale` goes by freshness, in every
-folder); `search_notes` is paged and its folder filter ignores letter case; `list_stale` gives
-`stale_after` as written and `staleAt` as an ISO instant.
+folder); `search_notes` is paged, its folder filter ignores letter case, and each hit says where
+it matched (`matched`) next to core's snippet text; `list_stale` gives `stale_after` as written and
+`staleAt` as an ISO instant.
 
 ## The agent skill
 
@@ -1222,8 +1223,12 @@ Chinese, Japanese, Thai and other unspaced scripts are split into words with `In
 into characters where it is missing). `index.search(query, options)` matches prefixes (never for a
 single character) and typos, boosts titles over bodies, filters by
 type, folder, tags or a set of ids (for tier and state filters, which depend on the clock), and
-returns each hit with a snippet and highlight ranges (UTF-16 offsets, no HTML). `upsert`, `remove`
-and `sync` update it per note and skip unchanged ones. `index.serialize()` gives a string for a
+returns each hit with the fields that matched, a snippet and highlight ranges (UTF-16 offsets, no
+HTML). The snippet is the note's own text around a match: the body, else the description. A hit
+whose title or path matched but not its text has none (the title shows the match), so a
+frontmatter value never stands in for the text; one that matched only in its tags or another
+frontmatter value shows that value labelled with its key (`tags: roadmap`, `status: draft`).
+`upsert`, `remove` and `sync` update it per note and skip unchanged ones. `index.serialize()` gives a string for a
 local cache: it holds the notes' words, so **encrypt it with the workspace key** before it goes
 to IndexedDB or the CLI's cache folder. `restoreSearchIndex(decrypted, notes)` reloads it and
 re-indexes only notes whose text changed, or rebuilds when the cache is unreadable, corrupt or

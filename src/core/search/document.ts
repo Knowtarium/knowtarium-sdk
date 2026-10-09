@@ -25,6 +25,11 @@ export interface SearchDocument {
   readonly description: string;
   readonly tags: string;
   readonly properties: string;
+  /**
+   * The frontmatter keys behind `properties`, each with its values (`["owner", "Sara, growth"]`),
+   * for a snippet that names the key. Not indexed.
+   */
+  readonly propertyEntries: readonly (readonly [key: string, values: string])[];
   readonly body: string;
   /** Changes whenever the note's path or text does, to skip re-indexing unchanged notes. */
   readonly fingerprint: string;
@@ -46,13 +51,16 @@ function collectValues(value: unknown, depth: number, out: string[]): void {
   }
 }
 
-/** The values of every frontmatter key except the ones searched on their own, as one text. */
-function propertiesText(frontmatter: Readonly<Record<string, unknown>>): string {
-  const values: string[] = [];
+/** Every frontmatter key except the ones searched on their own, with its values. */
+function propertyValues(frontmatter: Readonly<Record<string, unknown>>): [string, string[]][] {
+  const entries: [string, string[]][] = [];
   for (const [key, value] of Object.entries(frontmatter)) {
-    if (!OWN_FIELD_KEYS.has(key)) collectValues(value, 0, values);
+    if (OWN_FIELD_KEYS.has(key)) continue;
+    const values: string[] = [];
+    collectValues(value, 0, values);
+    if (values.length > 0) entries.push([key, values]);
   }
-  return values.join("\n").slice(0, MAX_PROPERTIES_LENGTH);
+  return entries;
 }
 
 /** A fast, non-cryptographic 53-bit hash (cyrb53), as hex. Only compares a note with itself. */
@@ -71,6 +79,7 @@ export function fingerprintOf(text: string): string {
 
 export function searchDocumentOf(note: Note): SearchDocument {
   const tagList = note.fields.tags ?? [];
+  const properties = propertyValues(note.frontmatter);
   return {
     id: note.id,
     path: note.path,
@@ -80,7 +89,11 @@ export function searchDocumentOf(note: Note): SearchDocument {
     title: note.title,
     description: note.fields.description ?? "",
     tags: tagList.join(" "),
-    properties: propertiesText(note.frontmatter),
+    properties: properties
+      .flatMap(([, values]) => values)
+      .join("\n")
+      .slice(0, MAX_PROPERTIES_LENGTH),
+    propertyEntries: properties.map(([key, values]) => [key, values.join(", ")] as const),
     body: note.body,
     fingerprint: `${fingerprintOf(`${note.path}\0${note.parsed.text}`)}:${String(note.parsed.text.length)}`,
   };
