@@ -1,8 +1,5 @@
 <h1 align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Knowtarium/knowtarium-sdk/main/.github/assets/logo-dark.png">
-    <img alt="Knowtarium" src="https://raw.githubusercontent.com/Knowtarium/knowtarium-sdk/main/.github/assets/logo-light.png" width="324">
-  </picture>
+  <img alt="Knowtarium" src="https://raw.githubusercontent.com/Knowtarium/knowtarium-sdk/main/.github/assets/logo.png" width="420">
 </h1>
 
 Connect your AI agents to your [Knowtarium](https://knowtarium.com) workspace, end-to-end
