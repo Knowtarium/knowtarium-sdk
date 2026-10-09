@@ -222,8 +222,10 @@ describe("configuring agents", () => {
       agentTargets(cliEnvironment(env, platform, "/u")).find(
         (target) => target.id === "claude-desktop",
       )?.configPath;
-    expect(find("darwin")).toBe("/u/Library/Application Support/Claude/claude_desktop_config.json");
-    expect(find("linux")).toBe("/u/.config/Claude/claude_desktop_config.json");
+    expect(find("darwin")).toBe(
+      join("/u", "Library", "Application Support", "Claude", "claude_desktop_config.json"),
+    );
+    expect(find("linux")).toBe(join("/u", ".config", "Claude", "claude_desktop_config.json"));
     expect(find("win32", { APPDATA: "/roaming" })).toBe(
       join("/roaming", "Claude", "claude_desktop_config.json"),
     );
