@@ -69,7 +69,8 @@ These stay as they are until the owner decides; nothing in this repo changes the
    tag.
    The release notes link the npm version, say how to update agents and where the plugins are,
    and end with GitHub's comparison with the previous release; edit them on GitHub to say what
-   changed. Every action in the workflows is pinned to a full commit SHA, with its version in a
+   changed, and add the size `pnpm test:dist` prints for `knowtarium/clip` (the web clipper
+   extension's entry, without libsodium; there is no size target, the notes keep the record). Every action in the workflows is pinned to a full commit SHA, with its version in a
    comment: to update one, resolve the new tag with
    `git ls-remote https://github.com/<owner>/<repo>.git 'refs/tags/<tag>' 'refs/tags/<tag>^{}'`
    (the `^{}` line is the commit of an annotated tag) and replace both. Claude

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import * as protocol from "../protocol/index.js";
 import * as clip from "./index.js";
+import { formatClipId } from "./payload.js";
 
 /** Everything knowtarium/clip exports at run time: what the extension can call. */
 const EXPECTED = [
@@ -52,6 +53,14 @@ describe("the knowtarium/clip entry", () => {
     expect(clip.EXTENSION_CONNECT_PAGE_PATH).toBe(protocol.EXTENSION_CONNECT_PAGE_PATH);
     expect(clip.CLIP_LIMITS.sealedBytes).toBe(protocol.CLIP_QUEUE_LIMITS.sealedClipBytes);
     expect(clip.CLIP_FORMAT_VERSION).toBe(protocol.SEALED_CLIP_FORMAT);
+  });
+
+  it("makes clip IDs as the protocol formats IDs", () => {
+    for (const fill of [0, 7, 255]) {
+      const random = new Uint8Array(16).fill(fill);
+      random[3] = 42;
+      expect(formatClipId(random)).toBe(protocol.formatId("clip", random));
+    }
   });
 
   it("types the routes' bodies as the protocol does", () => {
