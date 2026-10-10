@@ -66,6 +66,11 @@ export interface SessionDeps {
   readonly retryOnCallMinMs?: number;
   /** The clock, in milliseconds (tests). */
   readonly now?: () => number;
+  /**
+   * The agent's actor, as its `generated` stamps and unsigned `clipped` records name the clips it
+   * files in the background (the MCP client's, once it said; `knowtarium-cli/<version>` before).
+   */
+  readonly actor?: () => Actor;
   /** The API client's retry policy (tests make it one attempt). */
   readonly apiRetry?: Parameters<typeof createApiClient>[0]["retry"];
 }
@@ -144,13 +149,10 @@ export class WorkspaceSession {
   private failures = 0;
   /** When the last sync started, by `deps.now`. */
   private lastAttempt = Number.NEGATIVE_INFINITY;
-  /** The filing pass running now, if any (the web clipper; one at a time). */
+  /** The filing passes running now, if any (the web clipper; one at a time). */
   private filing: Promise<InboxState> | undefined;
-  /**
-   * The agent's actor, as its `generated` stamps and unsigned `clipped` records name it; the MCP
-   * server sets it from the client's handshake.
-   */
-  actor: () => Actor = () => "knowtarium-cli/0";
+  /** Whether a call came in during the running pass, which then runs once more. */
+  private fileAgain = false;
 
   private constructor(
     readonly connection: Connection,
@@ -379,6 +381,11 @@ export class WorkspaceSession {
     return this.deps.now?.() ?? Date.now();
   }
 
+  /** The actor of the clips filed in the background. */
+  private actor(): Actor {
+    return this.deps.actor?.() ?? "knowtarium-cli/0";
+  }
+
   /** The wait before the next retry: doubled for each failure in a row, capped. */
   private retryDelay(): number {
     const first = this.deps.retryAfterMs ?? 15_000;
@@ -487,27 +494,46 @@ export class WorkspaceSession {
       await this.refreshChecks();
       this.failures = 0;
       this.settle("ready", null);
+      // the web clipper's clips, where this connection may file them: in the background, so
+      // nothing waiting on this sync (the first sync, a tool's retry) waits on the filing too
+      void this.fileClips();
       await this.saveIndex();
     } catch (error) {
       this.fail(error);
-      return;
     }
-    // the web clipper's clips, where this connection may file them; never fails the sync
-    await this.fileClips();
   }
 
   /**
    * Reads the inbox key (the web clipper) and, when this connection may file clips (a
    * `read-write` token whose signing key the owner vouched for, with the inbox folder in its
    * scope), files the waiting ones into existing folders where agents' changes apply directly,
-   * for at most `maxMs`; the rest wait for the web app, with the reason. One pass at a time (a
-   * second call joins it). Never rejects: a failure leaves `filed` null.
+   * for at most `maxMs` a pass; the rest wait for the web app, with the reason. One pass at a
+   * time: a call while one runs (a `clip_added` ping, say) joins it and has it run once more
+   * when it ends, so a clip queued meanwhile isn't left for the next sync. Never rejects: a
+   * failure leaves `filed` null.
    */
   fileClips(maxMs = CLIP_FILING_MAX_MS): Promise<InboxState> {
-    this.filing ??= this.filePass(maxMs).finally(() => {
-      this.filing = undefined;
+    if (this.filing !== undefined) {
+      this.fileAgain = true;
+      return this.filing;
+    }
+    const passes = async (): Promise<InboxState> => {
+      for (;;) {
+        this.fileAgain = false;
+        const state = await this.filePass(maxMs);
+        if (!this.anotherPass()) return state;
+      }
+    };
+    const filing = passes().finally(() => {
+      if (this.filing === filing) this.filing = undefined;
     });
-    return this.filing;
+    this.filing = filing;
+    return filing;
+  }
+
+  /** Whether a call came in during the last pass, so another runs. */
+  private anotherPass(): boolean {
+    return this.fileAgain && !this.ended;
   }
 
   private async filePass(maxMs: number): Promise<InboxState> {
@@ -536,6 +562,7 @@ export class WorkspaceSession {
       ]),
     );
     const started = this.now();
+    const actor = this.actor();
     try {
       const filed = await this.engine.fileClips({
         folders,
@@ -543,8 +570,8 @@ export class WorkspaceSession {
           [...this.view.notes.values()]
             .filter((note) => note.folderId === folderId && note.name !== null)
             .map((note) => note.name ?? ""),
-        stamp: (text) => setGenerated(parseNote(text), this.actor(), new Date(this.now())).text,
-        actor: this.actor(),
+        stamp: (text) => setGenerated(parseNote(text), actor, new Date(this.now())).text,
+        actor,
         agentWrite: {
           minPolicyRevision: this.policyFloor,
           visibleFolderIds: [...this.view.folders.keys()],

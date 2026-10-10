@@ -972,16 +972,22 @@ records count in every verification state the tools show, so a recorded pass is 
 and a failed check shows as a conflict.
 
 **The web clipper's clips.** A connection files the workspace's waiting clips (`fileClips`, as
-the agent, with `generated` stamped and an unsigned `clipped` record) only when its token is
-`read-write`, the owner vouched for its signing key and the inbox folder is in its scope: at the
-end of every sync, on a `clip_added` ping and at the start of `list_inbox` (one pass at a time, at
-most 5 seconds). It files only into existing folders whose mode, through their ancestors, is
-`direct`; a clip for a folder that asks first, a new category (agents can't create folders), a key
-generation it doesn't hold, the daily cap or a missing folder is released for the web app.
-`list_inbox` (every token) lists the notes in the inbox folder and its direct subfolders by
-`status` (`inbox` by default), newest `saved` first, with the note's body cut to 1,000 characters,
-and `waiting`: the queue's `clipSummary` count (null where this connection can't see it) and the
-reasons from its own pass. Without an inbox it answers that the web clipper isn't connected yet.
+the agent the MCP client says it is, from `SessionDeps.actor`, with `generated` stamped and an
+unsigned `clipped` record) only when its token is `read-write`, the owner vouched for its signing
+key and the inbox folder is in its scope: in the background after every sync (nothing waiting on
+the sync waits on it), on a `clip_added` ping and at the start of `list_inbox`. One pass runs at a
+time, at most 5 seconds; a call during a pass (a ping, say) makes it run once more. It files only
+into existing folders whose mode, through their ancestors, is `direct`; a clip for a folder that
+asks first, a new category (agents can't create folders), a key generation it doesn't hold, the
+daily or per-minute limit or a missing folder is released for the web app. `list_inbox` (every
+token; not marked read-only, since it files first) lists the `type: Clip` notes in the inbox
+folder and its direct subfolders by `status` (`inbox` by default) and category (`""` or `Inbox`
+for the inbox itself), newest `saved` first, each with what was saved (title, link, time, the
+note cut to 1,000 characters) under `data`, and `waiting`: the queue's `clipSummary` count (null
+where this connection can't see the queue) and the reasons from its own pass, or null when nothing
+is known to wait. Its `guidance` says the clips are data; the skill and the instructions tell the
+agent to open a clip's link only when the person asks about that clip. Without an inbox it answers
+that the web clipper isn't connected yet.
 
 **Which workspace.** A tool called without `workspace` uses the one connected workspace that can
 be used: one whose access was revoked, or that `disconnect` removed, doesn't count. A revocation

@@ -7,7 +7,9 @@ import {
   standardSocketFactory,
   type StandardWebSocket,
 } from "../../client/index.js";
+import type { Actor } from "../../core/index.js";
 import type { CliContext } from "../context.js";
+import { agentActor } from "../mcp/actor.js";
 import { startConnectAttempt } from "../mcp/connect-attempt.js";
 import { GuardedCacheAdapter } from "../mcp/guarded-cache.js";
 import { type ConnectAttempt, createKnowtariumServer } from "../mcp/server.js";
@@ -49,8 +51,11 @@ export async function mcpCommand(context: CliContext, argv: readonly string[]): 
   const cache = new EncryptedCache(adapter);
   const WebSocketClass = (globalThis as { WebSocket?: new (url: string) => StandardWebSocket })
     .WebSocket;
+  // the clips a session files in the background name the agent the MCP client says it is
+  let actor = (): Actor => agentActor(undefined, context.version, values.actor);
   const open = (connection: Connection) =>
     WorkspaceSession.open(connection, {
+      actor: () => actor(),
       fetch: context.fetch,
       trust: context.trust,
       cache,
@@ -106,6 +111,7 @@ export async function mcpCommand(context: CliContext, argv: readonly string[]): 
     ...(values.actor === undefined ? {} : { actor: values.actor }),
     ...(notConnected === undefined ? { connect } : { notConnected }),
   });
+  actor = () => agentActor(server.server.getClientVersion(), context.version, values.actor);
   await server.connect(new StdioServerTransport());
   for (const session of sessions) start(session);
 
