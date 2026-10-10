@@ -25,6 +25,7 @@ export const BLOB_KINDS = [
   "search_index",
   "agent_name",
   "graph_layout",
+  "extension_name",
 ] as const;
 
 /** One kind of encrypted blob. */
@@ -41,7 +42,8 @@ export type BlobKind = (typeof BLOB_KINDS)[number];
  * in its own encrypted cache) the id of the index, by default the workspace id; for "agent_name"
  * (the name a person gives a connected agent, such as "Laptop Claude Code") the agent token id;
  * for "graph_layout" (a client's saved graph positions, kept only in its own encrypted cache, like
- * "search_index") the id of the layout, by default the workspace id.
+ * "search_index") the id of the layout, by default the workspace id; for "extension_name" (the name
+ * a person gives a paired browser extension, such as "Chrome on macOS") the extension id.
  */
 export type BlobContext =
   | {

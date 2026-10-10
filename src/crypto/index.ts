@@ -106,6 +106,15 @@ export {
 } from "./hash.js";
 
 export {
+  deriveInboxKeyPair,
+  extensionConfirmationCode,
+  type InboxKeyPair,
+  sealExtensionPairing,
+} from "./inbox.js";
+export type { ExtensionPairing } from "../clip/pairing.js";
+export type { SignedExtensionKey, SignedInboxKey } from "../clip/keys.js";
+
+export {
   type ConnectPayload,
   createConnectSecret,
   type OpenedConnectPayload,

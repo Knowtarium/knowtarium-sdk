@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { Plan, Usage } from "./plans.js";
 import { Version } from "./primitives.js";
+import { SignedInboxKey } from "./signatures.js";
 
 /**
  * Every error the sync API returns, with its HTTP status. Codes are stable: clients branch on
@@ -71,6 +72,13 @@ export const ERROR_STATUS = {
   /** A folder that still holds folders or notes can't be deleted. */
   not_empty: 409,
   /**
+   * A clip sealed to an older inbox key generation than the workspace's latest `inbox_key`; the
+   * answer carries that one (`inboxKey`): verify it under the pinned owner key, seal again, retry.
+   */
+  stale_inbox_key: 409,
+  /** The workspace has no inbox yet (no `inbox_key`): pairing an extension needs one first. */
+  inbox_not_set: 409,
+  /**
    * The subscription can't change plan now: it is paused, past due or unpaid, or ends at the
    * period's end. Resume it or fix the payment in the billing portal first.
    */
@@ -82,6 +90,8 @@ export const ERROR_STATUS = {
   expired: 410,
   payload_too_large: 413,
   rate_limited: 429,
+  /** The workspace's clip queue is full (1,000 clips wait): file them in the web app first. */
+  inbox_full: 429,
   internal: 500,
   unavailable: 503,
 } as const;
@@ -132,6 +142,13 @@ const RateLimitedError = z.object({
   retryAfterSeconds: z.int().nonnegative(),
 });
 
+/** The latest inbox key comes with the refusal, so the extension doesn't need a second request. */
+const StaleInboxKeyError = z.object({
+  code: z.literal("stale_inbox_key"),
+  message,
+  inboxKey: SignedInboxKey,
+});
+
 const UnsupportedProtocolError = z.object({
   code: z.literal("unsupported_protocol"),
   message,
@@ -157,6 +174,7 @@ const detailedCodes = [
   "rate_limited",
   "unsupported_protocol",
   "invalid_request",
+  "stale_inbox_key",
 ] as const;
 
 type PlainCode = Exclude<ErrorCode, (typeof detailedCodes)[number]>;
@@ -174,6 +192,7 @@ export const ApiError = z.discriminatedUnion("code", [
   RateLimitedError,
   UnsupportedProtocolError,
   InvalidRequestError,
+  StaleInboxKeyError,
   PlainError,
 ]);
 export type ApiError = z.infer<typeof ApiError>;

@@ -50,6 +50,8 @@ const SAFE_STRINGS = new Set<z.ZodType>([
   protocol.TokenId,
   protocol.ConnectRequestId,
   protocol.AttachmentId,
+  protocol.ExtensionId,
+  protocol.ClipId,
   protocol.Timestamp,
   protocol.SignedTimestamp,
   protocol.Email,
@@ -73,6 +75,10 @@ const SAFE_STRINGS = new Set<z.ZodType>([
   protocol.ProductId,
   protocol.CurrencyCode,
   protocol.AgentTokenSecret,
+  protocol.ExtensionTokenSecret,
+  // a clip sealed to the inbox key (`crypto_box_seal`), named `blob` as the web clipper's design
+  // has it: no client can read it without the inbox private key
+  protocol.SealedClip,
   protocol.PollSecret,
   protocol.LiveTicket,
   protocol.PendingNonce,

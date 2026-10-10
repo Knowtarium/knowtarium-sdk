@@ -87,6 +87,20 @@ const EXPECTED: Record<string, readonly string[]> = {
     "relayConnect",
     "denyConnect",
     "pollConnect",
+    "approveExtensionConnect",
+  ],
+  clips: [
+    "getInboxKey",
+    "putInboxKey",
+    "claimClips",
+    "ackClips",
+    "releaseClips",
+    "clipSummary",
+    "listExtensions",
+    "revokeExtension",
+    "postClip",
+    "getExtensionInboxKey",
+    "revokeCurrentExtension",
   ],
   live: ["createLiveTicket", "live"],
 };
@@ -147,6 +161,23 @@ describe("route table", () => {
     ] as const) {
       expect(routes[name].auth).toBe("session");
     }
+  });
+
+  it("keeps an extension's token to the routes under /extensions/current, and those to it", () => {
+    const extension = ROUTE_LIST.filter((route) => route.auth === "extension");
+    expect(extension.map((route) => route.name).sort()).toEqual([
+      "getExtensionInboxKey",
+      "postClip",
+      "revokeCurrentExtension",
+    ]);
+    for (const route of ROUTE_LIST) {
+      expect(route.path.startsWith("/extensions/current"), route.name).toBe(
+        route.auth === "extension",
+      );
+    }
+    // the owner alone signs the inbox key and revokes an extension
+    expect(routes.putInboxKey.auth).toBe("session");
+    expect(routes.revokeExtension.auth).toBe("session");
   });
 
   it("lets an agent sign on writeNoteAsAgent only", () => {

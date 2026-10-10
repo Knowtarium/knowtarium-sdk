@@ -1,8 +1,9 @@
 import { z } from "zod";
 
-import { Ciphertext, EncKey, EncName, PublicKey } from "./ciphertext.js";
-import { ConnectRequestId, FolderId, TokenId, WorkspaceId } from "./ids.js";
-import { KeyGeneration, Ok, secretSchema, Timestamp } from "./primitives.js";
+import { Ciphertext, EncKey, EncName, PublicKey, Signature } from "./ciphertext.js";
+import { ExtensionInfo } from "./clips.js";
+import { ConnectRequestId, ExtensionId, FolderId, TokenId, WorkspaceId } from "./ids.js";
+import { KeyGeneration, Ok, secretSchema, SignedTimestamp, Timestamp } from "./primitives.js";
 import { defineRoute } from "./route.js";
 import {
   agentKeySigningFields,
@@ -32,7 +33,19 @@ import { AgentToken, TokenAccess } from "./tokens.js";
  *    shows the same code, and accepts the payload only after the person confirms it there too.
  *
  * The CLI polls throughout, to learn about a denial or expiry and to collect a relayed payload.
+ *
+ * A browser extension (the web clipper) pairs over the same requests, expiry, poll secret, relay
+ * and rate limits (`client: "extension"`; its version goes where the CLI's does). It can't listen
+ * on a loopback, so delivery is always the relay; the confirmation code over its signing key and
+ * the request ID (`extensionConfirmationCode`) is shown by the extension at once and matched in
+ * the web app before Allow; the approval has its own route (`approveExtensionConnect`), which
+ * creates the extension's row and token and no workspace key copy; and the relayed payload has
+ * its own format (`ktextpar`, see `knowtarium/clip`). The `/connect` page and `approveConnect`
+ * refuse an extension's request, and `approveExtensionConnect` a CLI's (400 `invalid_request`).
  */
+
+/** The web app page an extension opens: `<app origin>/connect/extension?request=<id>#<fragment>`. */
+export const EXTENSION_CONNECT_PAGE_PATH = "/connect/extension";
 
 /** The web app page the CLI opens: `<app origin>/connect?request=<requestId>#<fragment>`. */
 export const CONNECT_PAGE_PATH = "/connect";
@@ -58,7 +71,15 @@ export const ConnectStatus = z.enum([
 ]);
 export type ConnectStatus = z.infer<typeof ConnectStatus>;
 
-export const StartConnectRequest = z.strictObject({ cliVersion: CliVersion });
+/** Who started a connect request: the CLI, or a browser extension (the web clipper). */
+export const ConnectClient = z.enum(["cli", "extension"]);
+export type ConnectClient = z.infer<typeof ConnectClient>;
+
+/** The CLI sends its version; an extension says so and sends its own (stored as the CLI's). */
+export const StartConnectRequest = z.union([
+  z.strictObject({ cliVersion: CliVersion }),
+  z.strictObject({ client: z.literal("extension"), extensionVersion: CliVersion }),
+]);
 export type StartConnectRequest = z.infer<typeof StartConnectRequest>;
 
 export const StartConnectResponse = z.object({
@@ -69,9 +90,14 @@ export const StartConnectResponse = z.object({
 });
 export type StartConnectResponse = z.infer<typeof StartConnectResponse>;
 
-/** What the connect page reads before the person allows (the key comes from the fragment). */
+/**
+ * What the connect page reads before the person allows (the key comes from the fragment).
+ * `cliVersion` is the extension's version for an extension's request. Servers from before the web
+ * clipper don't send `client`, which then reads as `cli`.
+ */
 export const ConnectRequestInfo = z.object({
   id: ConnectRequestId,
+  client: ConnectClient.default("cli"),
   cliVersion: CliVersion,
   status: ConnectStatus,
   createdAt: Timestamp,
@@ -135,6 +161,29 @@ export type ApproveConnectRequest = z.infer<typeof ApproveConnectRequest>;
 export const ApproveConnectResponse = z.object({ token: AgentToken });
 export type ApproveConnectResponse = z.infer<typeof ApproveConnectResponse>;
 
+/**
+ * The owner allows an extension (the web clipper): the web app made the extension's ID and its
+ * `kte_` token secret (the server gets only the secret's SHA-256), encrypted its name (an
+ * `extension_name` blob bound to `extensionId`) and signed `extension_key` over `extensionId` and
+ * the extension's Ed25519 key from the fragment (`keySignedAt`, `keySignature`). Refusals: 404
+ * `not_found` (an unknown request, or a workspace the account doesn't own), 410 `expired`, 409
+ * `already_exists` (decided already), 400 `invalid_request` (a CLI's request), 409 `inbox_not_set`
+ * (no `inbox_key` yet) and 400 `invalid_signature`.
+ */
+export const ApproveExtensionConnectRequest = z.strictObject({
+  extensionId: ExtensionId,
+  tokenSecretSha256: Sha256,
+  workspaceId: WorkspaceId,
+  encName: EncName,
+  signPublicKey: PublicKey,
+  keySignedAt: SignedTimestamp,
+  keySignature: Signature,
+});
+export type ApproveExtensionConnectRequest = z.infer<typeof ApproveExtensionConnectRequest>;
+
+export const ApproveExtensionConnectResponse = z.object({ extension: ExtensionInfo });
+export type ApproveExtensionConnectResponse = z.infer<typeof ApproveExtensionConnectResponse>;
+
 export const PollConnectRequest = z.strictObject({ pollSecret: PollSecret });
 export type PollConnectRequest = z.infer<typeof PollConnectRequest>;
 
@@ -164,7 +213,8 @@ export const connectRoutes = {
     method: "POST",
     path: "/connect-requests",
     auth: "none",
-    summary: "The CLI registers a connect request (its public key stays in the URL fragment)",
+    summary:
+      "The CLI or an extension registers a connect request (its keys stay in the URL fragment)",
     body: StartConnectRequest,
     response: StartConnectResponse,
     status: 201,
@@ -183,6 +233,14 @@ export const connectRoutes = {
     summary: "Allow: register the scoped token and store the signed key sealed for the CLI",
     body: ApproveConnectRequest,
     response: ApproveConnectResponse,
+  }),
+  approveExtensionConnect: defineRoute({
+    method: "POST",
+    path: "/connect-requests/:requestId/extension-approval",
+    auth: "session",
+    summary: "Allow an extension: register its token and the owner-signed key of the web clipper",
+    body: ApproveExtensionConnectRequest,
+    response: ApproveExtensionConnectResponse,
   }),
   relayConnect: defineRoute({
     method: "POST",

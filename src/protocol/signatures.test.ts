@@ -13,6 +13,8 @@ import {
   SignedAgentKey,
   SignedAgentPolicy,
   SignedEnvelope,
+  SignedExtensionKey,
+  SignedInboxKey,
   SignedEvent,
   SigningHeaders,
 } from "./index.js";
@@ -110,6 +112,15 @@ const valid = [
     revision: 0,
     policySha256: hash,
   },
+  {
+    type: "inbox_key",
+    ...base,
+    revision: 1,
+    generation: 2,
+    publicKey: b64(32),
+    folderId: id("fld"),
+  },
+  { type: "extension_key", ...base, extensionId: id("ext"), signPublicKey: b64(32) },
 ];
 
 describe("signed envelopes", () => {
@@ -209,6 +220,51 @@ describe("signed envelopes", () => {
     { type: "agent_key", ...base, signPublicKey: b64(32), policyRevision: 0 },
     { type: "agent_key", ...base, tokenId: id("tok"), signPublicKey: b64(32) },
     { type: "agent_key", ...base, tokenId: id("tok"), signPublicKey: b64(32), policyRevision: -1 },
+    // the web clipper's envelopes, with the exact field rules
+    {
+      type: "inbox_key",
+      ...base,
+      revision: 1,
+      generation: 2,
+      publicKey: b64(31),
+      folderId: id("fld"),
+    },
+    { type: "inbox_key", ...base, revision: 1, generation: 2, publicKey: b64(32) },
+    {
+      type: "inbox_key",
+      ...base,
+      revision: 1,
+      generation: 0,
+      publicKey: b64(32),
+      folderId: id("fld"),
+    },
+    {
+      type: "inbox_key",
+      ...base,
+      revision: 1,
+      generation: 2,
+      publicKey: b64(32),
+      folderId: id("ws"),
+    },
+    {
+      type: "inbox_key",
+      ...base,
+      revision: 1,
+      generation: 2,
+      publicKey: b64(32),
+      folderId: id("fld"),
+      noteId: id("note"),
+    },
+    { type: "extension_key", ...base, extensionId: id("tok"), signPublicKey: b64(32) },
+    { type: "extension_key", ...base, extensionId: id("ext"), signPublicKey: b64(31) },
+    { type: "extension_key", ...base, extensionId: id("ext") },
+    {
+      type: "extension_key",
+      ...base,
+      extensionId: id("ext"),
+      signPublicKey: b64(32),
+      policyRevision: 0,
+    },
     ...(["tokenId", "revision", "policySha256"] as const).map((field) =>
       Object.fromEntries(
         Object.entries({
@@ -292,14 +348,20 @@ describe("signed envelopes", () => {
 
 describe("envelope protocol versions", () => {
   it("marks the agent envelopes as protocol 2, the rest as 1", () => {
+    // the web clipper's two came to protocol 2 without a bump: only its new routes serve them
     expect([...PROTOCOL_2_ENVELOPE_TYPES].sort()).toEqual([
       "agent_edited",
       "agent_key",
       "agent_policy",
+      "extension_key",
+      "inbox_key",
     ]);
+    const clipper = ["inbox_key", "extension_key"];
     for (const option of SignedEnvelope.options) {
       const type = option.shape.type.value;
-      expect(envelopeProtocolVersion(type), type).toBe(type.startsWith("agent_") ? 2 : 1);
+      expect(envelopeProtocolVersion(type), type).toBe(
+        type.startsWith("agent_") || clipper.includes(type) ? 2 : 1,
+      );
       expect(envelopeProtocolVersion(type)).toBeLessThanOrEqual(PROTOCOL_VERSION);
     }
   });
@@ -312,6 +374,22 @@ describe("envelope protocol versions", () => {
     );
     expect(SignedAgentKey.safeParse({ envelope: key, signature: b64(64) }).success).toBe(true);
     expect(SignedAgentKey.safeParse({ envelope: policy, signature: b64(64) }).success).toBe(false);
+  });
+
+  it("serves an inbox key only at revision 1 or more, and an extension key on its own", () => {
+    const inbox = valid.find((envelope) => envelope.type === "inbox_key");
+    const extension = valid.find((envelope) => envelope.type === "extension_key");
+    expect(SignedInboxKey.safeParse({ envelope: inbox, signature: b64(64) }).success).toBe(true);
+    // the envelope rules allow revision 0; the API never stores or serves one
+    const zero = { ...inbox, revision: 0 };
+    expect(SignedEnvelope.safeParse(zero).success).toBe(true);
+    expect(SignedInboxKey.safeParse({ envelope: zero, signature: b64(64) }).success).toBe(false);
+    expect(SignedExtensionKey.safeParse({ envelope: extension, signature: b64(64) }).success).toBe(
+      true,
+    );
+    expect(SignedExtensionKey.safeParse({ envelope: inbox, signature: b64(64) }).success).toBe(
+      false,
+    );
   });
 });
 

@@ -16,14 +16,20 @@ export default defineConfig({
         },
       },
       {
-        // knowtarium/core, knowtarium/crypto and knowtarium/client run in browsers too: their tests
-        // run again under a DOM environment
+        // knowtarium/core, knowtarium/crypto, knowtarium/client and knowtarium/clip (the web
+        // clipper extension's entry) run in browsers too: their tests run again under a DOM
+        // environment
         extends: true,
         test: {
           name: "dom",
           environment: "happy-dom",
           setupFiles: ["src/cli/testing/isolate-env.ts"],
-          include: ["src/core/**/*.test.ts", "src/crypto/**/*.test.ts", "src/client/**/*.test.ts"],
+          include: [
+            "src/core/**/*.test.ts",
+            "src/crypto/**/*.test.ts",
+            "src/client/**/*.test.ts",
+            "src/clip/**/*.test.ts",
+          ],
         },
       },
     ],

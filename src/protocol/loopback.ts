@@ -82,6 +82,32 @@ export function parseConnectFragment(fragment: string): ConnectFragment | null {
 }
 
 /**
+ * The fragment of the extension's pairing page (`/connect/extension`, the web clipper):
+ * `signPublicKey=...&secret=...`, the extension's Ed25519 public key (which the owner vouches for
+ * in `extension_key`, and which the confirmation code is computed over) and the one-time secret
+ * the pairing payload is sealed with.
+ */
+export const ExtensionConnectFragment = z.strictObject({
+  signPublicKey: PublicKey,
+  secret: LoopbackSecret,
+});
+export type ExtensionConnectFragment = z.infer<typeof ExtensionConnectFragment>;
+
+/** Reads the extension's fragment (with or without the `#`); null when malformed or incomplete. */
+export function parseExtensionConnectFragment(fragment: string): ExtensionConnectFragment | null {
+  const entries: Record<string, string> = {};
+  for (const part of fragment.replace(/^#/, "").split("&")) {
+    const at = part.indexOf("=");
+    if (at <= 0) return null;
+    const key = part.slice(0, at);
+    if (Object.hasOwn(entries, key)) return null;
+    entries[key] = part.slice(at + 1);
+  }
+  const result = ExtensionConnectFragment.safeParse(entries);
+  return result.success ? result.data : null;
+}
+
+/**
  * What the CLI needs to act for the agent: sent to the loopback endpoint, or sealed and relayed
  * in the fallback. `tokenSecret` is made in the browser; the server only holds its SHA-256.
  */

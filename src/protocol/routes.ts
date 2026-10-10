@@ -4,6 +4,7 @@ import { attachmentRoutes } from "./attachments.js";
 import { authRoutes } from "./auth.js";
 import { changeRoutes } from "./changes.js";
 import { checkRoutes } from "./checks.js";
+import { clipRoutes } from "./clips.js";
 import { commentRoutes } from "./comments.js";
 import { connectRoutes } from "./connect.js";
 import { eventRoutes } from "./events.js";
@@ -43,6 +44,7 @@ export const routes = {
   ...checkRoutes,
   ...tokenRoutes,
   ...connectRoutes,
+  ...clipRoutes,
   ...liveRoutes,
 } as const;
 

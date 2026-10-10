@@ -12,6 +12,7 @@
         "@modelcontextprotocol/sdk": "^1.31.0",
         "@napi-rs/keyring": "^2.1.0",
         "diff": "^9.0.0",
+        "libsodium-wrappers": "0.8.4",
         "libsodium-wrappers-sumo": "^0.8.4",
         "minisearch": "^7.2.0",
         "smol-toml": "^1.9.0",
@@ -936,11 +937,26 @@
       "integrity": "sha512-fQhoXdcvc3V28x7C7BMs4P5+kNlgUURe2jmUT1T//oBRMDrqy1QPelJimwZGo7Hg9VPV3EQV5Bnq4hbFy2vetA==",
       "license": "BSD-2-Clause"
     },
+    "node_modules/libsodium": {
+      "version": "0.8.4",
+      "resolved": "https://registry.npmjs.org/libsodium/-/libsodium-0.8.4.tgz",
+      "integrity": "sha512-lMcYaRi0zcs7tarATsQUYC7rstliIXZuoq0c6zXSgNtSNtdvBgkSegjWhpMJAXzKX3SUSwIp7+zEsob+j3LuRw==",
+      "license": "ISC"
+    },
     "node_modules/libsodium-sumo": {
       "version": "0.8.4",
       "resolved": "https://registry.npmjs.org/libsodium-sumo/-/libsodium-sumo-0.8.4.tgz",
       "integrity": "sha512-TMtHShQfVVsaxDygyapvUC3o7YsPgXa/hRWeIgzyFz6w5k/1hirGptCxp1U7XwW3rCskaTTYKgV10v86UiGgNw==",
       "license": "ISC"
+    },
+    "node_modules/libsodium-wrappers": {
+      "version": "0.8.4",
+      "resolved": "https://registry.npmjs.org/libsodium-wrappers/-/libsodium-wrappers-0.8.4.tgz",
+      "integrity": "sha512-mu8aAWucZjTB5O/BtGXtW4e1agy7uHxNYG7zPthmmD1jU43LCDmSWZLN4JhflbdPXj3yDO4lxM1O9hLDgIOXDw==",
+      "license": "ISC",
+      "dependencies": {
+        "libsodium": "^0.8.0"
+      }
     },
     "node_modules/libsodium-wrappers-sumo": {
       "version": "0.8.4",

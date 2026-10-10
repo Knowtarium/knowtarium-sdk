@@ -35,5 +35,6 @@ export * from "./comments.js";
 export * from "./checks.js";
 export * from "./tokens.js";
 export * from "./connect.js";
+export * from "./clips.js";
 export * from "./loopback.js";
 export * from "./live.js";

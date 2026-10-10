@@ -8,6 +8,7 @@ import {
   CheckId,
   CommentId,
   EventId,
+  ExtensionId,
   FolderId,
   NoteId,
   PendingId,
@@ -87,6 +88,13 @@ import {
  * |                           |                  | agent policy revision header), policySha256    |
  * |                           |                  | (the stored hash of that revision, or          |
  * |                           |                  | `MISSING_AGENT_POLICY_SHA256` at revision 0)   |
+ * | putInboxKey               | `inbox_key`      | revision (= baseRevision + 1), generation (the |
+ * |                           |                  | current key generation), publicKey (the inbox  |
+ * |                           |                  | X25519 public key derived from that            |
+ * |                           |                  | generation), folderId (the inbox folder)       |
+ * | approveExtensionConnect   | `extension_key`  | extensionId, signPublicKey (the extension's    |
+ * |                           |                  | Ed25519 key from the pairing link); signed     |
+ * |                           |                  | with `keySignedAt` and `keySignature`          |
  *
  * The common fields: `type`, `accountId` (the signer, the session's account), `workspaceId`, and
  * `createdAt` (the `signedAt` sent, in milliseconds, within `SIGNATURE_MAX_SKEW_SECONDS` of the
@@ -247,6 +255,38 @@ export const AgentEditedEnvelope = z.strictObject({
 });
 export type AgentEditedEnvelope = z.infer<typeof AgentEditedEnvelope>;
 
+/**
+ * The owner's word on a workspace's inbox key (the web clipper): the X25519 public key derived
+ * from key generation `generation` (`deriveInboxKeyPair` in knowtarium/crypto), and the folder
+ * clips land in. Every new signature is the next `revision` (a new generation, or a new inbox
+ * folder). The extension pins the owner's key at pairing and accepts only a higher revision that
+ * verifies under it; every filer derives the key again and files nothing under one that differs.
+ */
+export const InboxKeyEnvelope = z.strictObject({
+  type: z.literal("inbox_key"),
+  ...base,
+  /** 1 for the first inbox key, then +1 per signature (the envelope rules allow 0; the API not). */
+  revision: Version,
+  generation: KeyGeneration,
+  /** The inbox X25519 public key of that generation (32 bytes, base64url). */
+  publicKey: PublicKey,
+  folderId: FolderId,
+});
+export type InboxKeyEnvelope = z.infer<typeof InboxKeyEnvelope>;
+
+/**
+ * The owner vouching for a paired browser extension's Ed25519 key, which signs its clips. Unlike
+ * `agent_key` it carries no policy floor: the extension never writes notes.
+ */
+export const ExtensionKeyEnvelope = z.strictObject({
+  type: z.literal("extension_key"),
+  ...base,
+  extensionId: ExtensionId,
+  /** The extension's Ed25519 public key (32 bytes, base64url). */
+  signPublicKey: PublicKey,
+});
+export type ExtensionKeyEnvelope = z.infer<typeof ExtensionKeyEnvelope>;
+
 export const SignedEnvelope = z.discriminatedUnion("type", [
   z.strictObject({
     type: z.literal("edited"),
@@ -331,6 +371,8 @@ export const SignedEnvelope = z.discriminatedUnion("type", [
   AgentPolicyEnvelope,
   AgentKeyEnvelope,
   AgentEditedEnvelope,
+  InboxKeyEnvelope,
+  ExtensionKeyEnvelope,
 ]);
 export type SignedEnvelope = z.infer<typeof SignedEnvelope>;
 export type SignedAction = SignedEnvelope["type"];
@@ -340,12 +382,16 @@ export type SignedAction = SignedEnvelope["type"];
  * a signed envelope (`listEvents`' `agent_edited` events), so the server answers it
  * `unsupported_protocol` there instead (an update notice, not a parse error). The `agent_key`
  * records do reach a version 1 caller, inside `listKeys`' `agentKeys`, which its schema doesn't
- * know and strips; `agent_policy` comes only from the protocol 2 policy routes.
+ * know and strips; `agent_policy` comes only from the protocol 2 policy routes, and `inbox_key`
+ * and `extension_key` (the web clipper, added to protocol 2 without a bump) only from the inbox
+ * and extension routes, which older clients never call.
  */
 export const PROTOCOL_2_ENVELOPE_TYPES = [
   "agent_policy",
   "agent_key",
   "agent_edited",
+  "inbox_key",
+  "extension_key",
 ] as const satisfies readonly SignedAction[];
 
 /** The lowest protocol version that knows an envelope type: 2 for the agent types, else 1. */
@@ -367,6 +413,23 @@ export type SignedAgentPolicy = z.infer<typeof SignedAgentPolicy>;
 /** A signed `agent_key`, as the server stores it and returns it in `listKeys` and at connect. */
 export const SignedAgentKey = z.object({ envelope: AgentKeyEnvelope, signature: Signature });
 export type SignedAgentKey = z.infer<typeof SignedAgentKey>;
+
+/**
+ * A signed `inbox_key`, as the server stores it and serves the latest. The API only ever stores
+ * revision 1 or more, so a stored one with revision 0 is refused here.
+ */
+export const SignedInboxKey = z.object({
+  envelope: InboxKeyEnvelope.extend({ revision: z.int().positive() }),
+  signature: Signature,
+});
+export type SignedInboxKey = z.infer<typeof SignedInboxKey>;
+
+/** A signed `extension_key`, as the server stores it on the extension's row. */
+export const SignedExtensionKey = z.object({
+  envelope: ExtensionKeyEnvelope,
+  signature: Signature,
+});
+export type SignedExtensionKey = z.infer<typeof SignedExtensionKey>;
 
 /** A signed `key_generation`, as the server stores it and returns it with every wrapped copy. */
 export const SignedKeyGeneration = z.object({

@@ -57,6 +57,12 @@ export const ServerMessage = z.discriminatedUnion("type", [
     checkId: CheckId,
     noteId: NoteId,
   }),
+  /**
+   * A clip was queued in the workspace's inbox (the web clipper): `pending` clips wait. Sent to
+   * the sessions and agents whose scope covers the inbox folder; a client that can file claims
+   * them. Older clients drop it, like any message type they don't know.
+   */
+  z.object({ type: z.literal("clip_added"), pending: z.int().nonnegative() }),
   /** A new key generation: fetch the wrapped keys again. */
   z.object({ type: z.literal("keys_rotated"), keyGeneration: KeyGeneration }),
   /** The token or session lost access; the server closes the socket after this. */

@@ -14,6 +14,20 @@ const cryptoLibraryImports = {
   message: "knowtarium/protocol must stay free of crypto code.",
 };
 
+// knowtarium/clip is the web clipper extension's light entry, on the standard libsodium build: it
+// may import its own files and the few crypto files that use no libsodium at all, never the sumo
+// build, zod, yaml or anything that could open a clip, a note or a key copy
+const outsideClipImports = {
+  regex: "^\\.\\./(?!crypto/(encoding|canonical-json|errors|envelope-fields)\\.js$)",
+  message:
+    "knowtarium/clip may import only its own files and crypto's encoding, canonical-json, errors and envelope-fields.",
+};
+const clipLibraryImports = {
+  regex: "^(node:)?crypto$|^libsodium-wrappers-sumo$|^zod$|^yaml$",
+  message:
+    "knowtarium/clip runs on the standard libsodium-wrappers build only, without zod or yaml.",
+};
+
 // the library runs in browsers, Node and Cloudflare Workers (and later React Native): only the CLI
 // may use Node built-ins, and nothing in the library may reach for Node or DOM globals
 const nodeImports = {
@@ -65,6 +79,16 @@ export default defineConfig(
       "no-restricted-imports": [
         "error",
         { patterns: [outsideProtocolImports, cryptoLibraryImports, nodeImports] },
+      ],
+    },
+  },
+  {
+    files: ["src/clip/**"],
+    ignores: ["src/clip/**/*.test.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        { patterns: [outsideClipImports, clipLibraryImports, nodeImports] },
       ],
     },
   },

@@ -34,6 +34,7 @@ import {
   ENVELOPE_SIGNING_PREFIX,
   envelopeSigningText,
   SignedEnvelope,
+  SignedInboxKey,
 } from "./protocol/index.js";
 import type { z } from "zod";
 
@@ -234,6 +235,18 @@ describe("knowtarium/protocol against envelope-vectors.json", () => {
 
   it.each(vectors.invalidEnvelopes)("refuses an envelope with $name", ({ fields }) => {
     expect(SignedEnvelope.safeParse(fields).success).toBe(false);
+  });
+
+  // valid envelopes the sync API still refuses by a rule of its own, as the stored record's
+  // schema does (an inbox_key's revision is the last one + 1, so never 0)
+  it.each(vectors.serverRefusedEnvelopes)("accepts $name as an envelope only", (vector) => {
+    expect(SignedEnvelope.safeParse(vector.fields).success).toBe(true);
+    expect(canonicalJson(vector.fields as FlatRecord)).toBe(vector.canonical);
+    const record = { envelope: vector.fields, signature: vector.signature };
+    expect(SignedInboxKey.safeParse(record).success).toBe(false);
+    expect(
+      SignedInboxKey.safeParse({ ...record, envelope: { ...vector.fields, revision: 1 } }).success,
+    ).toBe(true);
   });
 });
 

@@ -3,9 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   AgentToken,
   ApproveConnectRequest,
+  ApproveExtensionConnectRequest,
   ConnectRequestInfo,
   PollConnectResponse,
   RelayConnectRequest,
+  routes,
   StartConnectRequest,
 } from "./index.js";
 import { b64, ct, id, now, signing } from "./test-fixtures.js";
@@ -40,7 +42,54 @@ describe("connect flow", () => {
       createdAt: now,
       expiresAt: now,
     };
-    expect(ConnectRequestInfo.parse({ ...info, publicKey: b64(32) })).toEqual(info);
+    // a server from before the web clipper sends no `client`: the request is the CLI's
+    expect(ConnectRequestInfo.parse({ ...info, publicKey: b64(32) })).toEqual({
+      ...info,
+      client: "cli",
+    });
+    const extension = { ...info, client: "extension" };
+    expect(ConnectRequestInfo.parse(extension)).toEqual(extension);
+    expect(ConnectRequestInfo.safeParse({ ...info, client: "browser" }).success).toBe(false);
+  });
+
+  it("starts a request for the CLI or for an extension, never a mix", () => {
+    expect(StartConnectRequest.safeParse({ cliVersion: "0.1.4" }).success).toBe(true);
+    expect(
+      StartConnectRequest.safeParse({ client: "extension", extensionVersion: "0.1.0" }).success,
+    ).toBe(true);
+    for (const bad of [
+      { client: "extension", cliVersion: "0.1.0" },
+      { client: "cli", extensionVersion: "0.1.0" },
+      { client: "extension", extensionVersion: "latest" },
+      { cliVersion: "0.1.4", extensionVersion: "0.1.0" },
+      {},
+    ]) {
+      expect(StartConnectRequest.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  it("approves an extension with its id, its token's hash and the owner's extension_key", () => {
+    const body = {
+      extensionId: id("ext"),
+      tokenSecretSha256: b64(32),
+      workspaceId: id("ws"),
+      encName: ct,
+      signPublicKey: b64(32),
+      keySignedAt: now,
+      keySignature: b64(64),
+    };
+    expect(ApproveExtensionConnectRequest.parse(body)).toEqual(body);
+    expect(
+      ApproveExtensionConnectRequest.safeParse({ ...body, extensionId: id("tok") }).success,
+    ).toBe(false);
+    // no workspace key copy and no scope: an extension never holds either
+    for (const extra of [{ encWorkspaceKey: b64(80) }, { folderIds: [] }, { access: "read" }]) {
+      expect(ApproveExtensionConnectRequest.safeParse({ ...body, ...extra }).success).toBe(false);
+    }
+    expect(routes.approveExtensionConnect.path).toBe(
+      "/connect-requests/:requestId/extension-approval",
+    );
+    expect(routes.approveExtensionConnect.auth).toBe("session");
   });
 
   it("approves with the token id, the scope, the key from the fragment and a signed wrapped key", () => {

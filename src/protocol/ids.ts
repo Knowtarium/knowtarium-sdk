@@ -3,9 +3,10 @@ import { z } from "zod";
 /**
  * IDs are `<prefix>_<body>`: the body is 26 characters of lowercase Crockford base32 (the ULID
  * alphabet) holding 128 random bits, so the first character is 0 to 7. Clients create workspace,
- * folder, note, event, comment, check, attachment and agent token IDs themselves; the server
- * creates the rest (accounts and sessions through Better Auth's `generateId`, pending changes,
- * connect requests, and the events it records from signed writes).
+ * folder, note, event, comment, check, attachment, agent token and extension IDs themselves (an
+ * extension makes its clips' IDs); the server creates the rest (accounts and sessions through
+ * Better Auth's `generateId`, pending changes, connect requests, and the events it records from
+ * signed writes).
  *
  * Retries are idempotent: a create sent again with the same ID and the same body returns the
  * original result; the same ID with a different body answers `already_exists`.
@@ -23,6 +24,10 @@ export const ID_PREFIXES = {
   token: "tok",
   connectRequest: "cr",
   attachment: "att",
+  /** A paired browser extension (the web clipper), which can only post clips. */
+  extension: "ext",
+  /** A sealed clip waiting in a workspace's inbox queue. */
+  clip: "clip",
 } as const;
 
 export type IdPrefix = (typeof ID_PREFIXES)[keyof typeof ID_PREFIXES];
@@ -86,6 +91,21 @@ export const ConnectRequestId = idSchema(ID_PREFIXES.connectRequest);
 export type ConnectRequestId = z.infer<typeof ConnectRequestId>;
 export const AttachmentId = idSchema(ID_PREFIXES.attachment);
 export type AttachmentId = z.infer<typeof AttachmentId>;
+export const ExtensionId = idSchema(ID_PREFIXES.extension);
+export type ExtensionId = z.infer<typeof ExtensionId>;
+export const ClipId = idSchema(ID_PREFIXES.clip);
+export type ClipId = z.infer<typeof ClipId>;
+
+/**
+ * The note a clip becomes: the clip's ID with the note prefix (`clip_<body>` gives
+ * `note_<body>`). Every filer creates exactly this note at base version 0, so a clip filed twice
+ * (two clients, or a retry after a lost ack) makes one note, and the sync API finds a clip posted
+ * again through the same row.
+ */
+export function clipNoteId(clipId: ClipId): NoteId {
+  if (!ClipId.safeParse(clipId).success) throw new RangeError("clipNoteId needs a clip_ id");
+  return `${ID_PREFIXES.note}_${clipId.slice(ID_PREFIXES.clip.length + 1)}`;
+}
 
 /** Who did something: a person (their account) or an agent (its token). */
 export const ActorId = z.union([AccountId, TokenId]);

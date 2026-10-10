@@ -4,7 +4,7 @@ import { decryptAttachment } from "./attachment.js";
 import { type BlobContext, encodeBlobContext } from "./blob-context.js";
 import { canonicalJson, type JsonObject, type JsonValue } from "./canonical-json.js";
 import { openConnectPayload, sealConnectPayloadWithNonce } from "./connect.js";
-import { fromHex, toHex, utf8Encode } from "./encoding.js";
+import { fromHex, toBase64Url, toHex, utf8Encode } from "./encoding.js";
 import { decryptBytes, encryptBytesWithNonce } from "./envelope.js";
 import envelopeVectors from "./envelope-vectors.json" with { type: "json" };
 import { isCryptoError } from "./errors.js";
@@ -31,8 +31,14 @@ import {
   verifyKeyGeneration,
   verifyWrappedKey,
 } from "./signed-wrap.js";
-import { ready } from "./sodium.js";
+import { ready, sodium } from "./sodium.js";
 import vectors from "./vectors.json" with { type: "json" };
+import {
+  type ExtensionPairing,
+  openExtensionPairingWith,
+  sealExtensionPairingWith,
+} from "../clip/pairing.js";
+import { deriveInboxKeyPair, extensionConfirmationCode, sealExtensionPairing } from "./inbox.js";
 import {
   type AccountKeysWrapPurpose,
   unwrapAccountKeys,
@@ -272,5 +278,86 @@ describe("envelope-vectors.json (shared with knowtarium/protocol)", () => {
     expect(codeOf(() => canonicalizeEnvelope(fields as SignedEnvelopeFields))).toBe(
       "invalid_input",
     );
+  });
+});
+
+describe("web clipper vectors", () => {
+  it.each(vectors.inboxKeyPairs)("derives the inbox key pair of $name", (vector) => {
+    const pair = deriveInboxKeyPair({
+      generation: vector.generation,
+      key: fromHex(vector.workspaceKey),
+    });
+    expect(pair.generation).toBe(vector.generation);
+    expect(hex(pair.publicKey)).toBe(vector.publicKey);
+    expect(hex(pair.privateKey)).toBe(vector.privateKey);
+    // never the workspace key's own use: a separate crypto_kdf context
+    expect(vector.privateKey).not.toBe(vector.workspaceKey);
+  });
+
+  it("derives a different inbox key for every generation", () => {
+    const [first, second] = vectors.inboxKeyPairs;
+    expect(first?.publicKey).not.toBe(second?.publicKey);
+    const rotated = deriveInboxKeyPair({ generation: 4, key: fromHex(first?.workspaceKey ?? "") });
+    expect(hex(rotated.publicKey)).toBe(first?.publicKey);
+  });
+
+  it("signs the inbox_key vector over the derived key", () => {
+    const inbox = envelopeVectors.signedEnvelopes.find((vector) => vector.name === "inbox_key");
+    const [pair] = vectors.inboxKeyPairs;
+    expect(inbox?.fields.publicKey).toBe(toBase64Url(fromHex(pair?.publicKey ?? "")));
+  });
+
+  it.each(vectors.extensionConfirmationCodes)("shows $code for $name", (vector) => {
+    expect(extensionConfirmationCode(fromHex(vector.signPublicKey), vector.requestId)).toBe(
+      vector.code,
+    );
+  });
+
+  it.each(vectors.extensionPairings)("seals the pairing: $name", (vector) => {
+    const lib = sodium();
+    const secret = fromHex(vector.secret);
+    expect(hex(lib.crypto_kdf_derive_from_key(32, 1, "ktextpar", secret))).toBe(vector.payloadKey);
+    const owner = signingKeyPairFromSeed(
+      fromHex(envelopeVectors.signedEnvelopes[0]?.signingSeed ?? ""),
+    );
+    const inbox = envelopeVectors.signedEnvelopes.find((v) => v.name === "inbox_key");
+    const extension = envelopeVectors.signedEnvelopes.find((v) => v.name === "extension_key");
+    const pairing = {
+      token: vector.expected.token,
+      extensionId: vector.expected.extensionId,
+      accountId: vector.expected.accountId,
+      workspaceId: vector.expected.workspaceId,
+      workspaceName: vector.expected.workspaceName,
+      ownerSigningPublicKey: owner.publicKey,
+      extensionKey: { envelope: extension?.fields, signature: extension?.signature },
+      inboxKey: { envelope: inbox?.fields, signature: inbox?.signature },
+      categories: vector.expected.categories,
+    } as unknown as ExtensionPairing;
+    const sealed = sealExtensionPairingWith(
+      lib,
+      pairing,
+      { secret, signPublicKey: fromHex(vector.signPublicKey) },
+      fromHex(vector.nonce),
+    );
+    expect(hex(sealed)).toBe(vector.sealed);
+    // the random-nonce form opens to the same payload
+    const fresh = sealExtensionPairing(pairing, {
+      secret,
+      signPublicKey: fromHex(vector.signPublicKey),
+    });
+    expect(
+      openExtensionPairingWith(lib, fresh, { secret, signPublicKey: fromHex(vector.signPublicKey) })
+        .token,
+    ).toBe(vector.expected.token);
+  });
+});
+
+describe("envelopes the sync API refuses by its own rules", () => {
+  it.each(envelopeVectors.serverRefusedEnvelopes)("signs $name like any envelope", (vector) => {
+    const signer = signingKeyPairFromSeed(fromHex(vector.signingSeed));
+    const fields = vector.fields as SignedEnvelopeFields;
+    expect(canonicalizeEnvelope(fields)).toBe(vector.canonical);
+    expect(hex(signedEnvelopeMessage(fields))).toBe(vector.message);
+    expect(signEnvelope(fields, signer).signature).toBe(vector.signature);
   });
 });

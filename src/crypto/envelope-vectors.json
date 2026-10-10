@@ -1,5 +1,5 @@
 {
-  "description": "Canonical JSON and signed envelope vectors, shared by knowtarium/crypto (signs) and knowtarium/protocol (verifies on the server). The signed message is the UTF-8 bytes of \"knowtarium-envelope-v1\\n\" followed by the canonical JSON of the fields; signatures are Ed25519, base64url; keys and messages are lowercase hex. Every signedEnvelopes entry uses ids, keys and times knowtarium/protocol accepts; every invalidEnvelopes entry must be refused by both. types lists, per envelope type, the fields it requires besides baseFields, the optional ones (signed when present) and the optional groups that come all or none. nonCanonicalJsonText holds values with no canonical form as JSON text, to be parsed first. recipientsHashes pins recipientsHash: SHA-256 of the UTF-8 recipientsHashTag followed by the X25519 public keys, deduplicated, sorted by their bytes, each prefixed by its length as a uint32 big-endian, as lowercase hex. keyCommitments pins workspaceKeyCommitment: SHA-256 of the UTF-8 keyCommitmentTag, the generation as a uint32 big-endian, the 32-byte key and the UTF-8 workspace id, as lowercase hex. agentPolicyHashes pins agentPolicySha256: each folder override's sha256 is SHA-256 of the UTF-8 agentPolicyFolderTag followed by the canonical JSON of {folderId, mode}; text is agentPolicyTag followed by the canonical JSON of {default, folders: the overrides' sha256 values, sorted}; policySha256 is SHA-256 of text, as lowercase hex. The agent_edited vector is signed by the agent's own key (its own signingSeed), the key the agent_key vector vouches for, and names the agent_policy vector's revision and policySha256.",
+  "description": "Canonical JSON and signed envelope vectors, shared by knowtarium/crypto (signs) and knowtarium/protocol (verifies on the server). The signed message is the UTF-8 bytes of \"knowtarium-envelope-v1\\n\" followed by the canonical JSON of the fields; signatures are Ed25519, base64url; keys and messages are lowercase hex. Every signedEnvelopes entry uses ids, keys and times knowtarium/protocol accepts; every invalidEnvelopes entry must be refused by both. types lists, per envelope type, the fields it requires besides baseFields, the optional ones (signed when present) and the optional groups that come all or none. nonCanonicalJsonText holds values with no canonical form as JSON text, to be parsed first. recipientsHashes pins recipientsHash: SHA-256 of the UTF-8 recipientsHashTag followed by the X25519 public keys, deduplicated, sorted by their bytes, each prefixed by its length as a uint32 big-endian, as lowercase hex. keyCommitments pins workspaceKeyCommitment: SHA-256 of the UTF-8 keyCommitmentTag, the generation as a uint32 big-endian, the 32-byte key and the UTF-8 workspace id, as lowercase hex. agentPolicyHashes pins agentPolicySha256: each folder override's sha256 is SHA-256 of the UTF-8 agentPolicyFolderTag followed by the canonical JSON of {folderId, mode}; text is agentPolicyTag followed by the canonical JSON of {default, folders: the overrides' sha256 values, sorted}; policySha256 is SHA-256 of text, as lowercase hex. The agent_edited vector is signed by the agent's own key (its own signingSeed), the key the agent_key vector vouches for, and names the agent_policy vector's revision and policySha256. The inbox_key vector's publicKey is the inbox key vectors.json derives from the keyCommitments vector's generation 3 key, and the extension_key vector vouches for the key that signs vectors.json's clips. serverRefusedEnvelopes are valid, signed envelopes that knowtarium/crypto and knowtarium/protocol's SignedEnvelope accept and the sync API refuses by a rule of its own (rule), as protocol's stored record schema does.",
   "format": 1,
   "messagePrefix": "knowtarium-envelope-v1\n",
   "baseFields": ["type", "accountId", "workspaceId", "createdAt"],
@@ -84,6 +84,16 @@
         "revision",
         "policySha256"
       ],
+      "optional": [],
+      "together": []
+    },
+    "inbox_key": {
+      "required": ["revision", "generation", "publicKey", "folderId"],
+      "optional": [],
+      "together": []
+    },
+    "extension_key": {
+      "required": ["extensionId", "signPublicKey"],
       "optional": [],
       "together": []
     }
@@ -570,6 +580,40 @@
       "canonical": "{\"accountId\":\"acc_1560xmcmawcxs7v24kktmv9fya\",\"ciphertextSha256\":\"36dccae90a4c6ce5e2bf4c2e0cd9ae5ad13c3363ac8a57ea12d75708046e6446\",\"createdAt\":\"2026-10-05T09:02:00.000Z\",\"folderId\":\"fld_4mkynbbg6btvgysxr21mc26bhs\",\"noteId\":\"note_3ffa2s16x6p6ycfmpxx3szw28m\",\"policySha256\":\"78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8\",\"revision\":3,\"tokenId\":\"tok_4gj699754njtbsh6ctkee9v7mz\",\"type\":\"agent_edited\",\"version\":15,\"workspaceId\":\"ws_2aang6pxm1hjbt5bdrrf7dks7f\"}",
       "message": "6b6e6f7774617269756d2d656e76656c6f70652d76310a7b226163636f756e744964223a226163635f31353630786d636d6177637873377632346b6b746d7639667961222c2263697068657274657874536861323536223a2233366463636165393061346336636535653262663463326530636439616535616431336333333633616338613537656131326437353730383034366536343436222c22637265617465644174223a22323032362d31302d30355430393a30323a30302e3030305a222c22666f6c6465724964223a22666c645f346d6b796e62626736627476677973787232316d633236626873222c226e6f74654964223a226e6f74655f3366666132733136783670367963666d70787833737a7732386d222c22706f6c696379536861323536223a2237386535353665323232653430343566303630306435393161326339663632383835306231313936653534666633313631393730376562336339373061346538222c227265766973696f6e223a332c22746f6b656e4964223a22746f6b5f34676a3639393735346e6a746273683663746b65653976376d7a222c2274797065223a226167656e745f656469746564222c2276657273696f6e223a31352c22776f726b73706163654964223a2277735f3261616e673670786d31686a627435626472726637646b733766227d",
       "signature": "X84sfa16Otcpf5dJNP7G1_UR08HTZd_DArMFhPSR1BoNXUksmgOY0JhjgqJZ6VooT7SR7iUj7OBo2WdBn8P9Cg"
+    },
+    {
+      "name": "inbox_key",
+      "fields": {
+        "type": "inbox_key",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-10T09:00:00.000Z",
+        "revision": 1,
+        "generation": 3,
+        "publicKey": "kYtqeWr8pFHbg4y4eDIaFMyM2zaFuP4QC6rjQJZqAAs",
+        "folderId": "fld_4mkynbbg6btvgysxr21mc26bhs"
+      },
+      "signingSeed": "505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f",
+      "publicKey": "3f7708d5f5cc2bc633b59d2b3a2ed92e7479220c6f08ade208bebcd8580ab93b",
+      "canonical": "{\"accountId\":\"acc_1560xmcmawcxs7v24kktmv9fya\",\"createdAt\":\"2026-10-10T09:00:00.000Z\",\"folderId\":\"fld_4mkynbbg6btvgysxr21mc26bhs\",\"generation\":3,\"publicKey\":\"kYtqeWr8pFHbg4y4eDIaFMyM2zaFuP4QC6rjQJZqAAs\",\"revision\":1,\"type\":\"inbox_key\",\"workspaceId\":\"ws_2aang6pxm1hjbt5bdrrf7dks7f\"}",
+      "message": "6b6e6f7774617269756d2d656e76656c6f70652d76310a7b226163636f756e744964223a226163635f31353630786d636d6177637873377632346b6b746d7639667961222c22637265617465644174223a22323032362d31302d31305430393a30303a30302e3030305a222c22666f6c6465724964223a22666c645f346d6b796e62626736627476677973787232316d633236626873222c2267656e65726174696f6e223a332c227075626c69634b6579223a226b59747165577238704648626734793465444961464d794d327a6146755034514336726a514a5a71414173222c227265766973696f6e223a312c2274797065223a22696e626f785f6b6579222c22776f726b73706163654964223a2277735f3261616e673670786d31686a627435626472726637646b733766227d",
+      "signature": "9EYK4EgzzTtrW6SrOMtnFpiYLXv6tP2Pj7_yyvC_851F97hszDJOL8x1DFwiGlZkWLsVwZLCT5n2RBGa6NgSDw"
+    },
+    {
+      "name": "extension_key",
+      "fields": {
+        "type": "extension_key",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-10T09:00:01.000Z",
+        "extensionId": "ext_0h248h248h248h248h248h248h",
+        "signPublicKey": "F0VTtFbd38aQjsqxwQH-arIeK6oGF3lbfUOmNIKZP9U"
+      },
+      "signingSeed": "505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f",
+      "publicKey": "3f7708d5f5cc2bc633b59d2b3a2ed92e7479220c6f08ade208bebcd8580ab93b",
+      "canonical": "{\"accountId\":\"acc_1560xmcmawcxs7v24kktmv9fya\",\"createdAt\":\"2026-10-10T09:00:01.000Z\",\"extensionId\":\"ext_0h248h248h248h248h248h248h\",\"signPublicKey\":\"F0VTtFbd38aQjsqxwQH-arIeK6oGF3lbfUOmNIKZP9U\",\"type\":\"extension_key\",\"workspaceId\":\"ws_2aang6pxm1hjbt5bdrrf7dks7f\"}",
+      "message": "6b6e6f7774617269756d2d656e76656c6f70652d76310a7b226163636f756e744964223a226163635f31353630786d636d6177637873377632346b6b746d7639667961222c22637265617465644174223a22323032362d31302d31305430393a30303a30312e3030305a222c22657874656e73696f6e4964223a226578745f3068323438683234386832343868323438683234386832343868222c227369676e5075626c69634b6579223a224630565474466264333861516a7371787751482d617249654b366f4746336c6266554f6d4e494b5a503955222c2274797065223a22657874656e73696f6e5f6b6579222c22776f726b73706163654964223a2277735f3261616e673670786d31686a627435626472726637646b733766227d",
+      "signature": "ujnPCvcoILLFOb9g0XCRGTLeQzSh0vIqlu4T-o1muc8tflxJST99hLjtIl1h5GZSWkAFSN2cjAdnfFWgx3JrDg"
     }
   ],
   "invalidEnvelopes": [
@@ -1608,6 +1652,148 @@
         "policyRevision": 3,
         "version": 1
       }
+    },
+    {
+      "name": "inbox_key without revision",
+      "fields": {
+        "type": "inbox_key",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-10T09:00:00.000Z",
+        "generation": 3,
+        "publicKey": "kYtqeWr8pFHbg4y4eDIaFMyM2zaFuP4QC6rjQJZqAAs",
+        "folderId": "fld_4mkynbbg6btvgysxr21mc26bhs"
+      }
+    },
+    {
+      "name": "inbox_key without generation",
+      "fields": {
+        "type": "inbox_key",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-10T09:00:00.000Z",
+        "revision": 1,
+        "publicKey": "kYtqeWr8pFHbg4y4eDIaFMyM2zaFuP4QC6rjQJZqAAs",
+        "folderId": "fld_4mkynbbg6btvgysxr21mc26bhs"
+      }
+    },
+    {
+      "name": "inbox_key without publicKey",
+      "fields": {
+        "type": "inbox_key",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-10T09:00:00.000Z",
+        "revision": 1,
+        "generation": 3,
+        "folderId": "fld_4mkynbbg6btvgysxr21mc26bhs"
+      }
+    },
+    {
+      "name": "inbox_key without folderId",
+      "fields": {
+        "type": "inbox_key",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-10T09:00:00.000Z",
+        "revision": 1,
+        "generation": 3,
+        "publicKey": "kYtqeWr8pFHbg4y4eDIaFMyM2zaFuP4QC6rjQJZqAAs"
+      }
+    },
+    {
+      "name": "extension_key without extensionId",
+      "fields": {
+        "type": "extension_key",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-10T09:00:01.000Z",
+        "signPublicKey": "F0VTtFbd38aQjsqxwQH-arIeK6oGF3lbfUOmNIKZP9U"
+      }
+    },
+    {
+      "name": "extension_key without signPublicKey",
+      "fields": {
+        "type": "extension_key",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-10T09:00:01.000Z",
+        "extensionId": "ext_0h248h248h248h248h248h248h"
+      }
+    },
+    {
+      "name": "inbox_key with a short publicKey",
+      "fields": {
+        "type": "inbox_key",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-10T09:00:00.000Z",
+        "revision": 1,
+        "generation": 3,
+        "publicKey": "kYtqeWr8pFHbg4y4eDIaFMyM2zaFuP4QC6rjQJZqAA",
+        "folderId": "fld_4mkynbbg6btvgysxr21mc26bhs"
+      }
+    },
+    {
+      "name": "inbox_key with generation 0",
+      "fields": {
+        "type": "inbox_key",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-10T09:00:00.000Z",
+        "revision": 1,
+        "generation": 0,
+        "publicKey": "kYtqeWr8pFHbg4y4eDIaFMyM2zaFuP4QC6rjQJZqAAs",
+        "folderId": "fld_4mkynbbg6btvgysxr21mc26bhs"
+      }
+    },
+    {
+      "name": "inbox_key with a noteId",
+      "fields": {
+        "type": "inbox_key",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-10T09:00:00.000Z",
+        "revision": 1,
+        "generation": 3,
+        "publicKey": "kYtqeWr8pFHbg4y4eDIaFMyM2zaFuP4QC6rjQJZqAAs",
+        "folderId": "fld_4mkynbbg6btvgysxr21mc26bhs",
+        "noteId": "note_3ffa2s16x6p6ycfmpxx3szw28m"
+      }
+    },
+    {
+      "name": "extension_key with a token id as its extensionId",
+      "fields": {
+        "type": "extension_key",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-10T09:00:01.000Z",
+        "extensionId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "signPublicKey": "F0VTtFbd38aQjsqxwQH-arIeK6oGF3lbfUOmNIKZP9U"
+      }
+    },
+    {
+      "name": "extension_key with a short signPublicKey",
+      "fields": {
+        "type": "extension_key",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-10T09:00:01.000Z",
+        "extensionId": "ext_0h248h248h248h248h248h248h",
+        "signPublicKey": "F0VTtFbd38aQjsqxwQH-arIeK6oGF3lbfUOmNIKZPw"
+      }
+    },
+    {
+      "name": "extension_key with a policyRevision",
+      "fields": {
+        "type": "extension_key",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-10T09:00:01.000Z",
+        "extensionId": "ext_0h248h248h248h248h248h248h",
+        "signPublicKey": "F0VTtFbd38aQjsqxwQH-arIeK6oGF3lbfUOmNIKZP9U",
+        "policyRevision": 0
+      }
     }
   ],
   "agentPolicyTag": "knowtarium-agent-policy-v1\n",
@@ -1644,6 +1830,27 @@
       ],
       "text": "knowtarium-agent-policy-v1\n{\"default\":\"direct\",\"folders\":[\"a64d5c8405e947e5d00d3d7a761d20212de90ddf5f6093fd3678c171b87d2918\",\"fac78f9c66cd97f8a24804745018bf95506aa28d865af2e42c0e6b99d9256414\"]}",
       "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8"
+    }
+  ],
+  "serverRefusedEnvelopes": [
+    {
+      "name": "inbox_key at revision 0",
+      "fields": {
+        "type": "inbox_key",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-10T09:00:00.000Z",
+        "revision": 0,
+        "generation": 3,
+        "publicKey": "kYtqeWr8pFHbg4y4eDIaFMyM2zaFuP4QC6rjQJZqAAs",
+        "folderId": "fld_4mkynbbg6btvgysxr21mc26bhs"
+      },
+      "signingSeed": "505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f",
+      "publicKey": "3f7708d5f5cc2bc633b59d2b3a2ed92e7479220c6f08ade208bebcd8580ab93b",
+      "canonical": "{\"accountId\":\"acc_1560xmcmawcxs7v24kktmv9fya\",\"createdAt\":\"2026-10-10T09:00:00.000Z\",\"folderId\":\"fld_4mkynbbg6btvgysxr21mc26bhs\",\"generation\":3,\"publicKey\":\"kYtqeWr8pFHbg4y4eDIaFMyM2zaFuP4QC6rjQJZqAAs\",\"revision\":0,\"type\":\"inbox_key\",\"workspaceId\":\"ws_2aang6pxm1hjbt5bdrrf7dks7f\"}",
+      "message": "6b6e6f7774617269756d2d656e76656c6f70652d76310a7b226163636f756e744964223a226163635f31353630786d636d6177637873377632346b6b746d7639667961222c22637265617465644174223a22323032362d31302d31305430393a30303a30302e3030305a222c22666f6c6465724964223a22666c645f346d6b796e62626736627476677973787232316d633236626873222c2267656e65726174696f6e223a332c227075626c69634b6579223a226b59747165577238704648626734793465444961464d794d327a6146755034514336726a514a5a71414173222c227265766973696f6e223a302c2274797065223a22696e626f785f6b6579222c22776f726b73706163654964223a2277735f3261616e673670786d31686a627435626472726637646b733766227d",
+      "signature": "LYfnfw62TemITEhGe3yoAkIxIX1WKGXZGS79dkh7uc1ttYsnSqq-V3yUyer16m8tKrFEY5Z7hr2v4w5oQYMyCQ",
+      "rule": "the sync API stores and serves inbox_key revision 1 or more (baseRevision + 1)"
     }
   ]
 }

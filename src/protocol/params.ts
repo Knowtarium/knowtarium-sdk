@@ -5,6 +5,7 @@ import {
   CheckId,
   CommentId,
   ConnectRequestId,
+  ExtensionId,
   FolderId,
   NoteId,
   PendingId,
@@ -26,6 +27,7 @@ export const PARAM_SCHEMAS = {
   sessionId: SessionId,
   requestId: ConnectRequestId,
   attachmentId: AttachmentId,
+  extensionId: ExtensionId,
   chunkIndex: z.coerce.number().int().nonnegative(),
 } as const;
 

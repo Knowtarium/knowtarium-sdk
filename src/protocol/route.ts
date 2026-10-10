@@ -6,9 +6,11 @@ export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 /**
  * Who may call a route: `none` (public), `session` (Better Auth's session cookie), `agent` (an
- * agent token as a bearer token) or `any` (either).
+ * agent token as a bearer token), `any` (either), or `extension` (a paired browser extension's
+ * `kte_` token, on the routes under `/extensions/current` only; every other route refuses it
+ * with 403, and those routes refuse sessions and agent tokens).
  */
-export type RouteAuth = "none" | "session" | "agent" | "any";
+export type RouteAuth = "none" | "session" | "agent" | "any" | "extension";
 
 /** A body sent or returned as raw bytes (`application/octet-stream`), not JSON. */
 export const RAW_BYTES = { kind: "raw-bytes", contentType: "application/octet-stream" } as const;
