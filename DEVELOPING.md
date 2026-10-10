@@ -287,7 +287,12 @@ title, note, category, savedAt }`: `http:` and `https:` links only, as `new URL(
   Folders (`folders` may be a loader) and extensions are read only once a claim returns clips;
   `SyncEngine.clipSummary()` (`fetchClipSummary`) tells a caller whether a pass is worth running
   (`pending > leased`). A clip found filed already gets its missing `clipped` record before the
-  ack. A note the engine already knows under `clipNoteId`, deleted
+  ack, only when the note has none, sits in the inbox or a category folder and its version 1 is
+  the clip's note. A clip's note is never named `index.md` or `log.md` (they count as taken). An
+  unclean clip waits at most 7 days, and none from a revoked extension. `discardClips` (and
+  `SyncEngine.discardClips`) acks the waiting clips unopened, all or one extension's, for the
+  owner. The `clipped` record is padded to 1 KiB steps and an extension's name to 64 bytes; a
+  filed clip's note, like any note, shows its length (the note file has no padding). A note the engine already knows under `clipNoteId`, deleted
   ones too, and a 409 on the create (answered without reading the other note) count as filed.
   `fetchInboxKey` remembers the highest `inbox_key` revision on the device
   (`TrustState.acceptInboxKeyRevision`) and refuses a lower one (`rollback`).

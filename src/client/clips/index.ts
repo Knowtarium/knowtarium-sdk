@@ -4,7 +4,13 @@ export {
   prepareExtensionApproval,
   type PreparedExtensionApproval,
 } from "./approval.js";
-export { type ClippedRecord, clippedRecord, verifyClippedRecord } from "./clipped.js";
+export {
+  type ClippedRecord,
+  clippedRecord,
+  isClipNoteText,
+  verifyClippedRecord,
+} from "./clipped.js";
+export { discardClips } from "./discard.js";
 export {
   extensionKeyEnvelope,
   type ExtensionRows,

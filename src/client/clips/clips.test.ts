@@ -45,8 +45,9 @@ import { DEFAULT_FILING_MS } from "../sync/file-clips.js";
 import { SyncEngine } from "../sync/index.js";
 import { flush } from "../testing/http.js";
 import { response } from "../testing/http.js";
-import { decryptExtensionName } from "../vault/index.js";
+import { decryptExtensionName, encryptExtensionName } from "../vault/index.js";
 import { approveExtension } from "./approval.js";
+import { discardClips } from "./discard.js";
 import { fetchExtensions } from "./extensions.js";
 import { newId } from "../platform/ids.js";
 import type { ClipFolder, FileClipsOptions } from "../sync/index.js";
@@ -1056,6 +1057,149 @@ describe("the inbox key's rollback marks and echo", () => {
       (caught: unknown) => caught,
     );
     expect(isVaultError(refused, "untrusted_signature")).toBe(true);
+  });
+});
+
+/** Queues a clip the extension signed without the cleaning (a bidi control in its title). */
+function queueUnclean(world: World, paired: Paired, postedAt?: string): ClipId {
+  const clipId = newId("clip");
+  const lib = sodium();
+  const raw = {
+    v: 1 as const,
+    clipId,
+    workspaceId: world.workspaceId,
+    extensionId: paired.extensionId,
+    url: "https://example.com/",
+    title: "Invoice \u202egnp.exe",
+    note: "",
+    category: "",
+    savedAt: "2026-10-10T09:41:07.512Z",
+  };
+  const plaintext = signClip(lib, raw, paired.keys.privateKey);
+  world.server.queueClip({
+    clipId,
+    extensionId: paired.extensionId,
+    blob: concatBytes(
+      Uint8Array.of(1),
+      uint32BE(1),
+      lib.crypto_box_seal(lib.pad(plaintext, 1024), deriveInboxKeyPair(world.key).publicKey),
+    ),
+    ...(postedAt === undefined ? {} : { postedAt }),
+  });
+  return clipId;
+}
+
+describe("the security sweep", () => {
+  it("never names a clip note a folder's index.md or log.md", async () => {
+    const { world, web, view, inboxKey } = await withInbox();
+    const paired = pair(world);
+    const titles = ["index", "Log", "INDEX"];
+    const ids = titles.map((title, second) =>
+      save(world, paired, inboxKey, { title }, `2026-10-10T09:00:0${String(second)}.000Z`),
+    );
+    const result = await web.engine.fileClips(view.options());
+    const names = new Map(result.filed.map((entry) => [entry.clipId, entry.name]));
+    expect(ids.map((clipId) => names.get(clipId))).toEqual([
+      "index 2.md",
+      "Log 2.md",
+      "INDEX 3.md",
+    ]);
+  });
+
+  it("rejects an unclean clip that waited a week, or whose extension was revoked", async () => {
+    const { world, web, view } = await withInbox();
+    const paired = pair(world);
+    const old = queueUnclean(world, paired, new Date(Date.now() - 8 * 86_400_000).toISOString());
+    const fresh = queueUnclean(world, paired);
+    const revoked = pair(world, new Date(Date.now() + 60_000).toISOString());
+    const fromRevoked = queueUnclean(world, revoked);
+    const result = await web.engine.fileClips(view.options());
+    expect(result.released).toEqual([{ clipId: fresh, reason: "unclean_clip" }]);
+    expect(new Map(result.rejected.map((entry) => [entry.clipId, entry.reason]))).toEqual(
+      new Map([
+        [old, "invalid_clip"],
+        [fromRevoked, "invalid_clip"],
+      ]),
+    );
+    expect([...world.server.clipQueue.keys()]).toEqual([fresh]);
+  });
+
+  it("discards waiting clips without opening them, all or one extension's", async () => {
+    const { world, web, inboxKey } = await withInbox();
+    const a = pair(world);
+    const b = pair(world);
+    for (let i = 0; i < 3; i++) save(world, a, inboxKey);
+    const kept = [save(world, b, inboxKey), save(world, b, inboxKey)];
+    expect(await web.engine.discardClips({ extensionId: a.extensionId })).toEqual({
+      discarded: 3,
+    });
+    expect([...world.server.clipQueue.keys()].sort()).toEqual([...kept].sort());
+    for (const clipId of kept) expect(world.server.clipQueue.get(clipId)?.leaseUntil).toBe(0);
+    expect(await web.engine.discardClips()).toEqual({ discarded: 2 });
+    expect(world.server.clipQueue.size).toBe(0);
+    const error = await discardClips(world.cli().api, { workspaceId: world.workspaceId }).catch(
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(RequestValidationError);
+  });
+
+  it("pads the clipped record to 1 KiB steps", () => {
+    const opened = openClip(fromHex(first.sealed), inboxPair(first.inboxPrivateKey, 3));
+    if (!opened.ok) throw new Error(opened.reason);
+    for (const actor of ["human:acc_x", `agent/${"x".repeat(300)}`]) {
+      const record = clippedRecord(opened.clip, { actor, at: "2026-10-10T10:00:00Z" });
+      expect(utf8Encode(JSON.stringify(record)).length % 1024).toBe(0);
+    }
+  });
+
+  it("pads an extension's name to 64-byte steps", async () => {
+    const { world, web } = await withInbox();
+    const keys = await web.keys.get();
+    const ref = { workspaceId: world.workspaceId, extensionId: newId("ext") };
+    const short = encryptExtensionName(keys.current, ref, "a");
+    const longer = encryptExtensionName(keys.current, ref, "Chrome on macOS, the laptop");
+    expect(fromBase64Url(short).length).toBe(fromBase64Url(longer).length);
+    expect(decryptExtensionName(keys, ref, longer)).toBe("Chrome on macOS, the laptop");
+    expect(
+      decryptExtensionName(keys, ref, encryptExtensionName(keys.current, ref, "x\u0000")),
+    ).toBe("x");
+  });
+
+  it("adds a missing record only to the clip's own note, in the inbox", async () => {
+    const { world, web, view, inboxId, inboxKey } = await withInbox();
+    const paired = pair(world);
+    // a note at the clip's ID that isn't the note the clip makes
+    const clipId = newId("clip");
+    await web.engine.writeNote({
+      noteId: clipNoteId(clipId),
+      folderId: inboxId,
+      baseVersion: 0,
+      name: "Other.md",
+      text: "---\ntype: Note\ntitle: Other\n---\nNot this clip.\n",
+    });
+    requeue(world, clipId, paired, inboxKey);
+    expect((await web.engine.fileClips(view.options())).duplicates).toEqual([clipId]);
+    expect(await clippedEntry(web, clipNoteId(clipId))).toBeUndefined();
+    // the clip's own note, moved out of the inbox before its record was added
+    const moved = save(world, paired, inboxKey);
+    world.server.tamper.refuse = (route) =>
+      route === "addEvent" || route === "ackClips" ? "unavailable" : undefined;
+    await web.engine.fileClips(view.options());
+    delete world.server.tamper.refuse;
+    const outside = await createFolder(world, web, "Elsewhere");
+    await web.engine.pull();
+    const note = await web.engine.readNote(clipNoteId(moved));
+    await web.engine.writeNote({
+      noteId: clipNoteId(moved),
+      folderId: outside,
+      baseVersion: note.version,
+      name: note.name ?? "moved.md",
+      text: note.text ?? "",
+    });
+    const queued = world.server.clipQueue.get(moved);
+    if (queued !== undefined) queued.leaseUntil = 0;
+    await web.engine.fileClips(view.options());
+    expect(await clippedEntry(web, clipNoteId(moved))).toBeUndefined();
   });
 });
 

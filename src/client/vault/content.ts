@@ -15,6 +15,7 @@ import {
   type NoteFile,
   NoteFileError,
 } from "../../core/files/index.js";
+import { utf8Encode } from "../../crypto/encoding.js";
 import { LIMITS } from "../../protocol/index.js";
 import { NoteTooLargeError, VaultError } from "../errors/index.js";
 import {
@@ -117,18 +118,30 @@ export function decryptAgentName(keys: WorkspaceKeys, ref: AgentRef, encName: st
   return decryptText(keys, fromBase64Url(encName), agentNameContext(ref));
 }
 
+/** An extension's name is padded to a multiple of this many bytes before it is encrypted. */
+const NAME_PAD_BYTES = 64;
+
 /** Encrypts the name a person gives a paired extension as its `encName`, bound to its ID. */
 export function encryptExtensionName(key: WorkspaceKey, ref: ExtensionRef, name: string): string {
-  return toBase64Url(encryptText(key, name, extensionNameContext(ref)));
+  // padded with NUL characters to 64-byte steps, so its size doesn't give the name's length away
+  const clean = name.split("\u0000").join("");
+  const bytes = utf8Encode(clean).length;
+  const padded =
+    clean +
+    "\u0000".repeat(Math.ceil(Math.max(bytes, 1) / NAME_PAD_BYTES) * NAME_PAD_BYTES - bytes);
+  return toBase64Url(encryptText(key, padded, extensionNameContext(ref)));
 }
 
-/** Decrypts an extension's `encName`. */
+/** Decrypts an extension's `encName` (its padding dropped). */
 export function decryptExtensionName(
   keys: WorkspaceKeys,
   ref: ExtensionRef,
   encName: string,
 ): string {
-  return decryptText(keys, fromBase64Url(encName), extensionNameContext(ref));
+  const padded = decryptText(keys, fromBase64Url(encName), extensionNameContext(ref));
+  let end = padded.length;
+  while (end > 0 && padded.charCodeAt(end - 1) === 0) end--;
+  return padded.slice(0, end);
 }
 
 /** Encrypts a workspace name as the `encName` field. */

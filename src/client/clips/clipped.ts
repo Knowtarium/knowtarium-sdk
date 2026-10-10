@@ -4,6 +4,8 @@ import { removeField } from "../../core/frontmatter/index.js";
 import type { EventRecord } from "../../core/history/index.js";
 import { parseNote, serializeNote } from "../../core/note/index.js";
 import { fromBase64Url, toBase64Url } from "../../crypto/index.js";
+import { utf8Encode } from "../../crypto/encoding.js";
+import type { ClipPayload } from "../../clip/payload.js";
 import { sodium } from "../../crypto/sodium.js";
 import { type ClipId, clipNoteId } from "../../protocol/index.js";
 import type { OpenedClip } from "./open.js";
@@ -16,8 +18,8 @@ export function clippedRecord(
   clip: OpenedClip,
   details: { readonly actor: string; readonly at: string },
 ): ClippedRecord {
-  return {
-    type: "clipped",
+  const record = {
+    type: "clipped" as const,
     actor: details.actor,
     at: details.at,
     version: 1,
@@ -26,12 +28,32 @@ export function clippedRecord(
     payload: clip.json,
     signature: toBase64Url(clip.signature),
   };
+  // padded with spaces in `pad` (which readers ignore) so its JSON, as encrypted, is a multiple
+  // of 1 KiB: the record's size says no more about the clip than the queue's did
+  const bytes = utf8Encode(JSON.stringify({ ...record, pad: "" })).length;
+  const pad = " ".repeat(Math.ceil(bytes / RECORD_PAD_BYTES) * RECORD_PAD_BYTES - bytes);
+  return { ...record, pad };
 }
 
 /** A note's text without the filer's own stamps (`generated`, `verified`). */
 function withoutStamps(text: string): string {
   return serializeNote(removeField(removeField(parseNote(text), "generated"), "verified"));
 }
+
+/**
+ * Whether a note text is exactly the note a clip makes (`clipNoteText`), the filer's own
+ * `generated` and `verified` stamps aside.
+ */
+export function isClipNoteText(text: string, payload: ClipPayload): boolean {
+  try {
+    return withoutStamps(text) === clipNoteText(payload);
+  } catch {
+    return false;
+  }
+}
+
+/** Bytes the JSON of a `clipped` record is padded to a multiple of. */
+const RECORD_PAD_BYTES = 1024;
 
 /**
  * Whether a note's `clipped` record holds, so a client may show "Saved from <extension>": its

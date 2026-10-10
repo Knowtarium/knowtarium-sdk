@@ -1,5 +1,6 @@
 import { clipNoteText, clipNoteTitle } from "../../core/clips/index.js";
 import { foldName, noteNameFromTitle, numberedNoteName } from "../../core/files/index.js";
+import { RESERVED_FILES } from "../../core/spec.js";
 import {
   deriveInboxKeyPair,
   fromBase64Url,
@@ -19,7 +20,7 @@ import {
   routes,
   type SignedInboxKey,
 } from "../../protocol/index.js";
-import { clippedRecord } from "../clips/clipped.js";
+import { clippedRecord, isClipNoteText } from "../clips/clipped.js";
 import { type ExtensionRows, fetchExtensionRows } from "../clips/extensions.js";
 import { fetchInboxKey } from "../clips/inbox.js";
 import { type ClipRejection, clipSignedBy, type OpenedClip, openClip } from "../clips/open.js";
@@ -32,7 +33,7 @@ import {
   signingFields,
   signRecorded,
 } from "../vault/index.js";
-import { fetchEvents } from "./notes.js";
+import { fetchEvents, readCurrentNote, readNoteVersion } from "./notes.js";
 import { type AgentNoteWrite, writeAsAgent } from "./agent-writes.js";
 import { requireIdentity, type SyncContext, withCurrentKey } from "./context.js";
 import { writeNote } from "./writes.js";
@@ -174,6 +175,9 @@ type Outcome =
   | { readonly kind: "rejected"; readonly reason: ClipRejection }
   | { readonly kind: "released"; readonly reason: ClipWaitReason };
 
+/** How long an unclean clip may wait for a client that cleans it alike before it is rejected. */
+const UNCLEAN_CLIP_MAX_WAIT_MS = 7 * 24 * 60 * 60 * 1000;
+
 /** Clips failing one after another that stop a pass (the API or the network is the problem). */
 const MAX_FAILURES_IN_A_ROW = 3;
 
@@ -224,10 +228,15 @@ function targetFolder(
   return undefined;
 }
 
-/** The note's file name: its title's (or its host's), numbered when taken in the folder. */
+/**
+ * The note's file name: its title's (or its host's), numbered when taken in the folder. A
+ * folder's `index.md` and `log.md` (its conventions and its log, which agents read as such) count
+ * as taken whether they exist or not, so a clip titled "Index" becomes `Index 2.md`.
+ */
 function noteName(pass: Pass, folderId: FolderId, clip: OpenedClip): string {
   const given = pass.given.get(folderId) ?? [];
   const name = numberedNoteName(noteNameFromTitle(clipNoteTitle(clip.payload)), [
+    ...RESERVED_FILES,
     ...pass.options.takenNames(folderId),
     ...given,
   ]);
@@ -368,8 +377,14 @@ async function fileOne(pass: Pass, queued: QueuedClip, keys: WorkspaceKeyring): 
     return { kind: "rejected", reason: "revoked" };
   }
   // signed by its extension, but not what this runtime's cleaning makes of it (a browser with
-  // other Unicode tables, say): it waits rather than being thrown away or filed with that text
-  if (!opened.ok) return { kind: "released", reason: "unclean_clip" };
+  // other Unicode tables, say): it waits rather than being thrown away or filed with that text,
+  // unless its extension was revoked or it waited a week, so such clips can't fill the queue
+  if (!opened.ok) {
+    const waited = (pass.options.now ?? Date.now)() - Date.parse(queued.postedAt);
+    return extension.revokedAt !== null || waited > UNCLEAN_CLIP_MAX_WAIT_MS
+      ? { kind: "rejected", reason: "invalid_clip" }
+      : { kind: "released", reason: "unclean_clip" };
+  }
   const noteId = clipNoteId(queued.clipId);
   // filed before (a lost ack, or a clip posted again): this client knows the note, deleted or not
   if (context.noteFolders.has(noteId)) {
@@ -413,8 +428,10 @@ async function fileOne(pass: Pass, queued: QueuedClip, keys: WorkspaceKeyring): 
 
 /**
  * A clip whose note exists already (a lost ack, a retry, a clip posted again): a duplicate to
- * ack. When the note has no `clipped` record for it (the filer stopped between the note and its
- * record), the record is added first, best effort, so the record behind Saved from stays.
+ * ack. When the filer stopped between the note and its record, the record is added first, best
+ * effort, so the record behind Saved from stays: only when the note has no `clipped` record at
+ * all, sits in the inbox folder or one of its category folders, and its version 1 is exactly the
+ * note this clip makes (`clipNoteText`, the filer's stamps aside). Any other note is left alone.
  */
 async function filedBefore(pass: Pass, noteId: NoteId, clip: OpenedClip): Promise<Outcome> {
   const { context } = pass;
@@ -428,16 +445,26 @@ async function filedBefore(pass: Pass, noteId: NoteId, clip: OpenedClip): Promis
           keys,
           { workspaceId: context.workspaceId, id: event.id },
           event.ciphertext,
-        ) as { type?: unknown; clipId?: unknown } | null;
-        return record?.type === "clipped" && record.clipId === clip.payload.clipId;
+        ) as { type?: unknown } | null;
+        return record?.type === "clipped";
       } catch {
-        return false;
+        // a record this client can't read may be one: never risk a second
+        return true;
       }
     });
-    if (!recorded) {
-      const at = new Date((pass.options.now ?? Date.now)()).toISOString();
-      await recordClipped(pass, noteId, clip, at);
+    if (recorded) return { kind: "duplicate" };
+    const current = await readCurrentNote(context, noteId);
+    const folder = pass.folders.get(current.folderId);
+    const inInbox =
+      current.text !== null &&
+      (current.folderId === pass.inbox.folderId || folder?.parentId === pass.inbox.folderId);
+    if (!inInbox) return { kind: "duplicate" };
+    const first = await readNoteVersion(context, { noteId, version: 1 });
+    if (first.text === null || !isClipNoteText(first.text, clip.payload)) {
+      return { kind: "duplicate" };
     }
+    const at = new Date((pass.options.now ?? Date.now)()).toISOString();
+    await recordClipped(pass, noteId, clip, at);
   } catch {
     // best effort: the note stands, the clip is acked either way
   }

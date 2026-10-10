@@ -5,6 +5,7 @@ import {
   type AgentWriteMode,
   CHANGES_PAGE_MAX,
   type ClipSummaryResponse,
+  type ExtensionId,
   type NoteId,
   type PendingChange,
   type PendingId,
@@ -81,6 +82,7 @@ import type {
   WriteResult,
 } from "./results.js";
 import { Confirmations } from "./confirmations.js";
+import { discardClips } from "../clips/discard.js";
 import { fetchClipSummary } from "../clips/extensions.js";
 import { type EnsuredInboxKey, ensureInboxKey } from "../clips/inbox.js";
 import { fileClips, type FileClipsOptions, type FileClipsResult } from "./file-clips.js";
@@ -475,6 +477,16 @@ export class SyncEngine {
    */
   clipSummary(): Promise<ClipSummaryResponse> {
     return fetchClipSummary(this.context.api, this.context.workspaceId);
+  }
+
+  /**
+   * Discards the waiting clips without opening them (session, the owner), or only one
+   * extension's (see `discardClips`). Returns how many were discarded.
+   */
+  discardClips(
+    options: { readonly extensionId?: ExtensionId } = {},
+  ): Promise<{ readonly discarded: number }> {
+    return discardClips(this.context.api, { workspaceId: this.context.workspaceId, ...options });
   }
 
   /**
