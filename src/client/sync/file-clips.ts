@@ -414,7 +414,7 @@ async function fileOne(pass: Pass, queued: QueuedClip, keys: WorkspaceKeyring): 
 /**
  * A clip whose note exists already (a lost ack, a retry, a clip posted again): a duplicate to
  * ack. When the note has no `clipped` record for it (the filer stopped between the note and its
- * record), the record is added first, best effort, so "Saved from" isn't lost.
+ * record), the record is added first, best effort, so the record behind Saved from stays.
  */
 async function filedBefore(pass: Pass, noteId: NoteId, clip: OpenedClip): Promise<Outcome> {
   const { context } = pass;
