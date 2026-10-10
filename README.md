@@ -33,13 +33,16 @@ To keep the command around, install it globally with `npm install -g knowtarium`
 download
 [knowtarium.mcpb](https://github.com/Knowtarium/knowtarium-sdk/releases/latest/download/knowtarium.mcpb)
 (checksums in each [release](https://github.com/Knowtarium/knowtarium-sdk/releases)), open it,
-then ask Claude to connect Knowtarium. **Claude Code** and **Codex** can also use the Knowtarium
+then ask Claude to connect Knowtarium. From 0.1.3 on, the extension also shows its tools, icon and
+support links in Claude Desktop (the 0.1.2 file has the earlier, shorter manifest). **Claude Code** and **Codex** can also use the Knowtarium
 plugin from [knowtarium-plugins](https://github.com/Knowtarium/knowtarium-plugins):
 
 ```sh
 # Claude Code
 /plugin marketplace add Knowtarium/knowtarium-plugins
 /plugin install knowtarium@knowtarium
+# or, from a shell (Claude Code 2.1.292 or later)
+claude plugin install knowtarium --marketplace Knowtarium/knowtarium-plugins
 # Codex
 codex plugin marketplace add Knowtarium/knowtarium-plugins
 codex plugin add knowtarium@knowtarium
@@ -115,6 +118,7 @@ More on how Knowtarium protects your data:
 - [Knowtarium](https://knowtarium.com)
 - [Privacy policy](https://knowtarium.com/privacy)
 - [Security](https://knowtarium.com/security)
-- [Report a problem](https://knowtarium.com/support)
+- [Report a problem](https://github.com/Knowtarium/knowtarium-sdk/issues) or write to
+  support@knowtarium.com
 - [DEVELOPING.md](DEVELOPING.md): how the package is built, the SDK it also ships
   (`knowtarium/crypto`, `/protocol`, `/core`, `/client`) and how to work on it

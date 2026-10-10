@@ -9,12 +9,13 @@ Registry entry (`server.json`), and the server command agents get
 unless `--dev` is passed, and a `--dev` build is named and titled as a development build and is
 never distributed. The publish workflow refuses a private package and version `0.0.0` too.
 
-## Owner decisions before the first release
+## Owner decisions
 
 These stay as they are until the owner decides; nothing in this repo changes them on its own.
 
-- **`"private": true`**: npm refuses to publish a private package, and so does the publish
-  workflow. Drop it for the first public release.
+- **Public package** (owner, since 0.1.0). `package.json` has no `"private": true` any more; npm,
+  the publish workflow and `pnpm build:extras` all refuse a private package, so putting it back
+  stops every release.
 - **License: MIT** (owner, 2026-10-07). `package.json` says `"license": "MIT"` and `LICENSE` holds
   the text, copyright Magentix Studio UG (haftungsbeschränkt). npm ships `LICENSE` with the package
   on its own.
@@ -29,8 +30,7 @@ These stay as they are until the owner decides; nothing in this repo changes the
 ## Order
 
 1. Set the version in `package.json` and in `server.json` (its `version` and the npm package's
-   `version`; `pnpm build:extras` refuses a `server.json` that doesn't match), and settle the owner
-   decisions above for the first release.
+   `version`; `pnpm build:extras` refuses a `server.json` that doesn't match).
 2. `pnpm shrinkwrap`: regenerates `npm-shrinkwrap.json`, which pins the transitive dependencies
    `npx` installs. `pnpm test:dist` fails while it doesn't match `package.json`.
 3. `pnpm check`, `pnpm build`, `pnpm test:dist`, then `pnpm build:extras --dev` and
@@ -59,10 +59,23 @@ These stay as they are until the owner decides; nothing in this repo changes the
    `latest`, and a prerelease version (`1.2.0-beta.1`) is a prerelease. The workflow also runs on
    every push to main and does nothing until `package.json`'s version is tagged and on npm, or once
    its release has all three files; it never replaces a file a release already has (a release
-   with only some of them stops it with an error: delete those files on GitHub, then run it again
-   from the Actions tab). It uses only the job's `GITHUB_TOKEN`, with `contents: write`. Claude
+   with only some of them stops it with an error: delete those files on GitHub, then run it again).
+   The bundle is built by a job with a read-only token; only the last job, which runs no code from
+   the repository, gets `contents: write` to create the release and upload the files. Claude
    Desktop's extension directory no longer takes `.mcpb` files, so this download is how people
    get the bundle.
+
+   **Running it by hand.** Runs share one concurrency group, so a run that was waiting when
+   another one queued can be dropped (GitHub keeps one pending run per group). If a release lacks
+   its files after a publish, open the repository's **Actions** tab, pick **Release assets**, and
+   **Run workflow** on `main`: it finishes whatever the current version's release lacks. If an
+   upload failed partway, GitHub may leave a **draft** release, or a release with only some files:
+   delete the draft (or those files) on the **Releases** page, then run the workflow again.
+
+   **0.1.2.** The release is built from its tag, so `knowtarium-0.1.2.mcpb` carries the 0.1.2
+   manifest: no `tools` list, `icons`, `support`, `documentation` or `claude_desktop` floor.
+   Those arrive with 0.1.3, the first version built with this `build:extras`.
+
 6. **Plugins.** `pnpm build:extras` (now that `knowtarium@<version>` is on npm, a release build)
    writes the plugins repository to `dist-extras/marketplace/` and validates it
    (`claude plugin validate --strict` on the marketplace and the Claude Code plugin, the Codex
@@ -79,15 +92,19 @@ These stay as they are until the owner decides; nothing in this repo changes the
    (`.claude-plugin/marketplace.json`, plugin `plugins/claude/knowtarium`) and a Codex one
    (`.agents/plugins/marketplace.json`, plugin `plugins/codex/knowtarium` in the portable Agent
    Plugins format), so neither client reads the other's files. The version is set only in each
-   plugin's manifest: people get an update when it changes, through
-   `/plugin marketplace update knowtarium` (Claude Code) or
-   `codex plugin marketplace upgrade knowtarium` (Codex). The marketplace must stay named
+   plugin's manifest, and the pinned server command (`-y knowtarium@<version> mcp`) is written into
+   each plugin's MCP config, where a directory scanner sees it. People get an update when the
+   version changes; updating the marketplace only refreshes the listing, so it takes two steps:
+   `claude plugin marketplace update knowtarium`, then `claude plugin update knowtarium@knowtarium`
+   (Claude Code), or `codex plugin marketplace upgrade knowtarium`, then
+   `codex plugin add knowtarium@knowtarium` again (Codex). The marketplace must stay named
    `knowtarium`: the web app tells people to run `/plugin install knowtarium@knowtarium`.
 
 7. **MCP Registry (optional).** `server.json` describes the npm package for the
    [MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.Knowtarium/knowtarium`
-   (`mcpName` in `package.json`, which the registry checks against the published package, so it
-   works from the first release that ships `mcpName`). With
+   (`mcpName` in `package.json`, which the registry checks against the published package). 0.1.2
+   can't be registered: the 0.1.2 package on npm has no `mcpName`. **0.1.3 is the first version
+   that can have a registry entry.** With
    [`mcp-publisher`](https://modelcontextprotocol.io/registry/quickstart), signed in as an
    **owner** of the Knowtarium GitHub organization (the registry grants `io.github.Knowtarium/*`
    only to org owners, and the name is case sensitive):

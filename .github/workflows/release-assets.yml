@@ -5,8 +5,9 @@ name: Release assets
 # releases/latest/download/knowtarium.mcpb always works) and SHA256SUMS. It runs after every
 # publish (the tag's version) and on every push to main (package.json's version), and does
 # nothing until that version has its tag and is on npm (the bundle runs the published CLI), or once
-# the release has all three files. It never replaces a file a release already has. See
-# RELEASING.md.
+# the release has all three files. It never replaces a file a release already has. The bundle is
+# built with a read-only token; only the last job can write, and it runs no code from the
+# repository. See RELEASING.md.
 on:
   push:
     branches: [main]
@@ -24,22 +25,31 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  assets:
-    name: Ensure the release has its bundles
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+  plan:
+    name: Pick the version and see what its release lacks
+    # after a publish: only this repository's own publish.yml, run for a pushed tag (a pull
+    # request from a fork could add a workflow of its own called Publish)
+    if: >-
+      github.event_name != 'workflow_run' || (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_repository.full_name == github.repository &&
+        github.event.workflow_run.path == '.github/workflows/publish.yml'
+      )
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      # create the release and upload its files; nothing else
-      contents: write
-    env:
-      GH_TOKEN: ${{ github.token }}
+    timeout-minutes: 15
+    outputs:
+      build: ${{ steps.plan.outputs.build }}
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
-      - name: Pick the version and see what its release lacks
-        id: plan
+      - id: plan
         env:
+          GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
           # the tag the publish run built (v1.2.3), from the event, never run as code
           RUN_REF: ${{ github.event.workflow_run.head_branch }}
@@ -53,8 +63,8 @@ jobs:
             esac
             attempts=20 # npm can take a moment to serve a version it just accepted
           else
-            [ "$(node -p "require('./package.json').private === true")" = "true" ] && skip "package.json is private"
-            version=$(node -p "require('./package.json').version")
+            [ "$(jq -r '.private // false' package.json)" = "true" ] && skip "package.json is private"
+            version=$(jq -r .version package.json)
             attempts=1
           fi
           [ "$version" = "0.0.0" ] && skip "the version is the 0.0.0 placeholder"
@@ -67,9 +77,106 @@ jobs:
             [ "$attempt" -lt "$attempts" ] && sleep 15
           done
           [ "$published" = "$version" ] || skip "knowtarium@$version isn't on npm yet"
-
-          expected="knowtarium-$version.mcpb knowtarium.mcpb SHA256SUMS"
           if names=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" --jq '.assets[].name' 2> "$RUNNER_TEMP/api-error"); then
+            have=0
+            for file in "knowtarium-$version.mcpb" knowtarium.mcpb SHA256SUMS; do
+              if grep -qxF "$file" <<< "$names"; then have=$((have + 1)); fi
+            done
+            [ "$have" -eq 3 ] && skip "release $tag already has its files"
+          elif ! grep -q "HTTP 404" "$RUNNER_TEMP/api-error"; then
+            cat "$RUNNER_TEMP/api-error"
+            exit 1
+          fi
+          # a partial release is refused by the release job, after the build
+          {
+            echo "build=true"
+            echo "version=$version"
+            echo "tag=$tag"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build the bundle from the tag
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # the bundle is built from the tagged source, whatever main holds now
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ needs.plan.outputs.tag }}
+          persist-credentials: false
+
+      - name: Check the tag's version
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          if [ "$(jq -r .version package.json)" != "$VERSION" ]; then
+            echo "::error::the tag's package.json isn't version $VERSION"
+            exit 1
+          fi
+
+      # Reads the pnpm version from "packageManager" in package.json.
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      # a release build: it refuses a version npm doesn't have, validates the manifest and starts the
+      # unpacked bundle's server
+      - run: pnpm build:extras
+
+      # from the versioned bundle, so a tag built before build:extras wrote the stable name and the
+      # checksums gets them too
+      - name: Gather the release files
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir release-files
+          cp "dist-extras/knowtarium-$VERSION.mcpb" release-files/
+          cp "dist-extras/knowtarium-$VERSION.mcpb" release-files/knowtarium.mcpb
+          (cd release-files && sha256sum "knowtarium-$VERSION.mcpb" knowtarium.mcpb > SHA256SUMS)
+          cat release-files/SHA256SUMS
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-files
+          path: release-files/
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Create the release, or add the files it lacks
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # create the release and upload its files; this job checks out and runs nothing from the
+      # repository
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-files
+          path: release-files
+
+      - name: Publish the files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd release-files
+          files=("knowtarium-$VERSION.mcpb" knowtarium.mcpb SHA256SUMS)
+          sha256sum -c SHA256SUMS
+          # the release's state again, now: nothing is ever replaced
+          if names=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '.assets[].name' 2> "$RUNNER_TEMP/api-error"); then
             release=exists
           elif grep -q "HTTP 404" "$RUNNER_TEMP/api-error"; then
             release=missing
@@ -79,72 +186,19 @@ jobs:
             exit 1
           fi
           have=0
-          for file in $expected; do
+          for file in "${files[@]}"; do
             if grep -qxF "$file" <<< "$names"; then have=$((have + 1)); fi
           done
-          [ "$have" -eq 3 ] && skip "release $tag already has $expected"
+          if [ "$have" -eq 3 ]; then
+            echo "::notice::release $TAG already has its files"
+            exit 0
+          fi
           if [ "$have" -gt 0 ]; then
-            # never replaced: a new build wouldn't match the checksums already there
-            echo "::error::release $tag has only some of $expected; delete those files from the release, then run this workflow again"
+            # a new build wouldn't match the checksums already there
+            echo "::error::release $TAG has only some of ${files[*]}; delete those files from the release, then run this workflow again"
             exit 1
           fi
-          {
-            echo "build=true"
-            echo "version=$version"
-            echo "tag=$tag"
-            echo "release=$release"
-          } >> "$GITHUB_OUTPUT"
-
-      # the bundle is built from the tagged source, whatever main holds now
-      - name: Check out the tag
-        if: steps.plan.outputs.build == 'true'
-        env:
-          TAG: ${{ steps.plan.outputs.tag }}
-          VERSION: ${{ steps.plan.outputs.version }}
-        run: |
-          set -euo pipefail
-          git fetch --depth=1 origin "refs/tags/$TAG:refs/tags/$TAG"
-          git checkout --detach "refs/tags/$TAG"
-          if [ "$(node -p "require('./package.json').version")" != "$VERSION" ]; then
-            echo "::error::$TAG's package.json isn't version $VERSION"
-            exit 1
-          fi
-
-      # Reads the pnpm version from "packageManager" in package.json.
-      - if: steps.plan.outputs.build == 'true'
-        uses: pnpm/action-setup@v6
-
-      - if: steps.plan.outputs.build == 'true'
-        uses: actions/setup-node@v7
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-
-      - if: steps.plan.outputs.build == 'true'
-        run: pnpm install --frozen-lockfile
-      - if: steps.plan.outputs.build == 'true'
-        run: pnpm build
-      # a release build: it refuses a version npm doesn't have, validates the manifest and starts the
-      # unpacked bundle's server
-      - if: steps.plan.outputs.build == 'true'
-        run: pnpm build:extras
-
-      - name: Create the release, or add the files it lacks
-        if: steps.plan.outputs.build == 'true'
-        env:
-          TAG: ${{ steps.plan.outputs.tag }}
-          VERSION: ${{ steps.plan.outputs.version }}
-          RELEASE: ${{ steps.plan.outputs.release }}
-        run: |
-          set -euo pipefail
-          # the files come from the versioned bundle, so a tag built before build:extras wrote
-          # the stable name and the checksums gets them too
-          mkdir upload
-          cp "dist-extras/knowtarium-$VERSION.mcpb" upload/
-          cp "dist-extras/knowtarium-$VERSION.mcpb" upload/knowtarium.mcpb
-          (cd upload && sha256sum "knowtarium-$VERSION.mcpb" knowtarium.mcpb > SHA256SUMS)
-          cat upload/SHA256SUMS
-          if [ "$RELEASE" = "missing" ]; then
+          if [ "$release" = "missing" ]; then
             flags=()
             if [[ "$VERSION" == *-* ]]; then
               flags+=(--prerelease --latest=false)
@@ -160,8 +214,8 @@ jobs:
           Check a download with \`sha256sum -c SHA256SUMS\` (\`shasum -a 256 -c SHA256SUMS\` on macOS)."
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
               --title "Knowtarium $VERSION" --notes "$notes" "${flags[@]}" \
-              upload/*
+              "${files[@]}"
           else
             # without --clobber, gh refuses to replace a file the release already has
-            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" upload/*
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" "${files[@]}"
           fi
