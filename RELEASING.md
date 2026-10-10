@@ -61,13 +61,22 @@ These stay as they are until the owner decides; nothing in this repo changes the
    its release has all three files; it never replaces a file a release already has (a release
    with only some of them stops it with an error: delete those files on GitHub, then run it again).
    The bundle is built by a job with a read-only token; only the last job, which runs no code from
-   the repository, gets `contents: write` to create the release and upload the files. Claude
+   the repository, gets `contents: write` to create the release and upload the files, and
+   `id-token: write` and `attestations: write` to sign each bundle's build provenance
+   (`gh attestation verify knowtarium.mcpb --repo Knowtarium/knowtarium-sdk` checks a download).
+   The release notes link the npm version, say how to update agents and where the plugins are,
+   and end with GitHub's comparison with the previous release; edit them on GitHub to say what
+   changed. Every action in the workflows is pinned to a full commit SHA, with its version in a
+   comment: to update one, resolve the new tag with
+   `git ls-remote https://github.com/<owner>/<repo>.git 'refs/tags/<tag>' 'refs/tags/<tag>^{}'`
+   (the `^{}` line is the commit of an annotated tag) and replace both. Claude
    Desktop's extension directory no longer takes `.mcpb` files, so this download is how people
    get the bundle.
 
-   **Running it by hand.** Runs share one concurrency group, so a run that was waiting when
-   another one queued can be dropped (GitHub keeps one pending run per group). If a release lacks
-   its files after a publish, open the repository's **Actions** tab, pick **Release assets**, and
+   **Running it by hand.** A run after a publish has a concurrency group of its own (per tag), so
+   a push to main can't replace it while it waits; pushes and manual runs share one, where GitHub
+   keeps only the newest waiting run. The release job, the only one that writes, takes turns per
+   tag, so two runs never both create a release. If a release lacks its files after a publish, open the repository's **Actions** tab, pick **Release assets**, and
    **Run workflow** on `main`: it finishes whatever the current version's release lacks. If an
    upload failed partway, GitHub may leave a **draft** release, or a release with only some files:
    delete the draft (or those files) on the **Releases** page, then run the workflow again.

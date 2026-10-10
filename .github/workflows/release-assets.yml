@@ -4,8 +4,9 @@ name: Release assets
 # knowtarium-<version>.mcpb, the same file as knowtarium.mcpb (so
 # releases/latest/download/knowtarium.mcpb always works) and SHA256SUMS. It runs after every
 # publish (the tag's version) and on every push to main (package.json's version), and does
-# nothing until that version has its tag and is on npm (the bundle runs the published CLI), or once
-# the release has all three files. It never replaces a file a release already has. The bundle is
+# nothing until that version has its tag and is on npm (the release goes with a published
+# version; the bundle holds the CLI built from the tag, the same code as npm's), or once the
+# release has all three files. It never replaces a file a release already has. The bundle is
 # built with a read-only token; only the last job can write, and it runs no code from the
 # repository. See RELEASING.md.
 on:
@@ -20,8 +21,12 @@ permissions:
   contents: read
 
 concurrency:
-  # one at a time, so a publish and a push to main never both create the release
-  group: release-assets
+  # a run after a publish has a group of its own (per tag), so a later push to main can never
+  # replace it while it waits (GitHub keeps one pending run per group); pushes and manual runs
+  # share theirs. The release job, the only writer, takes turns per tag (see there).
+  group: >-
+    release-assets-${{ github.event_name == 'workflow_run' &&
+    format('publish-{0}', github.event.workflow_run.head_branch) || 'main' }}
   cancel-in-progress: false
 
 jobs:
@@ -43,7 +48,7 @@ jobs:
       version: ${{ steps.plan.outputs.version }}
       tag: ${{ steps.plan.outputs.tag }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -102,7 +107,7 @@ jobs:
     timeout-minutes: 30
     steps:
       # the bundle is built from the tagged source, whatever main holds now
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: refs/tags/${{ needs.plan.outputs.tag }}
           persist-credentials: false
@@ -117,9 +122,9 @@ jobs:
           fi
 
       # Reads the pnpm version from "packageManager" in package.json.
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           cache: pnpm
@@ -143,7 +148,7 @@ jobs:
           (cd release-files && sha256sum "knowtarium-$VERSION.mcpb" knowtarium.mcpb > SHA256SUMS)
           cat release-files/SHA256SUMS
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-files
           path: release-files/
@@ -155,15 +160,28 @@ jobs:
     needs: [plan, build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # one writer per release at a time, so a publish run and a push run never both create it; a
+    # waiting one that a newer one replaces was for the same release, which the newer one finishes
+    concurrency:
+      group: release-assets-release-${{ needs.plan.outputs.tag }}
+      cancel-in-progress: false
     permissions:
-      # create the release and upload its files; this job checks out and runs nothing from the
-      # repository
+      # create the release and upload its files, and sign their build provenance; this job checks
+      # out and runs nothing from the repository
       contents: write
+      id-token: write
+      attestations: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-files
           path: release-files
+
+      # a signed record of which run built each bundle, from which commit:
+      # gh attestation verify knowtarium.mcpb --repo Knowtarium/knowtarium-sdk
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release-files/*.mcpb
 
       - name: Publish the files
         env:
@@ -207,13 +225,18 @@ jobs:
             else
               flags+=(--latest=false)
             fi
-            notes="knowtarium $VERSION: [npm](https://www.npmjs.com/package/knowtarium/v/$VERSION).
+            notes="knowtarium $VERSION is on npm: [knowtarium@$VERSION](https://www.npmjs.com/package/knowtarium/v/$VERSION).
+
+          **Any agent:** run \`npx knowtarium@$VERSION agents\` (or \`npx knowtarium@latest agents\`) so your agents use this version, then restart them.
+
+          **Claude Code and Codex:** install the Knowtarium plugin from [Knowtarium/knowtarium-plugins](https://github.com/Knowtarium/knowtarium-plugins), or update it there.
 
           **Claude Desktop:** download \`knowtarium.mcpb\` (the same file as \`knowtarium-$VERSION.mcpb\`), open it, then ask Claude to connect Knowtarium. It needs no terminal or Node.js.
 
           Check a download with \`sha256sum -c SHA256SUMS\` (\`shasum -a 256 -c SHA256SUMS\` on macOS)."
+            # --generate-notes adds the comparison with the previous release below these notes
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
-              --title "Knowtarium $VERSION" --notes "$notes" "${flags[@]}" \
+              --title "Knowtarium $VERSION" --notes "$notes" --generate-notes "${flags[@]}" \
               "${files[@]}"
           else
             # without --clobber, gh refuses to replace a file the release already has
