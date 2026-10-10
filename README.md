@@ -52,7 +52,8 @@ codex plugin add knowtarium@knowtarium
 All of them run the same server as `npx knowtarium connect` sets up. With a plugin, connect this
 computer by asking your agent to connect Knowtarium, or with `npx knowtarium connect --no-agents`:
 the plugin already adds the server (`connect` and `agents` leave an agent with the plugin unticked,
-so it doesn't run twice).
+so it doesn't run twice, but always update an entry of its own that an earlier `connect` added,
+and say how to remove it).
 
 ## Commands
 

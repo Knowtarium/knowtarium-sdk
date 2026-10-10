@@ -74,6 +74,23 @@ function same(a: Uint8Array | null, b: Uint8Array | null): boolean {
 }
 
 /**
+ * Whether an agent's config already has a Knowtarium entry, and the file it is in. A file that
+ * can't be read or edited safely counts as having one: configuring it then says why it can't.
+ */
+export async function existingEntry(
+  target: AgentTarget,
+  server: ServerCommand,
+): Promise<{ readonly path: string; readonly found: boolean }> {
+  const path = await configFile(target);
+  try {
+    const edit = editOf(target, decode(await readIfExists(path)), server);
+    return { path, found: edit.status !== "added" };
+  } catch {
+    return { path, found: true };
+  }
+}
+
+/**
  * Keeps the newest backups of a file (their names sort by time). Best effort: a backup that
  * can't be removed (on Windows, one another program has open) stays until a later run.
  */

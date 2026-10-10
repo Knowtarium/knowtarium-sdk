@@ -19,10 +19,11 @@ async function readJson(path: string): Promise<unknown> {
 }
 
 /**
- * Whether Claude Code has the Knowtarium plugin installed for the user (not only for a project)
- * and not turned off: `plugins/installed_plugins.json` in its folder (`~/.claude`, or
- * `$CLAUDE_CONFIG_DIR`) lists it with a `user` scope (version 2 lists installs per scope; version
- * 1, one per plugin), and `enabledPlugins` in its user `settings.json` doesn't say `false`.
+ * Whether Claude Code has the Knowtarium plugin installed for the user and not turned off:
+ * `plugins/installed_plugins.json` in its folder (`~/.claude`, or `$CLAUDE_CONFIG_DIR`) lists it
+ * with a `user` scope (version 2 lists installs per scope; version 1, one per plugin), and
+ * `enabledPlugins` in its user `settings.json` doesn't say `false`. A project or local install
+ * doesn't count: it serves that project only, so a user entry is still what the others use.
  */
 async function claudeCodeHasPlugin(env: CliEnvironment): Promise<boolean> {
   const folder = env.claudeConfigDir ?? join(env.userHome, ".claude");

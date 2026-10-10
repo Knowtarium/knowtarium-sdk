@@ -758,16 +758,23 @@ again in place after each key and leaves a one-line summary. Raw mode and the cu
 on every way out, an error or a signal included; Ctrl+C puts them back, then interrupts the
 process as it would anywhere else. Without both terminals it asks the old yes-or-no question for
 all of them (`false` without a terminal at all), and `--yes`, `--agent` and `--dry-run` ask
-nothing. An agent that has the Knowtarium plugin runs the server already, and adding it to its
-config too would run a second one (Claude Code) or replace the plugin's (Codex's
-`[mcp_servers.knowtarium]` wins over the plugin's server of the same name): such an agent starts
-unticked, `--yes` and `--dry-run` leave it out, the yes-or-no question doesn't include it, and a
-line says how to add it anyway (`--agent <id>`, which always adds). `src/cli/agents/plugins.ts`
-reads what each records: Claude Code's `plugins/installed_plugins.json` in `~/.claude` (or
-`$CLAUDE_CONFIG_DIR`) with a `user` scope install of `knowtarium@knowtarium` (a project install
-doesn't count), unless its `settings.json` sets `enabledPlugins` for it to `false`; Codex's
-`[plugins."knowtarium@knowtarium"]` in `config.toml`, unless `enabled = false`. A file that can't
-be read counts as no plugin.
+nothing. An agent that has the Knowtarium plugin runs the server already, and a new entry in its
+config would run a second one (Claude Code) or replace the plugin's (Codex's
+`[mcp_servers.knowtarium]` wins over the plugin's server of the same name): without an entry of
+its own such an agent starts unticked, `--yes` and `--dry-run` leave it out, the yes-or-no question
+doesn't include it, and a line says how to add it anyway (`--agent <id>`, which always adds). An
+entry it has already (an earlier `connect` wrote it, as the 0.1.2 plugin READMEs said to run) is
+always updated like any other, whatever the plugin: it runs, and an old one runs npx in the
+project folder. A line says so and how to remove it (`claude mcp remove --scope user knowtarium`,
+or the table in Codex's `config.toml`); the CLI never removes it itself. A config that can't be
+read or edited safely counts as having an entry, so its agent is ticked and the result says why
+it couldn't be changed. `src/cli/agents/plugins.ts` reads what each records: Claude Code's
+`plugins/installed_plugins.json` in `~/.claude` (or `$CLAUDE_CONFIG_DIR`) with a `user` scope
+install of `knowtarium@knowtarium`, unless its `settings.json` sets `enabledPlugins` for it to
+`false`; Codex's `[plugins."knowtarium@knowtarium"]` in `config.toml`, unless `enabled = false`. A
+project (or local) install of the Claude Code plugin doesn't count: it serves that project only,
+so the user entry is still what every other project uses. A file that can't be read counts as no
+plugin.
 
 **Protocol versions.** When the API answers `unsupported_protocol`, a command (and the MCP
 server) says to update knowtarium, unless every version the error lists in `supportedVersions` is

@@ -441,6 +441,63 @@ describe("choosing the agents", () => {
     expect(await added()).toEqual(["cursor", "codex"]);
   });
 
+  /** Entries an earlier `connect` (0.1.2) wrote, which ran npx in the project folder. */
+  async function oldEntries(home: string) {
+    const old = { command: "npx", args: ["-y", "knowtarium@0.1.2", "mcp"], env: { A: "1" } };
+    await write(join(home, ".claude.json"), JSON.stringify({ mcpServers: { knowtarium: old } }));
+    await write(
+      join(home, ".codex", "config.toml"),
+      '[plugins."knowtarium@knowtarium"]\nenabled = true\n\n[mcp_servers.knowtarium]\ncommand = "npx"\nargs = ["-y", "knowtarium@0.1.2", "mcp"]\n',
+    );
+  }
+
+  it("updates an entry an agent with the plugin has already, with --yes", async () => {
+    const { context, home } = await threeAgents();
+    await withPlugins(home);
+    await oldEntries(home);
+    expect(await COMMANDS["agents"]?.(context, ["--yes"])).toBe(0);
+    const claude = await readFile(join(home, ".claude.json"), "utf8");
+    const codex = await readFile(join(home, ".codex", "config.toml"), "utf8");
+    for (const text of [claude, codex]) {
+      expect(text).not.toContain("knowtarium@0.1.2");
+      expect(text).toContain("HOME:?");
+    }
+    expect(JSON.parse(claude)).toMatchObject({ mcpServers: { knowtarium: { env: { A: "1" } } } });
+    expect(codex).toContain('[plugins."knowtarium@knowtarium"]\nenabled = true');
+    expect(context.io.lines.filter((line) => line.startsWith("updated in"))).toHaveLength(2);
+    const claudeNote = context.io.lines.find((line) =>
+      line.startsWith(
+        "Claude Code has the Knowtarium plugin and also a Knowtarium entry of its own in ",
+      ),
+    );
+    expect(claudeNote).toMatch(
+      /\.claude\.json, which runs a second server: it is updated like the others\. To keep only the plugin's, run `claude mcp remove --scope user knowtarium`\.$/,
+    );
+    expect(
+      context.io.lines.some((line) =>
+        line.startsWith("Codex has the Knowtarium plugin and also [mcp_servers.knowtarium]"),
+      ),
+    ).toBe(true);
+    expect(context.io.lines.some((line) => line.includes("isn't ticked"))).toBe(false);
+  });
+
+  it("offers an entry an agent with the plugin has already ticked, and updates it", async () => {
+    const { context, home } = await threeAgents();
+    await withPlugins(home);
+    await oldEntries(home);
+    context.io.choices = [[0, 1, 2]];
+    expect(await COMMANDS["agents"]?.(context, [])).toBe(0);
+    expect(context.io.unticked).toEqual([[]]);
+    expect(await readFile(join(home, ".claude.json"), "utf8")).toContain("HOME:?");
+    expect(await readFile(join(home, ".codex", "config.toml"), "utf8")).toContain("HOME:?");
+    // with --dry-run too, the entry would be updated
+    await oldEntries(home);
+    expect(await COMMANDS["agents"]?.(context, ["--dry-run"])).toBe(0);
+    expect(
+      context.io.lines.filter((line) => line.startsWith("would be updated in")).length,
+    ).toBeGreaterThanOrEqual(2);
+  });
+
   it("counts only a plugin installed for the user and turned on", async () => {
     const { context, home } = await threeAgents();
     await withPlugins(home, "project");

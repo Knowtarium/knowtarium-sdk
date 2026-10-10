@@ -21,6 +21,11 @@ Then connect this computer once: ask Claude to connect Knowtarium, or run
 your browser opens, you sign in and approve this computer, and no password, token or key goes in
 Claude's settings. You need Node.js 20 or later.
 
+If you ran `npx knowtarium connect` before installing the plugin, Claude Code has a Knowtarium
+entry of its own too. Run `npx knowtarium@latest agents` once to bring it up to date (older
+versions ran npx in the project folder), or run `claude mcp remove --scope user knowtarium` to keep
+only the plugin's.
+
 ## What it adds
 
 - **The `knowtarium` MCP server**: the tools Claude uses to search, read, write and check notes.

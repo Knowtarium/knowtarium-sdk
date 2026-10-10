@@ -20,6 +20,11 @@ Then connect this computer once: ask Codex to connect Knowtarium, or run
 your browser opens, you sign in and approve this computer, and no password, token or key goes in
 Codex's settings. You need Node.js 20 or later.
 
+If you ran `npx knowtarium connect` before installing the plugin, Codex has a Knowtarium entry of
+its own too, which runs instead of the plugin's server. Run `npx knowtarium@latest agents` once to
+bring it up to date (older versions ran npx in the project folder), or remove
+`[mcp_servers.knowtarium]` from `~/.codex/config.toml` to use the plugin's.
+
 ## What it adds
 
 - **The `knowtarium` MCP server**: the tools Codex uses to search, read, write and check notes.
