@@ -32,8 +32,8 @@ Knowtarium from the `knowtarium` marketplace.
 **Claude Desktop** runs the Knowtarium extension instead, which needs no terminal or Node.js:
 download [knowtarium.mcpb]({{mcpbUrl}}), open it, then ask Claude to connect Knowtarium.
 
-**Other agents**, such as Cursor and OpenCode: run `npx knowtarium connect` in a terminal. It
-connects this computer and adds Knowtarium to the agents it finds.
+**Other agents**, such as Cursor and OpenCode: run `npx knowtarium connect` in a terminal, from
+your home folder. It connects this computer and adds Knowtarium to the agents it finds.
 
 After installing a plugin, connect this computer once: ask your agent to connect Knowtarium, or run
 `npx knowtarium connect --no-agents` in a terminal (the plugin already adds the server, and adding

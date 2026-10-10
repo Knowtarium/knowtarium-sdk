@@ -15,7 +15,8 @@ only on your devices, never on Knowtarium's servers.
 
 ## Install
 
-You need Node.js 20 or later (22 or 24 recommended). Then, in a terminal:
+You need Node.js 20 or later (22 or 24 recommended). Then, in a terminal, from your home folder
+(npx trusts the folder it runs in, so not from inside a project):
 
 ```sh
 npx knowtarium connect
@@ -87,8 +88,8 @@ agent has open, so a project can't swap in its own code for Knowtarium's.
 new folder with the converted notes, an `index.md` per folder and a report of everything it
 renamed, linked or left out. `validate` checks paths, frontmatter, required fields and links.
 
-If `knowtarium` says to update, run `npx knowtarium@latest agents`. It points your agents at the
-new version. Then restart them.
+If `knowtarium` says to update, run `npx knowtarium@latest agents` from your home folder. It points
+your agents at the new version. Then restart them.
 
 ## How your data is protected
 

@@ -16,14 +16,14 @@ Or, once the marketplace is added, type `/plugins` in Codex to open the plugin b
 Knowtarium from the `knowtarium` marketplace (Knowtarium isn't in OpenAI's public plugin directory).
 
 Then connect this computer once: ask Codex to connect Knowtarium, or run
-`npx knowtarium connect --no-agents` in a terminal (the plugin already adds the server). Either way
-your browser opens, you sign in and approve this computer, and no password, token or key goes in
-Codex's settings. You need Node.js 20 or later.
+`npx knowtarium connect --no-agents` in a terminal, from your home folder (the plugin already adds
+the server). Either way your browser opens, you sign in and approve this computer, and no password,
+token or key goes in Codex's settings. You need Node.js 20 or later.
 
 If you ran `npx knowtarium connect` with knowtarium 0.1.2 or earlier, Codex has a Knowtarium entry of
-its own too, which runs instead of the plugin's server. Run `npx knowtarium@latest agents` once to
-bring it up to date (older versions ran npx in the project folder), or remove
-`[mcp_servers.knowtarium]` from `~/.codex/config.toml` to use the plugin's.
+its own too, which runs instead of the plugin's server. Run `npx knowtarium@latest agents` once,
+from your home folder, to bring it up to date (older versions ran npx in the project folder), or
+remove `[mcp_servers.knowtarium]` from `~/.codex/config.toml` to use the plugin's.
 
 ## What it adds
 

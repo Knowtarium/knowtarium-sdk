@@ -20,12 +20,15 @@ credit you in the release notes if you'd like.
   looks for the plugin's `node` in the project folder first, so a `node.exe` placed in a project
   you open would start instead of Node.js. On Windows, `npx knowtarium agents` gives the hardened
   setup: it names `cmd.exe` by its full path and runs npx from your home folder.
+- **Commands you type.** `npx knowtarium connect` and `npx knowtarium@latest agents` run npx in
+  the terminal's current folder, where npm trusts what the folder contains (a `node_modules` or
+  `.npmrc` a project planted). Run them from your home folder, not from inside a project.
 - **MCP registry installs.** An agent that installs Knowtarium from a registry listing writes a
   bare `npx knowtarium@<version> mcp`, which runs in the project folder, where npm trusts what the
   project contains. Use `npx knowtarium agents`, the plugins or the Claude Desktop extension.
 
 ## Supported versions
 
-Only the latest release on npm gets security fixes. Run `npx knowtarium@latest agents` to update
-the version your agents use; knowtarium asks you to update when Knowtarium stops supporting your
-version.
+Only the latest release on npm gets security fixes. Run `npx knowtarium@latest agents` from your
+home folder to update the version your agents use; knowtarium asks you to update when Knowtarium
+stops supporting your version.
