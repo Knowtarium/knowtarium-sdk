@@ -8,7 +8,7 @@
     "url": "https://github.com/Knowtarium/knowtarium-sdk",
     "source": "github"
   },
-  "version": "0.1.2",
+  "version": "0.1.3",
   "icons": [
     {
       "src": "https://knowtarium.com/web-app-manifest-512x512.png",
@@ -21,7 +21,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "knowtarium",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"

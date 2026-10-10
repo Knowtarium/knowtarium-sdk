@@ -1,6 +1,6 @@
 {
   "name": "knowtarium",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "mcpName": "io.github.Knowtarium/knowtarium",
   "license": "MIT",
   "description": "Connect your AI agents to your Knowtarium workspace, end-to-end encrypted: the knowtarium CLI and MCP server, and the Knowtarium SDK.",
