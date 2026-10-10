@@ -28,11 +28,6 @@ export interface CliEnvironment {
   readonly claudeConfigDir?: string;
   /** `CODEX_HOME`: Codex's folder, with its `config.toml` (default `~/.codex`). */
   readonly codexHome?: string;
-  /**
-   * The folder of the Node.js running this CLI, with its npx (`npxFolder`): agent configs add it
-   * to the end of the PATH. Set by `createCliContext`, never from the environment.
-   */
-  readonly nodeFolder?: string;
   readonly platform: NodeJS.Platform;
 }
 

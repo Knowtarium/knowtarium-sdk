@@ -1,6 +1,5 @@
 import { ready } from "../crypto/index.js";
 import { EncryptedCache, type FetchLike, TrustState } from "../client/index.js";
-import { npxFolder } from "./agents/server-entry.js";
 import { type CliEnvironment, cliEnvironment } from "./env.js";
 import type { CliIo } from "./io.js";
 import { Credentials } from "./storage/credentials.js";
@@ -52,15 +51,10 @@ export function makeCliContext(details: {
   };
 }
 
-/**
- * The real context: the environment (with the folder of the Node.js running this CLI, for agent
- * configs), the keychain (or its fallback) and the files on disk.
- */
+/** The real context: the environment, the keychain (or its fallback) and the files on disk. */
 export async function createCliContext(io: CliIo, version: string): Promise<CliContext> {
   await ready();
-  const base = cliEnvironment();
-  const nodeFolder = npxFolder(process.execPath, base.platform);
-  const env: CliEnvironment = nodeFolder === undefined ? base : { ...base, nodeFolder };
+  const env = cliEnvironment();
   return makeCliContext({
     env,
     io,

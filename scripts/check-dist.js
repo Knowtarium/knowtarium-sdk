@@ -234,21 +234,19 @@ try {
     script.includes(` npx -y knowtarium@${pkg.version} mcp`),
     `the agent's command pins this version: ${script}`,
   );
-  // and adds the folder of the Node.js that wrote it, which holds npx, to the end of the PATH
-  const nodeFolder = dirname(process.execPath);
   if (process.platform === "win32") {
     assert.match(entry.command, /\\cmd\.exe$/i);
-    assert.ok(script.startsWith("if defined USERPROFILE (cd /d !USERPROFILE!&& "), script);
-    if (existsSync(join(nodeFolder, "npx.cmd"))) {
-      assert.ok(script.includes(` set PATH=!PATH!;${nodeFolder}&& npx `), script);
-    }
+    assert.equal(
+      script,
+      `if defined USERPROFILE (cd /d !USERPROFILE!&& npx -y knowtarium@${pkg.version} mcp) else exit 1`,
+    );
   } else {
     assert.equal(entry.command, "/bin/sh");
-    assert.ok(script.startsWith('[ -n "$HOME" ] && cd -- "$HOME" && '), script);
-    assert.ok(!script.includes("${"), script);
-    if (existsSync(join(nodeFolder, "npx"))) {
-      assert.ok(script.includes(` export PATH="$PATH:${nodeFolder}" && exec npx `), script);
-    }
+    // no ${...}, which agents expand in their configs, and nothing added to the PATH
+    assert.equal(
+      script,
+      `[ -n "$HOME" ] && cd -- "$HOME" && exec npx -y knowtarium@${pkg.version} mcp`,
+    );
   }
   // a real MCP exchange over stdio: with nothing connected the server still answers, and the
   // tools point to its `connect` tool

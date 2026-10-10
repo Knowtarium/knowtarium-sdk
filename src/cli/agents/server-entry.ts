@@ -1,5 +1,4 @@
-import { existsSync } from "node:fs";
-import { posix, win32 } from "node:path";
+import { win32 } from "node:path";
 
 import SERVER_COMMAND from "./server-command.json" with { type: "json" };
 
@@ -30,17 +29,10 @@ export function npxArgs(version: string): string[] {
   return args;
 }
 
-/** What `serverCommand` needs to know about this computer, all optional. */
+/** Windows: `%ComSpec%` and `%SystemRoot%`, to name `cmd.exe` by its full path. */
 export interface ServerCommandOptions {
-  /** Windows: `%ComSpec%` and `%SystemRoot%`, to name `cmd.exe` by its full path. */
   readonly comSpec?: string;
   readonly systemRoot?: string;
-  /**
-   * The folder of the Node.js that wrote the config, with its npx (`npxFolder`), added to the end
-   * of the PATH the server starts with, for agents started from the Dock or the Start menu with a
-   * PATH that doesn't name it. Left out when `pathFolder` doesn't accept it.
-   */
-  readonly nodeFolder?: string;
 }
 
 /** Windows' own `cmd.exe`, by its full path (never one found in the folder an agent starts in). */
@@ -51,48 +43,6 @@ export function windowsShell(env: { readonly comSpec?: string; readonly systemRo
   const fromRoot =
     env.systemRoot === undefined ? undefined : win32.join(env.systemRoot, "System32", "cmd.exe");
   return isCmd(fromRoot) ? fromRoot : "C:\\Windows\\System32\\cmd.exe";
-}
-
-/** A folder name's characters a shell, cmd and every agent's config reader take literally. */
-const FOLDER_PART = String.raw`[\p{L}\p{M}\p{N}_ .+@-]+`;
-const POSIX_FOLDER = new RegExp(String.raw`^(?:/${FOLDER_PART})+$`, "u");
-const WINDOWS_FOLDER = new RegExp(String.raw`^[A-Za-z]:(?:\\${FOLDER_PART})+$`, "u");
-
-/**
- * `folder` when the server command may add it to the PATH, else undefined: an absolute,
- * normalized path of letters, digits, spaces and `_ . + @ -` only, so it needs no quoting beyond
- * the command's own double quotes (sh) or none at all (cmd, where `&`, `)`, `%`, `!`, `^` and `;`
- * would mean something), and no agent rewrites it: no `$`, `{`, `~` or `:` past a drive letter,
- * and no word that Cursor would read as relative to the project (one that is `.` or starts with
- * `./` or `.\`, as Cursor splits its arguments at spaces). A folder inside a `node_modules` (a
- * project's own Node) never counts.
- */
-export function pathFolder(folder: string, platform: NodeJS.Platform): string | undefined {
-  const windows = platform === "win32";
-  const path = windows ? win32 : posix;
-  if (!(windows ? WINDOWS_FOLDER : POSIX_FOLDER).test(folder)) return undefined;
-  if (path.normalize(folder) !== folder || folder.endsWith(path.sep)) return undefined;
-  if (folder.split(/[\\/]/).some((part) => part.toLowerCase() === "node_modules")) return undefined;
-  if (/(?:^|\s)\.(?:$|\s|[\\/])/.test(folder)) return undefined;
-  return folder;
-}
-
-/**
- * The folder of the Node.js at `execPath` (this CLI's own, `process.execPath`) when it holds npx
- * (`npx`, or `npx.cmd` on Windows) and `pathFolder` accepts it, else undefined.
- */
-export function npxFolder(
-  execPath: string,
-  platform: NodeJS.Platform,
-  exists: (path: string) => boolean = existsSync,
-): string | undefined {
-  const windows = platform === "win32";
-  const path = windows ? win32 : posix;
-  if (!/^node(?:\.exe)?$/i.test(path.basename(execPath))) return undefined;
-  const folder = pathFolder(path.dirname(execPath), platform);
-  return folder !== undefined && exists(path.join(folder, windows ? "npx.cmd" : "npx"))
-    ? folder
-    : undefined;
 }
 
 /**
@@ -118,12 +68,11 @@ export function npxFolder(
  * config. The arguments live in `server-command.json`, which the bundle build
  * (`scripts/build-extras.js`) reads too, for the plugins' launcher.
  *
- * With `nodeFolder`, the command adds that folder to the end of the PATH before npx
- * (`export PATH="$PATH:<folder>"`, or `set PATH=!PATH!;<folder>` in cmd), so an agent started with
- * a PATH that doesn't name the user's Node (macOS gives apps started from the Dock
- * `/usr/bin:/bin:/usr/sbin:/sbin`) still finds npx, and npx's `#!/usr/bin/env node` finds node.
- * At the end, the agent's own PATH still comes first, and once that Node is removed (`nvm
- * uninstall`) the lookup simply goes on without it.
+ * It doesn't add the folder of the Node.js that wrote it to the PATH, for agents started from the
+ * Dock with launchd's PATH: `process.execPath` follows symbolic links, and npm puts a project's
+ * `node_modules/.bin` first, so a `node` planted there (a link to a Node.js copy in the project)
+ * would write the project's folder into every agent's global config. Agents already start servers
+ * with the login shell's PATH (DEVELOPING.md), and Claude Desktop has the `.mcpb`.
  */
 export function serverCommand(
   version: string,
@@ -131,26 +80,18 @@ export function serverCommand(
   options: ServerCommandOptions = {},
 ): ServerCommand {
   const npx = ["npx", ...npxArgs(version)].join(" ");
-  const folder =
-    options.nodeFolder === undefined ? undefined : pathFolder(options.nodeFolder, platform);
-  if (platform === "win32") {
-    const path = folder === undefined ? "" : `set PATH=!PATH!;${folder}&& `;
-    return {
-      command: windowsShell(options),
-      args: [
-        "/d",
-        "/v:on",
-        "/s",
-        "/c",
-        `if defined USERPROFILE (cd /d !USERPROFILE!&& ${path}${npx}) else exit 1`,
-      ],
-    };
-  }
-  const path = folder === undefined ? "" : `export PATH="$PATH:${folder}" && `;
-  return {
-    command: "/bin/sh",
-    args: ["-c", `[ -n "$HOME" ] && cd -- "$HOME" && ${path}exec ${npx}`],
-  };
+  return platform === "win32"
+    ? {
+        command: windowsShell(options),
+        args: [
+          "/d",
+          "/v:on",
+          "/s",
+          "/c",
+          `if defined USERPROFILE (cd /d !USERPROFILE!&& ${npx}) else exit 1`,
+        ],
+      }
+    : { command: "/bin/sh", args: ["-c", `[ -n "$HOME" ] && cd -- "$HOME" && exec ${npx}`] };
 }
 
 /** The command as one line, for people adding it by hand (an argument with spaces is quoted). */

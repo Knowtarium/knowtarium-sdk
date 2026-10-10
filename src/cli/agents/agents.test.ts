@@ -12,14 +12,7 @@ import { temporaryFolder, testContext } from "../testing/context.js";
 import { configureAgents, detectAgents } from "./configure.js";
 import { handAdd } from "../commands/agents.js";
 import { upsertJsonServer } from "./json-config.js";
-import {
-  commandLine,
-  MCP_COMMAND,
-  npxArgs,
-  npxFolder,
-  pathFolder,
-  serverCommand,
-} from "./server-entry.js";
+import { commandLine, MCP_COMMAND, npxArgs, serverCommand } from "./server-entry.js";
 import { agentTargets } from "./targets.js";
 import { upsertCodexServer } from "./toml-config.js";
 
@@ -83,103 +76,14 @@ describe("the server command", () => {
       /\$\{([A-Za-z_][A-Za-z0-9_]*(?::-[^}]*)?)\}/,
     ];
     for (const platform of ["linux", "darwin", "win32"] as const) {
-      const command = serverCommand("1.2.3", platform, {
-        nodeFolder: platform === "win32" ? "C:\\Program Files\\nodejs" : "/opt/node/bin",
-      });
+      const command = serverCommand("1.2.3", platform);
       for (const arg of [command.command, ...command.args]) {
         expect(arg).not.toContain("${");
         for (const expansion of expansions) expect(arg).not.toMatch(expansion);
         expect(arg).not.toMatch(/\{env:/);
+        expect(arg).not.toContain("PATH");
       }
     }
-  });
-
-  it("adds the folder of the Node.js that wrote it to the end of the PATH", () => {
-    const folder = "/Users/maya/.nvm/versions/node/v24.11.1/bin";
-    const posix = serverCommand("1.2.3", "darwin", { nodeFolder: folder });
-    expect(posix).toEqual({
-      command: COMMAND,
-      args: [
-        "-c",
-        `[ -n "$HOME" ] && cd -- "$HOME" && export PATH="$PATH:${folder}" && exec npx -y knowtarium@1.2.3 mcp`,
-      ],
-    });
-    const windows = serverCommand("1.2.3", "win32", { nodeFolder: "C:\\Program Files\\nodejs" });
-    expect(windows.args.at(-1)).toBe(
-      "if defined USERPROFILE (cd /d !USERPROFILE!&& set PATH=!PATH!;C:\\Program Files\\nodejs&& npx -y knowtarium@1.2.3 mcp) else exit 1",
-    );
-    // a folder the command couldn't hold as it is is left out, never quoted
-    for (const nodeFolder of ['/a/"b', "/a/$b", "/a/`b`", "/a:b", "~/bin", "/a/b/", "/a/./b"]) {
-      expect(serverCommand("1.2.3", "linux", { nodeFolder })).toEqual(server);
-    }
-  });
-
-  it("accepts only plain absolute folders for the PATH", () => {
-    for (const folder of [
-      "/usr/local/bin",
-      "/Users/José Díaz/.volta/tools/image/node/22.1.0/bin",
-      "/opt/homebrew/Cellar/node/24.9.0/bin",
-      "/home/m/.local/share/fnm/node-versions/v22.0.0/installation/bin",
-    ]) {
-      expect(pathFolder(folder, "linux")).toBe(folder);
-    }
-    for (const folder of [
-      "relative/bin",
-      "/",
-      "/a//b",
-      "/a/../b",
-      "/a/b/",
-      "/a:b",
-      "/a/${HOME}",
-      "/a/$HOME",
-      "/a/~b",
-      "/a/b\\c",
-      "/a/b'c",
-      "/a/b;c",
-      "/a/b!c",
-      "/a/b%c",
-      "/project/node_modules/.bin",
-      "/a/x ./b",
-      "/a/x .",
-      "/a/b\nc",
-    ]) {
-      expect(pathFolder(folder, "linux"), folder).toBeUndefined();
-    }
-    expect(pathFolder("C:\\Program Files\\nodejs", "win32")).toBe("C:\\Program Files\\nodejs");
-    expect(pathFolder("D:\\nvm4w\\nodejs", "win32")).toBe("D:\\nvm4w\\nodejs");
-    for (const folder of [
-      "C:\\Program Files (x86)\\nodejs",
-      "C:\\a&b\\nodejs",
-      "C:\\a^b",
-      "C:\\a!b!",
-      "C:\\%a%",
-      "C:\\a;b",
-      "C:\\a\\",
-      "C:nodejs",
-      "\\\\server\\share\\nodejs",
-      "C:/nodejs",
-      "C:\\x\\node_modules\\.bin",
-    ]) {
-      expect(pathFolder(folder, "win32"), folder).toBeUndefined();
-    }
-  });
-
-  it("finds the folder of this CLI's Node.js only when it holds npx", () => {
-    const has = (paths: string[]) => (path: string) => paths.includes(path);
-    expect(npxFolder("/opt/node/bin/node", "linux", has(["/opt/node/bin/npx"]))).toBe(
-      "/opt/node/bin",
-    );
-    expect(npxFolder("/opt/node/bin/node", "linux", has([]))).toBeUndefined();
-    // a runtime that isn't node (Bun, an Electron helper) isn't Node.js's folder
-    expect(npxFolder("/opt/bun/bin/bun", "linux", () => true)).toBeUndefined();
-    expect(npxFolder("/p/node_modules/.bin/node", "linux", () => true)).toBeUndefined();
-    expect(
-      npxFolder(
-        "C:\\Program Files\\nodejs\\node.exe",
-        "win32",
-        has(["C:\\Program Files\\nodejs\\npx.cmd"]),
-      ),
-    ).toBe("C:\\Program Files\\nodejs");
   });
 
   it("refuses a version a shell could read as a command", () => {

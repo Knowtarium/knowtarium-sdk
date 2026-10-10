@@ -7,9 +7,8 @@
 // registry's package runs and nothing planted does; a bare `npx -y knowtarium@<version>` in the
 // same folder runs a planted one, which shows the plants work. On Windows, where the command goes
 // through cmd.exe, a stand-in npx checks it moves to the profile folder before it looks for npx.
-// An agent started from the Dock (or Finder) gets launchd's PATH, `/usr/bin:/bin:/usr/sbin:/sbin`,
-// which names no Node.js installed with nvm, fnm, Volta or Homebrew: the command then finds npx in
-// the folder of the Node.js that wrote it, which it adds to the end of the PATH.
+// An agent started from the Dock gets launchd's PATH, `/usr/bin:/bin:/usr/sbin:/sbin`: the command
+// looks npx up on it just as a bare npx did before 0.1.3.
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
@@ -22,7 +21,7 @@ import process from "node:process";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { temporaryFolder } from "../testing/context.js";
-import { pathFolder, serverCommand } from "./server-entry.js";
+import { serverCommand } from "./server-entry.js";
 
 const VERSION = "1.2.3";
 const windows = process.platform === "win32";
@@ -216,34 +215,19 @@ describe.skipIf(windows)("a hostile project folder, with the real npx", () => {
     ]);
   }, 60_000);
 
-  it("runs the registry's package with launchd's PATH, through the Node.js that wrote it", async () => {
-    const nodeFolder = dirname(process.execPath);
-    expect(pathFolder(nodeFolder, process.platform)).toBe(nodeFolder);
-    const server = serverCommand(VERSION, process.platform, { nodeFolder });
-    const result = await run(server.command, server.args, project, { ...env, PATH: GUI_PATH });
-    expect(result.output).not.toContain("PLANTED");
-    expect(result.output).toContain(`registry knowtarium ${VERSION} mcp`);
-    expect(result.code).toBe(0);
-  }, 60_000);
-
   // a bare `cd` without HOME stays where it is in dash and busybox (Debian's and Alpine's /bin/sh),
   // and `cd ""` stays put in bash
   it.each(SHELLS)(
     "stops, in $name, when HOME is unset or empty",
     async ({ argv }) => {
+      const server = serverCommand(VERSION, process.platform);
       const unset = Object.fromEntries(Object.entries(env).filter(([key]) => key !== "HOME"));
-      const nodeFolder = dirname(process.execPath);
-      for (const server of [
-        serverCommand(VERSION, process.platform),
-        serverCommand(VERSION, process.platform, { nodeFolder }),
-      ]) {
-        for (const without of [unset, { ...unset, HOME: "" }]) {
-          const [shell = "", ...shellArgs] = argv;
-          const result = await run(shell, [...shellArgs, ...server.args], project, without);
-          expect(result.output).not.toContain("PLANTED");
-          expect(result.output).not.toContain("registry knowtarium");
-          expect(result.code).toBe(1);
-        }
+      const [shell = "", ...shellArgs] = argv;
+      for (const without of [unset, { ...unset, HOME: "" }]) {
+        const result = await run(shell, [...shellArgs, ...server.args], project, without);
+        expect(result.output).not.toContain("PLANTED");
+        expect(result.output).not.toContain("registry knowtarium");
+        expect(result.code).toBe(1);
       }
     },
     60_000,
@@ -266,10 +250,8 @@ describe.skipIf(windows)("a hostile project folder, with the real npx", () => {
 
 describe.skipIf(windows)("an agent started from the Dock, with launchd's PATH", () => {
   let cleanup: (() => Promise<void>) | undefined;
-  let root = "";
   let home = "";
   let project = "";
-  let nodeFolder = "";
   let userFolder = "";
   // a system npx (a Linux distribution's Node.js in /usr/bin) would be found either way
   const systemNpx = GUI_PATH.split(":").some((folder) => existsSync(join(folder, "npx")));
@@ -277,19 +259,16 @@ describe.skipIf(windows)("an agent started from the Dock, with launchd's PATH", 
   beforeAll(async () => {
     const folder = await temporaryFolder();
     cleanup = folder.cleanup;
-    root = await realpath(folder.path);
-    home = join(root, "home");
+    const root = await realpath(folder.path);
+    // a home folder with a space in its name
+    home = join(root, "Maya Díaz");
     project = join(root, "project");
-    // where nvm, fnm, Volta or Homebrew put node and npx, and an npx on the agent's own PATH
-    nodeFolder = join(root, "node", "v24.0.0", "bin");
-    userFolder = join(root, "user-bin");
-    for (const path of [home, project, nodeFolder, userFolder])
-      await mkdir(path, { recursive: true });
+    userFolder = join(root, "user bin");
+    for (const path of [home, project, userFolder]) await mkdir(path, { recursive: true });
     const npx = async (path: string, marker: string) => {
       await writeFile(path, `#!/bin/sh\necho "${marker} npx in $PWD: $*"\n`);
       await chmod(path, 0o755);
     };
-    await npx(join(nodeFolder, "npx"), "node folder");
     await npx(join(userFolder, "npx"), "user");
     await npx(join(project, "npx"), "PLANTED");
   });
@@ -298,57 +277,28 @@ describe.skipIf(windows)("an agent started from the Dock, with launchd's PATH", 
     await cleanup?.();
   });
 
-  const gui = (path = GUI_PATH) => ({ HOME: home, PATH: path });
-
-  it.skipIf(systemNpx)(
-    "finds no npx without the folder, like a bare npx (0.1.3 changed nothing)",
-    async () => {
-      // how agents started a bare npx before 0.1.3: spawn looks it up on the PATH it is given
-      await expect(
-        run("npx", ["-y", `knowtarium@${VERSION}`, "mcp"], project, gui()),
-      ).rejects.toMatchObject({ code: "ENOENT" });
-      const server = serverCommand(VERSION, process.platform);
-      const result = await run(server.command, server.args, project, gui());
-      expect(result.output).toMatch(/npx/);
-      expect(result.output).not.toContain("PLANTED");
-      expect(result.code).toBe(127);
-    },
-  );
-
-  it.skipIf(systemNpx).each(SHELLS)(
-    "finds npx in the folder of the Node.js that wrote it, in $name",
-    async ({ argv }) => {
-      expect(pathFolder(nodeFolder, process.platform)).toBe(nodeFolder);
-      const server = serverCommand(VERSION, process.platform, { nodeFolder });
-      const [shell = "", ...shellArgs] = argv;
-      const result = await run(shell, [...shellArgs, ...server.args], project, gui());
-      expect(result.output).toBe(`node folder npx in ${home}: -y knowtarium@${VERSION} mcp\n`);
-      expect(result.output).not.toContain("PLANTED");
-      expect(result.code).toBe(0);
-    },
-  );
-
-  it("keeps the agent's own PATH first", async () => {
-    const server = serverCommand(VERSION, process.platform, { nodeFolder });
-    const result = await run(
-      server.command,
-      server.args,
-      project,
-      gui(`${userFolder}:${GUI_PATH}`),
-    );
-    expect(result.output).toBe(`user npx in ${home}: -y knowtarium@${VERSION} mcp\n`);
-    expect(result.code).toBe(0);
-  });
-
-  it.skipIf(systemNpx)("goes on without the folder once that Node.js is removed", async () => {
-    const removed = join(root, "node", "v20.0.0", "bin");
-    const server = serverCommand(VERSION, process.platform, { nodeFolder: removed });
-    expect(server.args.at(-1)).toContain(removed);
-    const result = await run(server.command, server.args, project, gui());
+  it.skipIf(systemNpx)("finds no npx, exactly like a bare npx before 0.1.3", async () => {
+    const gui = { HOME: home, PATH: GUI_PATH };
+    // how agents started a bare npx: spawn looks it up on the PATH it is given
+    await expect(
+      run("npx", ["-y", `knowtarium@${VERSION}`, "mcp"], project, gui),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    const server = serverCommand(VERSION, process.platform);
+    const result = await run(server.command, server.args, project, gui);
+    expect(result.output).toMatch(/npx/);
     expect(result.output).not.toContain("PLANTED");
     expect(result.code).toBe(127);
-    const found = await run(server.command, server.args, project, gui(`${userFolder}:${GUI_PATH}`));
-    expect(found.output).toBe(`user npx in ${home}: -y knowtarium@${VERSION} mcp\n`);
+  });
+
+  it.each(SHELLS)("runs the PATH's npx from the home folder, in $name", async ({ argv }) => {
+    const server = serverCommand(VERSION, process.platform);
+    const [shell = "", ...shellArgs] = argv;
+    const result = await run(shell, [...shellArgs, ...server.args], project, {
+      HOME: home,
+      PATH: `${userFolder}:${GUI_PATH}`,
+    });
+    expect(result.output).toBe(`user npx in ${home}: -y knowtarium@${VERSION} mcp\n`);
+    expect(result.code).toBe(0);
   });
 });
 
@@ -362,33 +312,23 @@ describe.runIf(windows)("a hostile project folder, on Windows", () => {
   /**
    * Runs the agent config's command in a project folder that has an npx of its own, with the
    * stand-in on the PATH and a profile folder whose path cmd would split at the & if it read it
-   * before the line is parsed. `profile` false runs it without USERPROFILE; `onPath` false leaves
-   * the stand-in off the PATH (only System32 on it, like an agent whose PATH names no Node.js);
-   * `nodeFolder` puts another stand-in, marked `NODE FOLDER`, in the folder the command adds to
-   * the end of the PATH.
+   * before the line is parsed. `profile` false runs it without USERPROFILE.
    */
-  async function runConfigured(
-    npx: (marker: string) => string,
-    { profile = true, onPath = true, nodeFolder = false } = {},
-  ) {
+  async function runConfigured(npx: (marker: string) => string, profile = true) {
     const folder = await temporaryFolder();
     try {
       const root = await realpath(folder.path);
       const home = join(root, "user & home");
       const project = join(root, "project");
       const bin = join(root, "bin");
-      const node = join(root, "nodejs");
-      for (const path of [home, project, bin, node]) await mkdir(path, { recursive: true });
+      for (const path of [home, project, bin]) await mkdir(path, { recursive: true });
       await writeFile(join(bin, "npx.cmd"), npx(""));
-      await writeFile(join(node, "npx.cmd"), npx("NODE FOLDER "));
       await writeFile(join(project, "npx.cmd"), npx("PLANTED "));
-      if (nodeFolder) expect(pathFolder(node, "win32")).toBe(node);
       const server = serverCommand(VERSION, "win32", {
         ...(process.env["ComSpec"] === undefined ? {} : { comSpec: process.env["ComSpec"] }),
         ...(process.env["SystemRoot"] === undefined
           ? {}
           : { systemRoot: process.env["SystemRoot"] }),
-        ...(nodeFolder ? { nodeFolder: node } : {}),
       });
       // Windows spells some names its own way (Path); a second key would leave which one wins to
       // chance
@@ -397,10 +337,7 @@ describe.runIf(windows)("a hostile project folder, on Windows", () => {
       const environment: NodeJS.ProcessEnv = Object.fromEntries(
         Object.entries(process.env).filter(([key]) => key.toUpperCase() !== "USERPROFILE"),
       );
-      const system = join(process.env[keyOf("SYSTEMROOT")] ?? "C:\\Windows", "System32");
-      environment[keyOf("PATH")] = onPath
-        ? `${bin}${delimiter}${process.env[keyOf("PATH")] ?? ""}`
-        : system;
+      environment[keyOf("PATH")] = `${bin}${delimiter}${process.env[keyOf("PATH")] ?? ""}`;
       if (profile) environment["USERPROFILE"] = home;
       return { home, ...(await run(server.command, server.args, project, environment)) };
     } finally {
@@ -421,21 +358,9 @@ describe.runIf(windows)("a hostile project folder, on Windows", () => {
   });
 
   it("stops without USERPROFILE instead of staying in the project folder", async () => {
-    const result = await runConfigured(plainNpx, { profile: false, nodeFolder: true });
+    const result = await runConfigured(plainNpx, false);
     expect(result.output).not.toContain("PLANTED");
     expect(result.output).not.toContain("args:");
     expect(result.code).toBe(1);
-  });
-
-  it("finds npx in the folder of the Node.js that wrote it when the PATH names none", async () => {
-    const result = await runConfigured(plainNpx, { onPath: false, nodeFolder: true });
-    expect(result.output).toBe(`NODE FOLDER args: -y knowtarium@${VERSION} mcp\n${result.home}\n`);
-    expect(result.code).toBe(0);
-  });
-
-  it("keeps the PATH's own npx first", async () => {
-    const result = await runConfigured(delayedNpx, { nodeFolder: true });
-    expect(result.output).toBe(`cwd: ${result.home}\nargs: -y knowtarium@${VERSION} mcp\n`);
-    expect(result.code).toBe(0);
   });
 });

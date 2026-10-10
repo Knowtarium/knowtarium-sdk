@@ -776,26 +776,16 @@ Node.js for MCP" in Claude Desktop applies only to extensions whose server is `n
 never to a config's `npx`, which is why the `.mcpb` (run on Claude Desktop's own Node.js) is still
 the way README and the site point people to for Claude Desktop.
 
-So the command now also adds the folder of the Node.js that wrote it (`process.execPath`, when
-that folder holds `npx` or `npx.cmd`; `npxFolder` in `server-entry.ts`) to the end of the PATH:
-`/bin/sh -c '[ -n "$HOME" ] && cd -- "$HOME" && export PATH="$PATH:<folder>" && exec npx -y
-knowtarium@<version> mcp'`, and on Windows `... (cd /d !USERPROFILE!&& set
-PATH=!PATH!;<folder>&& npx -y knowtarium@<version> mcp) else exit 1` (Windows apps get the user's
-PATH from the registry, but fnm, for one, sets it per shell). At the end, the agent's own PATH
-still comes first: a newer Node.js the person switched to wins, and once that folder is gone (`nvm
-uninstall`, `brew cleanup` after an upgrade) the lookup simply goes on without it, failing only
-where the bare npx failed anyway. `export` matters: npx is `#!/usr/bin/env node`, so node must be
-on the PATH npx gets, not only the shell's. The folder is added only when `pathFolder` accepts it:
-absolute and normalized, letters, digits, spaces and `_ . + @ -` only (so it needs nothing but the
-command's double quotes in sh and no quoting at all in cmd, where `&`, `)`, `%`, `!` and `^` would
-mean something, and no `$`, `{` or `~` an agent could rewrite), no word Cursor would read as
-relative to the project (it splits arguments at spaces and rewrites a word that starts with `./`
-or `~`), and never inside a `node_modules`; else the command is written without it. The web app's
-install links can't know the folder, so they carry the command without it. The tests run it with
-launchd's PATH: a stand-in npx in the folder runs (in sh, bash, dash and busybox `sh` where there
-are), an npx on the agent's own PATH wins, a removed folder fails like a bare npx, and the real npx
-from `dirname(process.execPath)` runs the registry's package; on Windows (CI) the same with a
-PATH of only System32.
+The command doesn't add the folder of the Node.js that wrote it to the PATH, though it was
+tried: `process.execPath` follows symbolic links, and npm's run-script puts the project's
+`node_modules/.bin` first on the PATH, so running `npx knowtarium agents` in a project that
+plants `node_modules/.bin/node` (a link to a Node.js copy in the project, next to an `npx` of its
+own) would write the project's folder into every agent's global config, where it would run later
+for agents started from the Dock. On Windows cmd's lookup in the current folder gives a similar
+route. The agents' own login-shell PATH covers the common case, and Claude Desktop has the `.mcpb`.
+The tests run the command with launchd's PATH (it finds no npx, as a bare npx didn't) and with an
+npx on the PATH (it runs from a home folder with a space in its name, in sh, bash, dash and
+busybox `sh` where there are).
 
 `connect` and `agents` ask which of the agents found to add with a checkbox list (`CliIo.choose`)
 when stdin and stdout are both terminals: every agent starts ticked, so Enter at once adds them
@@ -851,7 +841,7 @@ breaker can take the guard as stale meanwhile), then it looks again; a holder's 
 five seconds, stopping five seconds before its lock could count as stale; the CLI's own atomic
 writes, reads and removals for five seconds. An agent's config (`replaceFile`) is never renamed
 over again after a refusal, since the agent may be saving it right then; that agent is skipped
-(`couldn't write <path> (in use); run npx knowtarium agents again`) and the others are still
+(`couldn't write <path> (in use); run npx knowtarium agents again from your home folder`) and the others are still
 configured. Old config backups that can't be removed stay until a later run.
 
 **The MCP server.** `knowtarium mcp` (the official MCP TypeScript SDK over stdio) serves every
