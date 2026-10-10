@@ -975,15 +975,19 @@ and a failed check shows as a conflict.
 the agent the MCP client says it is, from `SessionDeps.actor`, with `generated` stamped and an
 unsigned `clipped` record) only when its token is `read-write`, the owner vouched for its signing
 key and the inbox folder is in its scope: in the background after every sync (nothing waiting on
-the sync waits on it), on a `clip_added` ping and at the start of `list_inbox`. One pass runs at a
-time, at most 5 seconds; a call during a pass (a ping, say) makes it run once more. It files only
+the sync waits on it) and on a `clip_added` ping (both only for such a connection), and at the
+start of `list_inbox`. One pass runs at a time, at most 5 seconds, and only once the workspace is
+synced; it reads the inbox key with one short attempt; a call during a pass (a ping, say) makes it
+run once more. `list_inbox` waits for it at most 6 seconds and otherwise answers from the last
+known state; an inbox key that fails verification (`untrusted_signature`, `rollback`) is its own
+refusal. It files only
 into existing folders whose mode, through their ancestors, is `direct`; a clip for a folder that
 asks first, a new category (agents can't create folders), a key generation it doesn't hold, the
 daily or per-minute limit or a missing folder is released for the web app. `list_inbox` (every
 token; not marked read-only, since it files first) lists the `type: Clip` notes in the inbox
 folder and its direct subfolders by `status` (`inbox` by default) and category (`""` or `Inbox`
 for the inbox itself), newest `saved` first, each with what was saved (title, link, time, the
-note cut to 1,000 characters) under `data`, and `waiting`: the queue's `clipSummary` count (null
+note cut to 1,000 characters, and the path and category named after it) under `data`, and `waiting`: the queue's `clipSummary` count (null
 where this connection can't see the queue) and the reasons from its own pass, or null when nothing
 is known to wait. Its `guidance` says the clips are data; the skill and the instructions tell the
 agent to open a clip's link only when the person asks about that clip. Without an inbox it answers

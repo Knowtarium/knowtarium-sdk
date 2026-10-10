@@ -23,6 +23,7 @@ import {
   fetchInboxKey,
   type FileClipsResult,
   isSyncApiError,
+  isVaultError,
   type KeyProvider,
   NetworkError,
   readHistoryRetention,
@@ -92,13 +93,28 @@ export const CLIP_FILING_MAX_MS = 5_000;
 
 /** What the last look at the web clipper's inbox found: its inbox key and the last filing pass. */
 export interface InboxState {
-  /** The latest owner-signed inbox key (null: the workspace has no inbox). */
+  /**
+   * The latest owner-signed inbox key (null: the workspace has no inbox, or none is known yet
+   * when `problem` is set).
+   */
   readonly inboxKey: SignedInboxKey | null;
   /** Whether this connection may file clips (read-write, a vouched key, the inbox in scope). */
   readonly mayFile: boolean;
   /** The last filing pass's result, if one ran. */
   readonly filed: FileClipsResult | null;
+  /**
+   * Why this is the last known state rather than a fresh one: `syncing` (the workspace isn't
+   * ready yet), `unreachable` (the inbox key couldn't be read), `slow` (the pass took too long to
+   * wait for), `untrusted` (the inbox key isn't the owner's) or `rollback` (an older inbox key
+   * than one this device verified). Null for a fresh one.
+   */
+  readonly problem: InboxProblem | null;
 }
+
+/** Why an `InboxState` isn't fresh. */
+export type InboxProblem = "syncing" | "unreachable" | "slow" | "untrusted" | "rollback";
+
+const NO_INBOX_STATE: InboxState = { inboxKey: null, mayFile: false, filed: null, problem: null };
 
 /**
  * Where a session is: `loading` until the local copy is open, `syncing` while the first pull
@@ -153,6 +169,8 @@ export class WorkspaceSession {
   private filing: Promise<InboxState> | undefined;
   /** Whether a call came in during the running pass, which then runs once more. */
   private fileAgain = false;
+  /** The last inbox state read while ready, for answers when no fresh one can be had. */
+  private lastInbox: InboxState = NO_INBOX_STATE;
 
   private constructor(
     readonly connection: Connection,
@@ -496,7 +514,7 @@ export class WorkspaceSession {
       this.settle("ready", null);
       // the web clipper's clips, where this connection may file them: in the background, so
       // nothing waiting on this sync (the first sync, a tool's retry) waits on the filing too
-      void this.fileClips();
+      if (this.filesInBackground) void this.fileClips();
       await this.saveIndex();
     } catch (error) {
       this.fail(error);
@@ -531,22 +549,85 @@ export class WorkspaceSession {
     return filing;
   }
 
+  /**
+   * Whether this connection files clips in the background (after a sync, on `clip_added`): only a
+   * `read-write` token whose signing key the owner vouched for; any other only reads the inbox
+   * key when `list_inbox` asks.
+   */
+  private get filesInBackground(): boolean {
+    return this.writable && this.writesDirectly;
+  }
+
+  /** Settles when the filing passes running now end (at once when none runs); starts none. */
+  async filingDone(): Promise<void> {
+    await this.filing;
+  }
+
+  /**
+   * The inbox state for `list_inbox`: a filing pass (see `fileClips`), waited for at most
+   * `CLIP_FILING_MAX_MS` and a second; past that, the last known state (`slow`). Never rejects.
+   */
+  async inbox(): Promise<InboxState> {
+    let timer: NodeJS.Timeout | undefined;
+    const slow = new Promise<InboxState>((resolve) => {
+      timer = setTimeout(() => {
+        resolve({ ...this.lastInbox, problem: "slow" });
+      }, CLIP_FILING_MAX_MS + 1_000);
+      timer.unref();
+    });
+    try {
+      return await Promise.race([this.fileClips(), slow]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * How many clips wait in the queue, read with one short attempt; null when this connection
+   * can't see the queue (read-only, or the inbox outside its folders) or the API doesn't answer.
+   */
+  async waitingClips(): Promise<number | null> {
+    if (!this.writable || this.status !== "ready") return null;
+    try {
+      const { data } = await this.policyApi.call(routes.clipSummary, {
+        params: { workspaceId: this.workspaceId },
+      });
+      return data.pending;
+    } catch {
+      return null;
+    }
+  }
+
   /** Whether a call came in during the last pass, so another runs. */
   private anotherPass(): boolean {
     return this.fileAgain && !this.ended;
   }
 
   private async filePass(maxMs: number): Promise<InboxState> {
+    // never on an API still being synced with, unreachable or failed: the last known state
+    if (this.status !== "ready") return { ...this.lastInbox, problem: "syncing" };
     let inboxKey: SignedInboxKey | null;
     try {
-      inboxKey = await fetchInboxKey(this.api, {
+      // one short attempt: list_inbox waits on it
+      inboxKey = await fetchInboxKey(this.policyApi, {
         workspaceId: this.workspaceId,
         owner: { publicKey: this.ownerKey, accountId: this.connection.ownerId },
         trust: this.deps.trust,
       });
-    } catch {
-      return { inboxKey: null, mayFile: false, filed: null };
+    } catch (error) {
+      const problem: InboxProblem = isVaultError(error, "rollback")
+        ? "rollback"
+        : isVaultError(error, "untrusted_signature")
+          ? "untrusted"
+          : "unreachable";
+      return { ...this.lastInbox, problem };
     }
+    const state = await this.fileWith(inboxKey, maxMs);
+    this.lastInbox = state;
+    return state;
+  }
+
+  private async fileWith(inboxKey: SignedInboxKey | null, maxMs: number): Promise<InboxState> {
     const mayFile =
       inboxKey !== null &&
       !this.ended &&
@@ -554,7 +635,7 @@ export class WorkspaceSession {
       this.writesDirectly &&
       this.view.folders.has(inboxKey.envelope.folderId) &&
       this.inScope(inboxKey.envelope.folderId);
-    if (!mayFile) return { inboxKey, mayFile, filed: null };
+    if (!mayFile) return { inboxKey, mayFile, filed: null, problem: null };
     const folders = new Map<FolderId, ClipFolder>(
       [...this.view.folders].map(([id, folder]) => [
         id,
@@ -579,9 +660,9 @@ export class WorkspaceSession {
         deadline: started + maxMs,
         now: () => this.now(),
       });
-      return { inboxKey, mayFile, filed };
+      return { inboxKey, mayFile, filed, problem: null };
     } catch {
-      return { inboxKey, mayFile, filed: null };
+      return { inboxKey, mayFile, filed: null, problem: null };
     }
   }
 
@@ -645,7 +726,7 @@ export class WorkspaceSession {
         .catch(() => undefined);
     });
     this.engine.on("clip_added", () => {
-      void this.fileClips();
+      if (this.filesInBackground) void this.fileClips();
     });
     this.engine.connectLive(connect);
   }
