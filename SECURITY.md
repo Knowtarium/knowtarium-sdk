@@ -18,8 +18,9 @@ credit you in the release notes if you'd like.
 
 - **The Claude Code plugin on Windows.** Claude Code, like other Node-based clients on Windows,
   looks for the plugin's `node` in the project folder first, so a `node.exe` placed in a project
-  you open would start instead of Node.js. On Windows, `npx knowtarium agents` gives the hardened
-  setup: it names `cmd.exe` by its full path and runs npx from your home folder.
+  you open would start instead of Node.js. On Windows, `npx knowtarium agents`, run from your home
+  folder, gives the hardened setup: it names `cmd.exe` by its full path and runs npx from your home
+  folder.
 - **Commands you type.** `npx knowtarium connect` and `npx knowtarium@latest agents` run npx in
   the terminal's current folder, where npm trusts what the folder contains (a `node_modules` or
   `.npmrc` a project planted). Run them from your home folder, not from inside a project.

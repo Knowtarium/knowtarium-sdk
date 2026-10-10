@@ -505,7 +505,7 @@ describe("file writes and reads on Windows", () => {
       ["cursor", "skipped"],
     ]);
     expect(results[1]?.reason).toBe(
-      `couldn't write ${results[1]?.path ?? ""} (in use); run \`npx knowtarium agents\` again.`,
+      `couldn't write ${results[1]?.path ?? ""} (in use); run \`npx knowtarium agents\` again from your home folder.`,
     );
     expect(results[1]?.path.endsWith(join(".cursor", "mcp.json"))).toBe(true);
     expect(await readFile(join(home, ".cursor", "mcp.json"), "utf8")).toBe("{}");

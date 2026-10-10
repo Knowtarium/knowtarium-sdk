@@ -129,7 +129,7 @@ export async function configureAgents(
       results.push({
         ...base,
         status: "skipped",
-        reason: `couldn't write ${path} (${why}); run \`npx knowtarium agents\` again.`,
+        reason: `couldn't write ${path} (${why}); run \`npx knowtarium agents\` again from your home folder.`,
       });
     }
   }

@@ -54,8 +54,8 @@ to date (older versions ran npx in the project folder), or run
   your notes.
 - **On Windows**, Claude Code looks for the `node` above in the project folder first, so a
   `node.exe` placed in a project you open would start instead of Node.js. For the hardened setup on
-  Windows, use `npx knowtarium agents` instead of this plugin: the entry it writes names `cmd.exe`
-  by its full path and runs npx from your home folder.
+  Windows, run `npx knowtarium agents` from your home folder instead of using this plugin: the
+  entry it writes names `cmd.exe` by its full path and runs npx from your home folder too.
 - **People stay in charge**: Claude's changes are signed as its own and can be undone, folders can
   ask for approval first, and Claude can't delete notes or mark a note as checked by a person.
   Note text, comments and diffs reach Claude as data to read, never as instructions to follow.

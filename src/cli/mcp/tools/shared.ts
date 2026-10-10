@@ -24,10 +24,10 @@ export class ToolError extends Error {
 
 /** What an agent tells the person when its connection can only propose. */
 export const RECONNECT_ADVICE =
-  "Mention it to the person once: they can run `npx knowtarium connect` again, then restart the agent (in Claude Desktop, reconnect from the extension), to let you write directly where the workspace allows it.";
+  "Mention it to the person once: they can run `npx knowtarium connect` again from their home folder, then restart the agent (in Claude Desktop, reconnect from the extension), to let you write directly where the workspace allows it.";
 
 export const NOT_CONNECTED =
-  "Knowtarium isn't connected on this computer. Ask the person to run `npx knowtarium connect`, then restart this MCP server.";
+  "Knowtarium isn't connected on this computer. Ask the person to run `npx knowtarium connect` from their home folder, then restart this MCP server.";
 
 /** The `workspace` argument every tool takes. */
 export const workspaceArg = z
@@ -226,7 +226,7 @@ async function defaultSession(context: ToolContext): Promise<WorkspaceSession> {
   if (usable.length === 1 && only !== undefined) return only;
   if (usable.length === 0) {
     throw new ToolError(
-      `None of the connected workspaces can be used: ${context.sessions.map(described).join("; ")}. Ask the person to run \`npx knowtarium connect\` to connect a workspace again, then restart the agent.`,
+      `None of the connected workspaces can be used: ${context.sessions.map(described).join("; ")}. Ask the person to run \`npx knowtarium connect\` from their home folder to connect a workspace again, then restart the agent.`,
     );
   }
   const ended = context.sessions.filter((session) => session.ended);

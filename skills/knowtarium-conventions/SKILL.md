@@ -27,7 +27,8 @@ agent's consistency check, so both sides verify each other.
   broad change (many notes, a restructure) or one you're unsure of. Say why in the `summary`. The
   person sees the note as edited by you and can undo it.
 - **If this connection can only propose**, mention it to the person once: they can run
-  `npx knowtarium connect` again, then restart the agent (in Claude Desktop, reconnect from the
+  `npx knowtarium connect` again from their home folder (`cd ~ && npx knowtarium connect` on macOS
+  and Linux, never in a project), then restart the agent (in Claude Desktop, reconnect from the
   extension), so you can write directly where the workspace allows it.
 - **Never write a `human:` entry.** Only people sign as `human:`. The tools refuse a change that
   adds one, and you must not try to work around that.

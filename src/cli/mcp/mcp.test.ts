@@ -1423,7 +1423,9 @@ describe("changes written directly or proposed, by the folder's policy", () => {
       })
     ).json() as Proposed;
     expect(proposed.mode).toBe("proposed");
-    expect(proposed.reason).toMatch(/`npx knowtarium connect` again, then restart the agent/);
+    expect(proposed.reason).toMatch(
+      /`npx knowtarium connect` again from their home folder, then restart the agent/,
+    );
     expect(proposed.reason).toMatch(/didn't vouch/);
     // no direct write was even tried
     expect(world.server.requests.some((request) => request.url.includes("agent-version"))).toBe(

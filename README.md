@@ -51,15 +51,15 @@ codex plugin add knowtarium@knowtarium
 ```
 
 All of them run the same server as `npx knowtarium connect` sets up. With a plugin, connect this
-computer by asking your agent to connect Knowtarium, or with `npx knowtarium connect --no-agents`:
-the plugin already adds the server (`connect` and `agents` leave an agent with the plugin unticked,
+computer by asking your agent to connect Knowtarium, or with `npx knowtarium connect --no-agents`
+from your home folder: the plugin already adds the server (`connect` and `agents` leave an agent with the plugin unticked,
 so it doesn't run twice, but always update an entry of its own that an earlier `connect` added,
 and say how to remove it).
 
 On Windows, Claude Code (like other Node-based clients) looks for the plugin's `node` in the
 project folder first, so a `node.exe` placed in a project you open would start instead of Node.js.
-For the hardened setup on Windows, use `npx knowtarium agents` instead of the Claude Code plugin:
-the entry it writes names `cmd.exe` by its full path. Knowtarium isn't in the MCP Registry yet: an
+For the hardened setup on Windows, run `npx knowtarium agents` from your home folder instead of
+using the Claude Code plugin: the entry it writes names `cmd.exe` by its full path. Knowtarium isn't in the MCP Registry yet: an
 agent that installs servers from a registry writes a bare `npx knowtarium@<version> mcp`, which
 runs npx in the project folder, so use one of the ways above.
 

@@ -435,7 +435,7 @@ export class WorkspaceSession {
     if (this.deps.stillConnected === undefined || (await this.deps.stillConnected())) return true;
     this.settle(
       "disconnected",
-      "This workspace was disconnected on this computer (`npx knowtarium disconnect`); connect it again with `npx knowtarium connect`, then restart the agent.",
+      "This workspace was disconnected on this computer (`npx knowtarium disconnect`); connect it again with `npx knowtarium connect` from your home folder, then restart the agent.",
     );
     this.deps.onDisconnected?.();
     return false;
@@ -566,7 +566,7 @@ export function disconnectCommandFor(workspaceId: string): string {
  * taken away on purpose, or its account is gone) or connect it again.
  */
 function revokedProblem(workspaceId: WorkspaceId): string {
-  return `This agent's access to workspace ${workspaceId} was revoked (in the web app, or its account was deleted), so this connection can't be used any more. To remove it from this computer, run \`${disconnectCommandFor(workspaceId)}\`; to keep using the workspace, run \`npx knowtarium connect\` to connect it again. Then restart the agent.`;
+  return `This agent's access to workspace ${workspaceId} was revoked (in the web app, or its account was deleted), so this connection can't be used any more. To remove it from this computer, run \`${disconnectCommandFor(workspaceId)}\`; to keep using the workspace, run \`npx knowtarium connect\` from your home folder to connect it again. Then restart the agent.`;
 }
 
 /** A sentence for a failed API call, saying what to do. */
@@ -578,7 +578,7 @@ export function describeFailure(error: unknown): string {
     switch (error.code) {
       case "token_revoked":
       case "unauthenticated":
-        return "This agent's access was revoked. Run `npx knowtarium connect` to connect again, then restart the agent so it picks up the new connection.";
+        return "This agent's access was revoked. Run `npx knowtarium connect` from your home folder to connect again, then restart the agent so it picks up the new connection.";
       case "quota_exceeded":
       case "workspace_limit":
         // the parsed body always carries both; a made-up one (a proxy's page) never has these codes

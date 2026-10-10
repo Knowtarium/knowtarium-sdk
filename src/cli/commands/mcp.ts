@@ -40,7 +40,9 @@ export async function mcpCommand(context: CliContext, argv: readonly string[]): 
     log(`knowtarium: ${notConnected}`);
   }
   if (connections.length === 0 && notConnected === undefined) {
-    log("knowtarium: not connected. Use the connect tool, or run `npx knowtarium connect`.");
+    log(
+      "knowtarium: not connected. Use the connect tool, or run `npx knowtarium connect` from your home folder.",
+    );
   }
 
   const adapter = new GuardedCacheAdapter(new FileCacheAdapter(context.env.cache));

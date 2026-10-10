@@ -36,8 +36,8 @@ download [knowtarium.mcpb]({{mcpbUrl}}), open it, then ask Claude to connect Kno
 your home folder. It connects this computer and adds Knowtarium to the agents it finds.
 
 After installing a plugin, connect this computer once: ask your agent to connect Knowtarium, or run
-`npx knowtarium connect --no-agents` in a terminal (the plugin already adds the server, and adding
-it again would run it twice). Your browser opens, you sign in and approve this computer, and no
+`npx knowtarium connect --no-agents` in a terminal, from your home folder (the plugin already adds
+the server, and adding it again would run it twice). Your browser opens, you sign in and approve this computer, and no
 password, token or key goes in your agent's settings. The plugins need Node.js 20 or later.
 
 ## What the plugins run, send and store
@@ -54,7 +54,7 @@ Both plugins hold the same two things: a skill for working in a Knowtarium works
   {{repository}}.
 - **On Windows**, Claude Code looks for the plugin's `node` in the project folder first, so a
   `node.exe` placed in a project you open would start instead of Node.js. For the hardened setup
-  there, use `npx knowtarium agents` instead of the Claude Code plugin.
+  there, run `npx knowtarium agents` from your home folder instead of using the Claude Code plugin.
 - **They talk** only to the Knowtarium sync API at `{{apiHost}}`. Note text, file and folder
   names, comments and history are encrypted on your computer before they're sent, and decrypted
   only there. The API never sees note content or names: it sees IDs and how they nest, versions,

@@ -176,7 +176,7 @@ describe("how the agent's changes land", () => {
     expect(await run("status")).toBe(0);
     expect(context.io.lines).toContain("  changes   read, and propose changes for approval");
     expect(context.io.lines.join("\n")).toMatch(
-      /run `npx knowtarium connect` again, then restart your agents/,
+      /run `npx knowtarium connect` again from your home folder, then restart your agents/,
     );
   });
 });
