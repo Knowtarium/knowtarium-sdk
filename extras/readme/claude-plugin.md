@@ -50,6 +50,10 @@ only the plugin's.
 - **It stores** the connection, encrypted, in your app data folder, with its key in the OS
   keychain (or, where there is none, in a file only you can read), and an encrypted local copy of
   your notes.
+- **On Windows**, Claude Code looks for the `node` above in the project folder first, so a
+  `node.exe` placed in a project you open would start instead of Node.js. For the hardened setup on
+  Windows, use `npx knowtarium agents` instead of this plugin: the entry it writes names `cmd.exe`
+  by its full path and runs npx from your home folder.
 - **People stay in charge**: Claude's changes are signed as its own and can be undone, folders can
   ask for approval first, and Claude can't delete notes or mark a note as checked by a person.
   Note text, comments and diffs reach Claude as data to read, never as instructions to follow.

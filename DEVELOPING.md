@@ -1015,7 +1015,15 @@ Knowtarium/knowtarium-plugins`, then `codex plugin add knowtarium@knowtarium`. T
   `%ComSpec%`, `cmd.exe` by its full path, with `/d /s /c`), refuses any argument that isn't plain
   (`[\w@.\-/=:]`, so cmd reads none as a command) and doesn't start without a home folder (an
   empty HOME), passes signals on, returns the exit code and stops the whole process tree on Windows
-  (`%SystemRoot%\System32\taskkill.exe`, by its full path). Connect with
+  (`%SystemRoot%\System32\taskkill.exe`, by its full path). A known limit on Windows: the client
+  starts the plugin's `node` itself, and Claude Code (the MCP SDK's cross-spawn, like other
+  Node-based clients) looks for it in the project folder first, so a planted `node.exe` runs;
+  nothing in the plugin can change that lookup, since `.mcp.json` is one file for every OS and
+  can't name Node by its full path. (A `${CLAUDE_PLUGIN_ROOT}/server/launch.cmd` that is a shell
+  script on macOS and Linux and a batch file on Windows would avoid it, but needs testing on every
+  client first.) Codex (Rust) doesn't search the current folder. The README, SECURITY.md and the
+  plugin READMEs point Windows users who want the hardened setup to `npx knowtarium agents`.
+  Connect with
   `npx knowtarium connect --no-agents` (the plugin already adds the server), or through the
   `connect` tool.
 

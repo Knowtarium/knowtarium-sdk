@@ -52,6 +52,9 @@ Both plugins hold the same two things: a skill for working in a Knowtarium works
   [`knowtarium`](https://www.npmjs.com/package/knowtarium) package at exactly that version, with the
   dependency versions its shrinkwrap pins, and starts its MCP server on stdio. Its source is at
   {{repository}}.
+- **On Windows**, Claude Code looks for the plugin's `node` in the project folder first, so a
+  `node.exe` placed in a project you open would start instead of Node.js. For the hardened setup
+  there, use `npx knowtarium agents` instead of the Claude Code plugin.
 - **They talk** only to the Knowtarium sync API at `{{apiHost}}`. Note text, file and folder
   names, comments and history are encrypted on your computer before they're sent, and decrypted
   only there. The API never sees note content or names: it sees IDs and how they nest, versions,

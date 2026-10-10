@@ -55,6 +55,13 @@ the plugin already adds the server (`connect` and `agents` leave an agent with t
 so it doesn't run twice, but always update an entry of its own that an earlier `connect` added,
 and say how to remove it).
 
+On Windows, Claude Code (like other Node-based clients) looks for the plugin's `node` in the
+project folder first, so a `node.exe` placed in a project you open would start instead of Node.js.
+For the hardened setup on Windows, use `npx knowtarium agents` instead of the Claude Code plugin:
+the entry it writes names `cmd.exe` by its full path. Knowtarium isn't in the MCP Registry yet: an
+agent that installs servers from a registry writes a bare `npx knowtarium@<version> mcp`, which
+runs npx in the project folder, so use one of the ways above.
+
 ## Commands
 
 | Command                                             | What it does                                                                     |
