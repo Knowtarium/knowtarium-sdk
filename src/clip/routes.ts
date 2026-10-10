@@ -74,7 +74,10 @@ export interface ExtensionInboxKeyResponse {
   readonly inboxKey: SignedInboxKey;
 }
 
-/** The error codes the extension's routes answer, with their HTTP status. */
+/**
+ * The error codes the extension's routes answer, with their HTTP status (`getExtensionInboxKey`
+ * and `postClip` answer `inbox_not_set` when the workspace has no inbox key).
+ */
 export const EXTENSION_ERROR_STATUS = {
   invalid_request: 400,
   unsupported_protocol: 400,
@@ -87,6 +90,8 @@ export const EXTENSION_ERROR_STATUS = {
   already_exists: 409,
   /** The body carries the latest `inboxKey`: verify it, seal again, retry once. */
   stale_inbox_key: 409,
+  /** The workspace has no inbox key (it went missing): connect again from the web app. */
+  inbox_not_set: 409,
   expired: 410,
   payload_too_large: 413,
   rate_limited: 429,

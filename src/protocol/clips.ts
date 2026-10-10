@@ -62,6 +62,12 @@ export const CLIP_QUEUE_LIMITS = {
 } as const;
 
 /**
+ * The most paired extensions a workspace may have at once (revoked ones don't count): another
+ * approval answers 400 `invalid_request` until one is disconnected.
+ */
+export const MAX_LIVE_EXTENSIONS = 50;
+
+/**
  * The secret a paired extension sends as `Authorization: Bearer kte_...`. The web app makes it
  * at approval; the server only ever holds its SHA-256.
  */

@@ -68,6 +68,7 @@ import {
   CLIP_QUEUE_LIMITS,
   type ExtensionId,
   type ExtensionInfo,
+  MAX_LIVE_EXTENSIONS,
   type QueuedClip,
   type SignedInboxKey,
 } from "../../protocol/index.js";
@@ -274,12 +275,25 @@ export class FakeServer {
   /** Connect requests by ID, with what a poll answers. */
   readonly connectRequests = new Map<
     string,
-    { pollSecret: string; status: "pending" | "approved" | "denied" | "expired"; relay?: string }
+    {
+      pollSecret: string;
+      status: "pending" | "approved" | "denied" | "expired";
+      relay?: string;
+      /** Who started it: the CLI, or an extension (`client: "extension"`). */
+      client?: "cli" | "extension";
+      /** When it expires, in milliseconds (10 minutes after it started). */
+      expiresAt?: number;
+    }
   >();
   /** Every `inbox_key` revision stored, oldest first (the web clipper). */
   readonly inboxKeys: SignedInboxKey[] = [];
   /** The clip queue, by clip ID, with each clip's lease (milliseconds; 0 or past: free). */
-  readonly clipQueue = new Map<ClipId, QueuedClip & { leaseUntil: number }>();
+  readonly clipQueue = new Map<
+    ClipId,
+    QueuedClip & { leaseUntil: number; leaseHolder?: string | null }
+  >();
+  /** The `inbox_key` signatures `putInboxKey` used. */
+  private readonly usedInboxSignatures = new Set<string>();
   /** The paired extensions `listExtensions` answers (push one to pair it). */
   readonly extensions: (ExtensionInfo & { revokedAt: string | null })[] = [];
   /** The clip IDs acked and released, in order, and how many claims came in. */
@@ -917,11 +931,13 @@ export class FakeServer {
       case "startConnect": {
         const requestId = this.id("cr");
         const pollSecret = `ktp_${"p".repeat(40)}${String(this.counter)}`;
-        this.connectRequests.set(requestId, { pollSecret, status: "pending" });
+        const expiresAt = Date.now() + 600_000;
+        const client = this.json(request)["client"] === "extension" ? "extension" : "cli";
+        this.connectRequests.set(requestId, { pollSecret, status: "pending", client, expiresAt });
         return response(201, {
           requestId,
           pollSecret,
-          expiresAt: new Date(Date.now() + 600_000).toISOString(),
+          expiresAt: new Date(expiresAt).toISOString(),
           pollIntervalSeconds: 1,
         });
       }
@@ -945,6 +961,10 @@ export class FakeServer {
         return response(200, { token: this.agentTokenInfo() });
       case "approveConnect": {
         // the agent-key part of the sync API's approval (the token and keys are the World's)
+        const asked = this.connectRequests.get(request.params["requestId"] ?? "");
+        if (asked?.client === "extension") {
+          throw invalid(["params", "requestId"], "an extension's request");
+        }
         const body = this.json(request) as {
           tokenId: TokenId;
           signPublicKey?: string;
@@ -1795,6 +1815,11 @@ export class FakeServer {
     return this.inboxKeys.at(-1) ?? null;
   }
 
+  /** Who holds the leases a request takes: the owner's session, or the agent's token. */
+  private leaseHolderOf(request: Request): string {
+    return request.caller === "session" ? "session" : `token:${this.options.tokenId}`;
+  }
+
   /** Who may claim, ack and release: the owner's session, or a read-write agent over the inbox. */
   private checkClipAccess(request: Request): void {
     if (request.caller === "session") return;
@@ -1841,7 +1866,10 @@ export class FakeServer {
           folderId: body.folderId,
           createdAt: body.signedAt,
         } as const;
+        // a signature is good for one request, as on every signed route of the sync API
+        if (this.usedInboxSignatures.has(body.signature)) throw new HttpError("invalid_signature");
         this.verify(fields, body.signature);
+        this.usedInboxSignatures.add(body.signature);
         const stored = { envelope: fields, signature: body.signature };
         this.inboxKeys.push(stored);
         return response(200, { inboxKey: stored });
@@ -1854,7 +1882,10 @@ export class FakeServer {
           .filter((clip) => clip.leaseUntil <= now)
           .sort((a, b) => Date.parse(a.postedAt) - Date.parse(b.postedAt))
           .slice(0, max);
-        for (const clip of free) clip.leaseUntil = now + CLIP_QUEUE_LIMITS.leaseSeconds * 1000;
+        for (const clip of free) {
+          clip.leaseUntil = now + CLIP_QUEUE_LIMITS.leaseSeconds * 1000;
+          clip.leaseHolder = this.leaseHolderOf(request);
+        }
         return response(200, {
           clips: free.map(({ clipId, extensionId, generation, blob, postedAt }) => ({
             clipId,
@@ -1875,8 +1906,12 @@ export class FakeServer {
             this.clipQueue.delete(clipId);
             this.acked.push(clipId);
           } else {
+            // only the caller's own leases: another filer's stay with it
             const clip = this.clipQueue.get(clipId);
-            if (clip !== undefined) clip.leaseUntil = 0;
+            if (clip?.leaseHolder === this.leaseHolderOf(request)) {
+              clip.leaseUntil = 0;
+              clip.leaseHolder = null;
+            }
             this.releasedClips.push(clipId);
           }
         }
@@ -1903,10 +1938,20 @@ export class FakeServer {
         return response(200, { ok: true });
       }
       case "approveExtensionConnect": {
+        // in the sync API's order of refusals
         const entry = this.connectRequests.get(request.params["requestId"] ?? "");
         if (entry === undefined) throw new HttpError("not_found");
+        if (entry.expiresAt !== undefined && Date.now() > entry.expiresAt) {
+          throw new HttpError("expired");
+        }
         if (entry.status !== "pending") throw new HttpError("already_exists");
+        if (entry.client !== "extension")
+          throw invalid(["params", "requestId"], "not an extension's");
         if (this.inboxKey === null) throw new HttpError("inbox_not_set");
+        const live = this.extensions.filter((extension) => extension.revokedAt === null);
+        if (live.length >= MAX_LIVE_EXTENSIONS) {
+          throw invalid(["body", "workspaceId"], "too many paired extensions");
+        }
         const body = this.json(request) as {
           extensionId: ExtensionId;
           tokenSecretSha256: string;

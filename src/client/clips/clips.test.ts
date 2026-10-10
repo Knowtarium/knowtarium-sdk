@@ -27,6 +27,7 @@ import {
   clipNoteId,
   type ExtensionId,
   type FolderId,
+  MAX_LIVE_EXTENSIONS,
   type NoteId,
   routes,
   type SignedInboxKey,
@@ -1025,6 +1026,78 @@ describe("the inbox key's rollback marks and echo", () => {
       (caught: unknown) => caught,
     );
     expect(isVaultError(refused, "untrusted_signature")).toBe(true);
+  });
+});
+
+describe("the fake sync API, as the real one", () => {
+  it("releases only the caller's own leases", async () => {
+    const { world, web, inboxKey } = await withInbox();
+    const clipId = save(world, pair(world), inboxKey);
+    const cli = world.cli();
+    const params = { workspaceId: world.workspaceId };
+    await cli.api.call(routes.claimClips, { params, body: {} });
+    const leased = world.server.clipQueue.get(clipId)?.leaseUntil ?? 0;
+    expect(leased).toBeGreaterThan(0);
+    await web.api.call(routes.releaseClips, { params, body: { clipIds: [clipId] } });
+    expect(world.server.clipQueue.get(clipId)?.leaseUntil).toBe(leased);
+    await cli.api.call(routes.releaseClips, { params, body: { clipIds: [clipId] } });
+    expect(world.server.clipQueue.get(clipId)?.leaseUntil).toBe(0);
+  });
+
+  it("refuses an inbox key signature used before", async () => {
+    const { world, web, inboxId } = await withInbox();
+    const signed = world.server.inboxKey;
+    if (signed === null) throw new Error("no inbox key");
+    world.server.inboxKeys.length = 0;
+    const replay = await web.api
+      .call(routes.putInboxKey, {
+        params: { workspaceId: world.workspaceId },
+        body: {
+          baseRevision: 0,
+          generation: 1,
+          publicKey: signed.envelope.publicKey,
+          folderId: inboxId,
+          signedAt: signed.envelope.createdAt,
+          signature: signed.signature,
+        },
+      })
+      .catch((caught: unknown) => caught);
+    expect(isSyncApiError(replay, "invalid_signature")).toBe(true);
+  });
+
+  it("approves only a pending, unexpired extension request, up to 50 live extensions", async () => {
+    const { world, web, inboxKey } = await withInbox();
+    const approve = async (requestId: string) =>
+      approveExtension(
+        web.api,
+        { signer: world.signer, keys: web.keys },
+        {
+          requestId: requestId as never,
+          workspaceId: world.workspaceId,
+          signPublicKey: createExtensionKeys().publicKey,
+          secret: createConnectSecret(),
+          name: "Chrome",
+          workspaceName: "Clients",
+          inboxKey,
+          categories: [],
+        },
+      ).catch((caught: unknown) => caught);
+    const start = async (body: Record<string, string>) =>
+      (await web.api.call(routes.startConnect, { body: body as never })).data.requestId;
+    const cli = await start({ cliVersion: "0.1.4" });
+    expect(isSyncApiError(await approve(cli), "invalid_request")).toBe(true);
+    const old = await start({ client: "extension", extensionVersion: "0.1.0" });
+    const entry = world.server.connectRequests.get(old);
+    if (entry !== undefined) entry.expiresAt = Date.now() - 1;
+    expect(isSyncApiError(await approve(old), "expired")).toBe(true);
+    for (let i = world.server.extensions.length; i < MAX_LIVE_EXTENSIONS; i++) pair(world);
+    const over = await start({ client: "extension", extensionVersion: "0.1.0" });
+    expect(isSyncApiError(await approve(over), "invalid_request")).toBe(true);
+    // a revoked one frees its place
+    const first = world.server.extensions[0];
+    if (first !== undefined) first.revokedAt = new Date().toISOString();
+    const fits = await start({ client: "extension", extensionVersion: "0.1.0" });
+    expect(await approve(fits)).toHaveProperty("extension");
   });
 });
 

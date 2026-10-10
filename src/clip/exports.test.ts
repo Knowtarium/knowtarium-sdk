@@ -55,6 +55,8 @@ describe("the knowtarium/clip entry", () => {
     expect(clip.CLIP_LIMITS.sealedBytes).toBe(protocol.CLIP_QUEUE_LIMITS.sealedClipBytes);
     expect(clip.CLIP_FORMAT_VERSION).toBe(protocol.SEALED_CLIP_FORMAT);
     expect(clip.POST_CLIP_STATUS).toEqual(protocol.POST_CLIP_STATUS);
+    // the inbox key routes answer it when the workspace has none
+    expect(clip.EXTENSION_ERROR_STATUS.inbox_not_set).toBe(protocol.ERROR_STATUS.inbox_not_set);
     expect(protocol.routes.postClip.status).toBe(protocol.POST_CLIP_STATUS.queued);
   });
 
