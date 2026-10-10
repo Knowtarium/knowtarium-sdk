@@ -700,19 +700,45 @@ web app (default production); they must be `https://`, or plain `http://` only t
 `127.0.0.1` (development), so a stray setting can't send the token and the notes over plain HTTP.
 
 **Agents.** Knowtarium's server, pinned to the CLI's own version (`npx -y knowtarium@<version>
-mcp`, through `cmd /c` on Windows), is added to Claude Code (`~/.claude.json`), Claude Desktop
-(`claude_desktop_config.json` in Application Support, `%APPDATA%\Claude` or the Microsoft Store
-build's `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude`, or `~/.config/Claude`),
-Cursor (`~/.cursor/mcp.json`), Codex (`~/.codex/config.toml`) and OpenCode
-(`~/.config/opencode/opencode.json` or `opencode.jsonc`). Only Knowtarium's own `command` and
-`args` are set; other servers, settings and the entry's own extra keys (such as `env`) stay.
-Codex's TOML is parsed with a real parser (an entry is found as its own table, with quoted keys,
-or inline under `[mcp_servers]`) and the result must parse back to the same config plus that
-change. A file that can't be edited safely (JSON with comments, say) is skipped, never
-overwritten. The file is read again right before the write; a symlinked config keeps its link;
-the previous file is copied to `<name>.knowtarium-backup-<time>` (the last three are kept) with
-its permissions; a second run changes nothing; `--dry-run` writes nothing; an unknown `--agent`
-id is an error.
+mcp`), is added to Claude Code (`~/.claude.json`), Claude Desktop (`claude_desktop_config.json`
+in Application Support, `%APPDATA%\Claude` or the Microsoft Store build's
+`%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude`, or `~/.config/Claude`), Cursor
+(`~/.cursor/mcp.json`), Codex (`~/.codex/config.toml`) and OpenCode
+(`~/.config/opencode/opencode.json` or `opencode.jsonc`).
+Only Knowtarium's own `command` and `args` are set; other servers, settings and the entry's own
+extra keys (such as `env`) stay. Codex's TOML is parsed with a real parser (an entry is found as
+its own table, with quoted keys, or inline under `[mcp_servers]`) and the result must parse back to
+the same config plus that change. A file that can't be edited safely (JSON with comments, say) is
+skipped, never overwritten. The file is read again right before the write; a symlinked config
+keeps its link; the previous file is copied to `<name>.knowtarium-backup-<time>` (the last three
+are kept) with its permissions; a second run changes nothing; `--dry-run` writes nothing; an
+unknown `--agent` id is an error.
+
+**Never in the project's folder.** Agents start a server in the project folder they have open, and
+npx trusts the folder it runs in: it runs a `node_modules/knowtarium` of the pinned version planted
+there or in a parent (or a `node_modules/.bin/knowtarium@<version>`) instead of the registry's
+package, applies the folder's `.npmrc` (`node-options=--require ./x.cjs` runs code before the
+CLI), and runs the package's bin with the folder's `node_modules/.bin` on the PATH ahead of the
+real `node`, so a planted `node_modules/.bin/node` runs instead. Opening a hostile repository would
+run its code in the process that holds the Knowtarium keys. So the command goes to the user's home
+folder before npx starts: `/bin/sh -c "cd && exec npx -y knowtarium@<version> mcp"`, and on
+Windows `<%ComSpec%> /d /v:on /s /c "cd /d !USERPROFILE!&& npx -y knowtarium@<version> mcp"`:
+Windows' own `cmd.exe` by its full path (a bare `cmd` or `npx` is looked up in the current folder
+first), `/d` so no AutoRun runs, and the profile path expanded only after the line is parsed
+(`/v:on`), so a path with `&` in it stays a path. npm then finds no project but the user's home,
+whose `.npmrc` is the user's own config anyway; the user's `~/.npmrc` and `npm_config_*` settings
+(a company registry) apply as before. `--prefix <private folder>` was considered and isn't used:
+it stops the planted package and `.npmrc`, but npx still runs the bin from the current folder (the
+planted `node` runs), and it moves npm's global config to `<prefix>/etc/npmrc`. Claude Code starts
+a server in the project's root, Codex and OpenCode in the workspace; Codex and OpenCode have a
+`cwd` setting, Cursor an undocumented one (its global servers start in the home folder), Claude
+Code and Claude Desktop none, so the command itself moves, the same way for every agent. The
+version must be a plain semver and every argument plain (`[\w@.\-/=:]`), checked before anything
+is written. `src/cli/agents/hostile-folder.test.ts` plants all of the above, runs the written
+command and the plugins' launcher in that folder with the real npx and a registry on `127.0.0.1`
+(set in the user's own `~/.npmrc`), and checks that the registry's package runs and nothing
+planted does (a bare `npx` there runs a planted one); on Windows (CI) a stand-in npx checks that
+the command moves to the profile folder before it looks for `npx`.
 
 `connect` and `agents` ask which of the agents found to add with a checkbox list (`CliIo.choose`)
 when stdin and stdout are both terminals: every agent starts ticked, so Enter at once adds them
@@ -954,9 +980,12 @@ Knowtarium/knowtarium-plugins`, then `codex plugin add knowtarium@knowtarium`. T
   `node server/launch.mjs -y knowtarium@<version> mcp` from the plugin root (`${CLAUDE_PLUGIN_ROOT}`
   in the Claude Code plugin's `.mcp.json`, `${PLUGIN_ROOT}` in the Codex plugin's `mcp.json`, which
   follows the portable Agent Plugins format), so the exact version is in plain sight in the config;
-  the launcher starts `npx` with those arguments (through `cmd /c` on Windows), passes signals on,
-  returns the exit code and stops the whole process tree on Windows. Connect with
-  `npx knowtarium connect` first, or through the `connect` tool.
+  the launcher starts `npx` with those arguments in the user's home folder, never the project the
+  client starts it in (see **Never in the project's folder** above; on Windows through
+  `%ComSpec%`, `cmd.exe` by its full path, with `/d /s /c`), refuses any argument that isn't plain
+  (`[\w@.\-/=:]`, so cmd reads none as a command), passes signals on, returns the exit code and
+  stops the whole process tree on Windows. Connect with `npx knowtarium connect` first, or through
+  the `connect` tool.
 
 `pnpm build:extras` builds them into `dist-extras/` (see `RELEASING.md`): it refuses a release
 build until `knowtarium@<version>` is on npm (`--dev` makes a labeled development build), checks

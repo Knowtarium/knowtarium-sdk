@@ -45,7 +45,8 @@ server.
 
 - **They run** a small launcher in the plugin, `node server/launch.mjs -y knowtarium@{{version}} mcp`
   (the arguments are in the plugin's `.mcp.json` or `mcp.json`), which runs
-  `npx -y knowtarium@{{version}} mcp`: npx downloads the open source
+  `npx -y knowtarium@{{version}} mcp` from your home folder, never the project folder (so nothing a
+  project plants in `node_modules` or `.npmrc` runs instead): npx downloads the open source
   [`knowtarium`](https://www.npmjs.com/package/knowtarium) package at exactly that version, with the
   dependency versions its shrinkwrap pins, and starts its MCP server on stdio. Its source is at
   {{repository}}.

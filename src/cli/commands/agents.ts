@@ -24,11 +24,15 @@ function describe(result: AgentResult): string {
 }
 
 /** How to add the MCP server to an agent by hand, for one that was skipped. */
-export function handAdd(result: AgentResult, server: ServerCommand): string {
+export function handAdd(
+  result: AgentResult,
+  server: ServerCommand,
+  platform: NodeJS.Platform,
+): string {
   const args = JSON.stringify(server.args);
   switch (result.agent) {
     case "claude-code":
-      return `claude mcp add --scope user ${SERVER_NAME} -- ${commandLine(server)}`;
+      return `claude mcp add --scope user ${SERVER_NAME} -- ${commandLine(server, platform)}`;
     case "codex":
       return `in ${result.path}: [mcp_servers.${SERVER_NAME}] command = ${JSON.stringify(server.command)} args = ${args}`;
     case "opencode":
@@ -62,7 +66,8 @@ export async function setUpAgents(
   },
 ): Promise<AgentResult[]> {
   const { io } = context;
-  const server = serverCommand(context.version, context.env.platform);
+  const { platform } = context.env;
+  const server = serverCommand(context.version, platform, context.env);
   const all = agentTargets(context.env);
   const chosen =
     options.only === undefined
@@ -70,7 +75,7 @@ export async function setUpAgents(
       : all.filter((target) => options.only?.includes(target.id));
   if (chosen.length === 0) {
     io.out("No supported agent found (Claude Code, Claude Desktop, Cursor, Codex, OpenCode).");
-    io.out(`Add this MCP server to your agent by hand: ${commandLine(server)}`);
+    io.out(`Add this MCP server to your agent by hand: ${commandLine(server, platform)}`);
     return [];
   }
   const picked =
@@ -85,7 +90,8 @@ export async function setUpAgents(
   for (const result of results) {
     io.out(`${options.dryRun === true ? "would be " : ""}${describe(result)}`);
     if (result.backup !== undefined) io.out(`  previous file saved as ${result.backup}`);
-    if (result.status === "skipped") io.out(`  add it by hand: ${handAdd(result, server)}`);
+    if (result.status === "skipped")
+      io.out(`  add it by hand: ${handAdd(result, server, platform)}`);
   }
   return results;
 }

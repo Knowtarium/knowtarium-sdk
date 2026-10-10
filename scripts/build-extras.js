@@ -18,7 +18,8 @@
 //                               in the portable Agent Plugins format) holding the
 //                               knowtarium-conventions skill, the MCP server (a launcher that the
 //                               MCP config gives `-y knowtarium@<version> mcp`, in plain sight,
-//                               and that runs npx with them, so native Windows works too),
+//                               and that runs npx with them from the user's home folder, never
+//                               the project the client starts it in, on Windows too),
 //                               the icon, a README that says what the plugin runs, sends and
 //                               stores, and the LICENSE.
 //
@@ -135,6 +136,8 @@ try {
   const npxArgs = serverCommand.npxArgs.map((arg) => arg.replace("{version}", pkg.version));
   // the exact version, in plain sight in the plugins' MCP configs (a directory scanner reads them)
   assert.ok(npxArgs.includes(`${pkg.name}@${pkg.version}`), "the server command pins this version");
+  // the launcher refuses anything else, so cmd on Windows never reads an argument as a command
+  for (const arg of npxArgs) assert.match(arg, /^[\w@.\-/=:]+$/, "a plain launcher argument");
   rmSync(out, { recursive: true, force: true });
 
   // ---- every tool the server can offer, from the real tool definitions (src/cli/mcp/catalog.ts)

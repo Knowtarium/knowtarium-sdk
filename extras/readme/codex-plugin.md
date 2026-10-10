@@ -27,7 +27,8 @@ goes in Codex's settings. You need Node.js 20 or later.
 
 - **It runs** `node ${PLUGIN_ROOT}/server/launch.mjs -y knowtarium@{{version}} mcp` (see
   `mcp.json`). The launcher, a small script in this plugin, runs `npx -y knowtarium@{{version}} mcp`
-  (through `cmd /c` on Windows): npx downloads
+  from your home folder, never the project folder (so nothing a project plants in
+  `node_modules` or `.npmrc` runs instead), through Windows' own `cmd.exe` on Windows: npx downloads
   the open source [`knowtarium`](https://www.npmjs.com/package/knowtarium) package at exactly
   version {{version}}, with the dependency versions its shrinkwrap pins, from your npm registry, and
   starts its MCP server on stdio. Its source is at {{repository}}.

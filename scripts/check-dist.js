@@ -228,7 +228,19 @@ try {
   assert.equal(agents.code, 0, agents.err);
   const cursor = JSON.parse(readFileSync(join(isolated.HOME, ".cursor", "mcp.json"), "utf8"));
   const entry = cursor.mcpServers.knowtarium;
-  assert.deepEqual(entry.args.slice(-2), [`knowtarium@${pkg.version}`, "mcp"]);
+  // npx runs from the home folder, never the folder the agent starts it in (server-entry.ts)
+  const script = entry.args.at(-1);
+  assert.ok(
+    script.endsWith(` npx -y knowtarium@${pkg.version} mcp`),
+    `the agent's command pins this version: ${script}`,
+  );
+  if (process.platform === "win32") {
+    assert.match(entry.command, /\\cmd\.exe$/i);
+    assert.ok(script.startsWith("cd /d !USERPROFILE!&& "), script);
+  } else {
+    assert.equal(entry.command, "/bin/sh");
+    assert.ok(script.startsWith("cd && exec "), script);
+  }
   // a real MCP exchange over stdio: with nothing connected the server still answers, and the
   // tools point to its `connect` tool
   const messages = [
@@ -247,7 +259,7 @@ try {
   ];
   const mcp = binWith(
     messages.map((message) => JSON.stringify(message)).join("\n") + "\n",
-    entry.args.at(-1),
+    script.split(" ").at(-1),
   );
   assert.equal(mcp.code, 0, mcp.err);
   assert.match(mcp.err, /not connected/);

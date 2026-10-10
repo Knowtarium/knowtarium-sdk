@@ -21,6 +21,9 @@ export interface CliEnvironment {
   /** Windows: `%APPDATA%` (roaming) and `%LOCALAPPDATA%`, or their defaults under the home. */
   readonly roamingAppData: string;
   readonly localAppData: string;
+  /** Windows: `%ComSpec%` and `%SystemRoot%`, to name `cmd.exe` by its full path. */
+  readonly comSpec?: string;
+  readonly systemRoot?: string;
   readonly platform: NodeJS.Platform;
 }
 
@@ -58,6 +61,11 @@ interface Folders {
   readonly localAppData: string;
 }
 
+/** `{ [key]: value }` for a variable set to something (an empty value counts as unset), else `{}`. */
+function setting<K extends string>(key: K, value: string | undefined): Partial<Record<K, string>> {
+  return value === undefined || value === "" ? {} : ({ [key]: value } as Record<K, string>);
+}
+
 /** The platform's folder for app data (XDG on Linux, Application Support on macOS, AppData on Windows). */
 function appDataFolder(env: NodeJS.ProcessEnv, folders: Folders): string {
   if (folders.platform === "darwin")
@@ -93,6 +101,8 @@ export function cliEnvironment(
     appUrl: secureUrl("KNOWTARIUM_APP_URL", env["KNOWTARIUM_APP_URL"] ?? DEFAULT_APP_URL),
     home: env["KNOWTARIUM_HOME"] ?? appDataFolder(env, folders),
     cache: env["KNOWTARIUM_CACHE"] ?? cacheFolder(env, folders),
+    ...setting("comSpec", env["ComSpec"]),
+    ...setting("systemRoot", env["SystemRoot"]),
     ...folders,
   };
 }
