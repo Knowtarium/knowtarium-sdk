@@ -231,7 +231,7 @@ async function complete(deps: ConnectDeps, delivered: Delivered): Promise<void> 
     if (isVaultError(error, "pin_mismatch")) {
       throw new ConnectError(
         "owner_changed",
-        `This workspace's owner key differs from the one this computer pinned before, so nothing was saved${revoked}. If the owner really changed their keys, run \`knowtarium disconnect --workspace ${connection.workspaceId}\`, then connect again.`,
+        `This workspace's owner key differs from the one this computer pinned before, so nothing was saved${revoked}. If the owner really changed their keys, run \`npx knowtarium disconnect --workspace ${connection.workspaceId}\`, then connect again.`,
       );
     }
     throw new ConnectError(

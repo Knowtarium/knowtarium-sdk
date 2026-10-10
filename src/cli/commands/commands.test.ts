@@ -124,7 +124,7 @@ describe("commands", () => {
     expect(context.io.lines.join("\n")).toContain("(revoked)");
     // and how to remove the connection, or connect it again
     expect(context.io.lines.join("\n")).toContain(
-      `run \`knowtarium disconnect --workspace ${world.workspaceId}\` to remove it`,
+      `run \`npx knowtarium disconnect --workspace ${world.workspaceId}\` to remove it`,
     );
   });
 
@@ -176,7 +176,7 @@ describe("how the agent's changes land", () => {
     expect(await run("status")).toBe(0);
     expect(context.io.lines).toContain("  changes   read, and propose changes for approval");
     expect(context.io.lines.join("\n")).toMatch(
-      /run `knowtarium connect` again, then restart your agents/,
+      /run `npx knowtarium connect` again, then restart your agents/,
     );
   });
 });
