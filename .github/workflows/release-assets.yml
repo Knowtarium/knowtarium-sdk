@@ -177,8 +177,11 @@ jobs:
           name: release-files
           path: release-files
 
-      # a signed record of which run built each bundle, from which commit:
-      # gh attestation verify knowtarium.mcpb --repo Knowtarium/knowtarium-sdk
+      # a signed record of which workflow run made each bundle: gh attestation verify
+      # knowtarium.mcpb --repo Knowtarium/knowtarium-sdk. It names this run's commit (GITHUB_SHA:
+      # main's head, on a push and after a publish alike), not the tag the bundle was built from;
+      # the action can't be given another commit (it signs what the run's OIDC token says), and the
+      # release itself names the tag
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: release-files/*.mcpb

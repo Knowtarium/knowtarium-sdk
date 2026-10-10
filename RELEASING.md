@@ -64,6 +64,9 @@ These stay as they are until the owner decides; nothing in this repo changes the
    the repository, gets `contents: write` to create the release and upload the files, and
    `id-token: write` and `attestations: write` to sign each bundle's build provenance
    (`gh attestation verify knowtarium.mcpb --repo Knowtarium/knowtarium-sdk` checks a download).
+   The provenance names the run's commit (main's head), not the tag's: the action signs what the
+   run's token says and can't be pointed at another commit; the bundle itself is built from the
+   tag.
    The release notes link the npm version, say how to update agents and where the plugins are,
    and end with GitHub's comparison with the previous release; edit them on GitHub to say what
    changed. Every action in the workflows is pinned to a full commit SHA, with its version in a
@@ -120,6 +123,14 @@ These stay as they are until the owner decides; nothing in this repo changes the
    `mcp-publisher login github`, then `mcp-publisher publish` in this folder. The entry lists only
    the npm package; the bundle could be added as an `mcpb` package with the `fileSha256` from the
    release's `SHA256SUMS`.
+
+   **Hold this until the owner decides.** A client that installs from the registry writes its own
+   command from the entry, a bare `npx knowtarium@<version> mcp`, and starts it in the project
+   folder it has open, where npx trusts a planted `node_modules`, `.npmrc` or
+   `node_modules/.bin/node` (see "Never in the project's folder" in `DEVELOPING.md`). The registry
+   has no way to say "run it from the home folder", so a registry install isn't hardened the way
+   `npx knowtarium agents`, the plugins and the bundle are. Publish the entry only once that is
+   accepted, or the registry's format can carry a safe command.
 
 ## The shrinkwrap
 

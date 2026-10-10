@@ -22,6 +22,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # nothing here pushes: npm publish signs in through OIDC, never with the git token
+          persist-credentials: false
 
       # the owner decides when the package goes public: until then this fails, by design
       - name: Refuse a package that isn't ready to publish
