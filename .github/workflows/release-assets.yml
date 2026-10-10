@@ -1,0 +1,167 @@
+name: Release assets
+
+# Makes sure the GitHub Release for the package.json version holds the Claude Desktop bundle:
+# knowtarium-<version>.mcpb, the same file as knowtarium.mcpb (so
+# releases/latest/download/knowtarium.mcpb always works) and SHA256SUMS. It runs after every
+# publish (the tag's version) and on every push to main (package.json's version), and does
+# nothing until that version has its tag and is on npm (the bundle runs the published CLI), or once
+# the release has all three files. It never replaces a file a release already has. See
+# RELEASING.md.
+on:
+  push:
+    branches: [main]
+  workflow_run:
+    workflows: [Publish]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # one at a time, so a publish and a push to main never both create the release
+  group: release-assets
+  cancel-in-progress: false
+
+jobs:
+  assets:
+    name: Ensure the release has its bundles
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      # create the release and upload its files; nothing else
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Pick the version and see what its release lacks
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          # the tag the publish run built (v1.2.3), from the event, never run as code
+          RUN_REF: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          skip() { echo "::notice::$1"; echo "build=false" >> "$GITHUB_OUTPUT"; exit 0; }
+          if [ "$EVENT" = "workflow_run" ]; then
+            case "$RUN_REF" in
+              v[0-9]*) version="${RUN_REF#v}" ;;
+              *) skip "the publish run wasn't for a version tag" ;;
+            esac
+            attempts=20 # npm can take a moment to serve a version it just accepted
+          else
+            [ "$(node -p "require('./package.json').private === true")" = "true" ] && skip "package.json is private"
+            version=$(node -p "require('./package.json').version")
+            attempts=1
+          fi
+          [ "$version" = "0.0.0" ] && skip "the version is the 0.0.0 placeholder"
+          tag="v$version"
+          git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null || skip "$tag isn't tagged yet"
+          published=""
+          for attempt in $(seq "$attempts"); do
+            published=$(npm view "knowtarium@$version" version 2> /dev/null || true)
+            [ "$published" = "$version" ] && break
+            [ "$attempt" -lt "$attempts" ] && sleep 15
+          done
+          [ "$published" = "$version" ] || skip "knowtarium@$version isn't on npm yet"
+
+          expected="knowtarium-$version.mcpb knowtarium.mcpb SHA256SUMS"
+          if names=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" --jq '.assets[].name' 2> "$RUNNER_TEMP/api-error"); then
+            release=exists
+          elif grep -q "HTTP 404" "$RUNNER_TEMP/api-error"; then
+            release=missing
+            names=""
+          else
+            cat "$RUNNER_TEMP/api-error"
+            exit 1
+          fi
+          have=0
+          for file in $expected; do
+            if grep -qxF "$file" <<< "$names"; then have=$((have + 1)); fi
+          done
+          [ "$have" -eq 3 ] && skip "release $tag already has $expected"
+          if [ "$have" -gt 0 ]; then
+            # never replaced: a new build wouldn't match the checksums already there
+            echo "::error::release $tag has only some of $expected; delete those files from the release, then run this workflow again"
+            exit 1
+          fi
+          {
+            echo "build=true"
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "release=$release"
+          } >> "$GITHUB_OUTPUT"
+
+      # the bundle is built from the tagged source, whatever main holds now
+      - name: Check out the tag
+        if: steps.plan.outputs.build == 'true'
+        env:
+          TAG: ${{ steps.plan.outputs.tag }}
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          git fetch --depth=1 origin "refs/tags/$TAG:refs/tags/$TAG"
+          git checkout --detach "refs/tags/$TAG"
+          if [ "$(node -p "require('./package.json').version")" != "$VERSION" ]; then
+            echo "::error::$TAG's package.json isn't version $VERSION"
+            exit 1
+          fi
+
+      # Reads the pnpm version from "packageManager" in package.json.
+      - if: steps.plan.outputs.build == 'true'
+        uses: pnpm/action-setup@v6
+
+      - if: steps.plan.outputs.build == 'true'
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - if: steps.plan.outputs.build == 'true'
+        run: pnpm install --frozen-lockfile
+      - if: steps.plan.outputs.build == 'true'
+        run: pnpm build
+      # a release build: it refuses a version npm doesn't have, validates the manifest and starts the
+      # unpacked bundle's server
+      - if: steps.plan.outputs.build == 'true'
+        run: pnpm build:extras
+
+      - name: Create the release, or add the files it lacks
+        if: steps.plan.outputs.build == 'true'
+        env:
+          TAG: ${{ steps.plan.outputs.tag }}
+          VERSION: ${{ steps.plan.outputs.version }}
+          RELEASE: ${{ steps.plan.outputs.release }}
+        run: |
+          set -euo pipefail
+          # the files come from the versioned bundle, so a tag built before build:extras wrote
+          # the stable name and the checksums gets them too
+          mkdir upload
+          cp "dist-extras/knowtarium-$VERSION.mcpb" upload/
+          cp "dist-extras/knowtarium-$VERSION.mcpb" upload/knowtarium.mcpb
+          (cd upload && sha256sum "knowtarium-$VERSION.mcpb" knowtarium.mcpb > SHA256SUMS)
+          cat upload/SHA256SUMS
+          if [ "$RELEASE" = "missing" ]; then
+            flags=()
+            if [[ "$VERSION" == *-* ]]; then
+              flags+=(--prerelease --latest=false)
+            elif [ "$(npm view knowtarium dist-tags.latest)" = "$VERSION" ]; then
+              flags+=(--latest)
+            else
+              flags+=(--latest=false)
+            fi
+            notes="knowtarium $VERSION: [npm](https://www.npmjs.com/package/knowtarium/v/$VERSION).
+
+          **Claude Desktop:** download \`knowtarium.mcpb\` (the same file as \`knowtarium-$VERSION.mcpb\`), open it, then ask Claude to connect Knowtarium. It needs no terminal or Node.js.
+
+          Check a download with \`sha256sum -c SHA256SUMS\` (\`shasum -a 256 -c SHA256SUMS\` on macOS)."
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "Knowtarium $VERSION" --notes "$notes" "${flags[@]}" \
+              upload/*
+          else
+            # without --clobber, gh refuses to replace a file the release already has
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" upload/*
+          fi
