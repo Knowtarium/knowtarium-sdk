@@ -13,6 +13,7 @@ import {
 } from "../../crypto/index.js";
 import { toHex } from "../../crypto/encoding.js";
 import { ensureInboxKey } from "../clips/inbox.js";
+import { systemScheduler, type TimerHandle } from "../platform/timers.js";
 import {
   type ApproveConnectRequest,
   type KeyRecipient,
@@ -336,7 +337,15 @@ export interface OwnerKeyFlow {
   readonly keys: KeyProvider;
   /** This device's memory: the recipient sets seen and the revocations still to rotate out. */
   readonly trust: TrustState;
+  /**
+   * How long a rotation waits for the inbox key of the new generation to be signed (the web
+   * clipper), at most; the signing goes on in the background after that. Default 10 seconds.
+   */
+  readonly inboxKeyWaitMs?: number;
 }
+
+/** How long a rotation waits for the new generation's inbox key by default. */
+const INBOX_KEY_WAIT_MS = 10_000;
 
 function expectationOf(flow: OwnerKeyFlow, generation: number): RotationExpectation {
   return {
@@ -419,9 +428,17 @@ export async function rotateWorkspace(
     );
   }
   await trust.settleRevocations(workspaceId);
-  // the web clipper's inbox key follows the new generation; best effort: a device that opens the
-  // workspace later signs it when the latest one is for an older generation
-  await ensureInboxKey(api, flow).catch(() => undefined);
+  // the web clipper's inbox key follows the new generation; best effort and bounded, so a slow
+  // server can't hold up the rotation: a device that opens the workspace later signs it when the
+  // latest one is for an older generation
+  let timer: TimerHandle;
+  await Promise.race([
+    ensureInboxKey(api, flow).catch(() => undefined),
+    new Promise<void>((resolve) => {
+      timer = systemScheduler.setTimeout(resolve, flow.inboxKeyWaitMs ?? INBOX_KEY_WAIT_MS);
+    }),
+  ]);
+  systemScheduler.clearTimeout(timer);
   return { generation: key.generation, recipients, excluded };
 }
 

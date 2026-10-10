@@ -2,13 +2,16 @@ import {
   clipSignatureValid,
   type ClipPlaintext,
   parseClipPlaintext,
-  readClipJson,
-  readSealedClipHeader,
-  SEALED_CLIP_HEADER_BYTES,
+  readClipJsonLoose,
 } from "../../clip/frame.js";
-import { CLIP_FORMAT_VERSION, CLIP_LIMITS, type ClipPayload } from "../../clip/payload.js";
+import { CLIP_LIMITS, type ClipPayload } from "../../clip/payload.js";
 import { type InboxKeyPair, wipe } from "../../crypto/index.js";
 import { sodium } from "../../crypto/sodium.js";
+import {
+  readSealedClipHeader,
+  SEALED_CLIP_FORMAT,
+  SEALED_CLIP_HEADER_BYTES,
+} from "../../protocol/index.js";
 
 /*
  * Opening a sealed clip: the one place a clip is decrypted. Only a holder of the clip's key
@@ -41,21 +44,25 @@ export interface OpenedClip {
 /**
  * Opens a sealed clip with the inbox key pair of its generation: the 5 header bytes (format 1 and
  * the generation, which must be the key pair's), `crypto_box_seal_open`, unpadding, the version
- * byte, then the payload's JSON, which must be canonical and clean (`normalizeClip` leaves it
- * unchanged). Never throws for bad bytes: the result says why.
+ * byte, then the payload's JSON, which must be the canonical JSON of a valid payload. Never throws
+ * for bad bytes: the result says why. A payload that is well formed but not what `normalizeClip`
+ * makes of it comes back as `unclean`, with the clip as it is: it may come from a browser whose
+ * Unicode tables differ from this runtime's, so the filer checks its signature and leaves it
+ * waiting rather than throwing the person's save away or filing text the cleaning would change.
  */
 export function openClip(
   blob: Uint8Array,
   inboxKey: InboxKeyPair,
 ):
   | { readonly ok: true; readonly clip: OpenedClip }
-  | { readonly ok: false; readonly reason: ClipRejection } {
+  | { readonly ok: false; readonly reason: ClipRejection }
+  | { readonly ok: false; readonly reason: "unclean"; readonly clip: OpenedClip } {
   const unreadable = { ok: false, reason: "unreadable" } as const;
   let plaintext: ClipPlaintext;
   try {
     if (blob.length > CLIP_LIMITS.sealedBytes) return unreadable;
     const header = readSealedClipHeader(blob);
-    if (header.version !== CLIP_FORMAT_VERSION || header.generation !== inboxKey.generation) {
+    if (header?.format !== SEALED_CLIP_FORMAT || header.generation !== inboxKey.generation) {
       return unreadable;
     }
     const lib = sodium();
@@ -74,12 +81,14 @@ export function openClip(
   } catch {
     return unreadable;
   }
+  let read: ReturnType<typeof readClipJsonLoose>;
   try {
-    const payload = readClipJson(plaintext.json);
-    return { ok: true, clip: { payload, json: plaintext.json, signature: plaintext.signature } };
+    read = readClipJsonLoose(plaintext.json);
   } catch {
     return { ok: false, reason: "invalid_clip" };
   }
+  const clip = { payload: read.payload, json: plaintext.json, signature: plaintext.signature };
+  return read.clean ? { ok: true, clip } : { ok: false, reason: "unclean", clip };
 }
 
 /** Whether a clip's signature verifies under an extension's Ed25519 public key. */

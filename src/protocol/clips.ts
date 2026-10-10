@@ -13,6 +13,7 @@ import {
   Version,
 } from "./primitives.js";
 import { defineRoute } from "./route.js";
+import { SEALED_CLIP_MIN_BYTES } from "./sealed-clip.js";
 import { requiredSigningFields, SignedInboxKey } from "./signatures.js";
 
 /*
@@ -60,15 +61,6 @@ export const CLIP_QUEUE_LIMITS = {
   pendingClips: 1000,
 } as const;
 
-/** The format byte of a sealed clip (the first of its 5 header bytes). */
-export const SEALED_CLIP_FORMAT = 1;
-
-/**
- * The smallest sealed clip: the 5 header bytes, `crypto_box_seal`'s 48 bytes and one padded
- * kilobyte.
- */
-const SEALED_CLIP_MIN_BYTES = 5 + 48 + 1024;
-
 /**
  * The secret a paired extension sends as `Authorization: Bearer kte_...`. The web app makes it
  * at approval; the server only ever holds its SHA-256.
@@ -101,20 +93,6 @@ export const POST_CLIP_STATUS = { queued: 201, duplicate: 200 } as const satisfi
   PostClipResponse["status"],
   number
 >;
-
-/**
- * The 5 header bytes of a sealed clip, all the server reads: the format byte and the key
- * generation (uint32 big-endian). Null for a blob too short to be a sealed clip (the header,
- * `crypto_box_seal`'s 48 bytes and one padded kilobyte); the caller checks the format byte
- * (`SEALED_CLIP_FORMAT`) and the generation against the latest `inbox_key`.
- */
-export function readSealedClipHeader(
-  blob: Uint8Array,
-): { readonly format: number; readonly generation: number } | null {
-  if (blob.length < SEALED_CLIP_MIN_BYTES) return null;
-  const [format = 0, a = 0, b = 0, c = 0, d = 0] = blob;
-  return { format, generation: ((a << 24) | (b << 16) | (c << 8) | d) >>> 0 };
-}
 
 /** The extension reads its workspace's latest inbox key (also in a `stale_inbox_key` answer). */
 export const ExtensionInboxKeyResponse = z.object({ inboxKey: SignedInboxKey });

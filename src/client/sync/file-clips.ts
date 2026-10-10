@@ -23,7 +23,7 @@ import { clippedRecord } from "../clips/clipped.js";
 import { fetchExtensions, type VerifiedExtension } from "../clips/extensions.js";
 import { fetchInboxKey } from "../clips/inbox.js";
 import { type ClipRejection, clipSignedBy, type OpenedClip, openClip } from "../clips/open.js";
-import { isSyncApiError, RequestValidationError } from "../errors/index.js";
+import { isSyncApiError, RequestValidationError, SyncStoppedError } from "../errors/index.js";
 import { newId } from "../platform/ids.js";
 import { encryptEvent, signingFields, signRecorded } from "../vault/index.js";
 import { type AgentNoteWrite, writeAsAgent } from "./agent-writes.js";
@@ -75,7 +75,14 @@ export type ClipWaitReason =
   /** No owner-vouched key for its extension (paired since, or a server leaving it out). */
   | "unknown_extension"
   /** The pass reached its deadline before this clip. */
-  | "time_limit";
+  | "time_limit"
+  /**
+   * Signed by its extension, but not what this runtime's cleaning makes of it (a browser with
+   * other Unicode tables, say); the web app shows it rather than anyone filing or dropping it.
+   */
+  | "unclean_clip"
+  /** Filing it failed (an error from the API, say); the next pass tries again. */
+  | "failed";
 
 /** A folder as the filer looks it up: its decrypted name and its parent. */
 export interface ClipFolder {
@@ -148,6 +155,9 @@ type Outcome =
   | { readonly kind: "duplicate" }
   | { readonly kind: "rejected"; readonly reason: ClipRejection }
   | { readonly kind: "released"; readonly reason: ClipWaitReason };
+
+/** Clips failing one after another that stop a pass (the API or the network is the problem). */
+const MAX_FAILURES_IN_A_ROW = 3;
 
 /** The longest `Retry-After` a per-minute limit asks for; a longer wait is the daily cap. */
 const PER_MINUTE_RETRY_MAX_SECONDS = 60;
@@ -300,7 +310,7 @@ async function fileOne(pass: Pass, queued: QueuedClip, keys: WorkspaceKeyring): 
   } finally {
     wipe(inboxKey.privateKey);
   }
-  if (!opened.ok) return { kind: "rejected", reason: opened.reason };
+  if (!opened.ok && opened.reason !== "unclean") return { kind: "rejected", reason: opened.reason };
   const clip = opened.clip;
   const { payload } = clip;
   if (
@@ -328,36 +338,38 @@ async function fileOne(pass: Pass, queued: QueuedClip, keys: WorkspaceKeyring): 
   ) {
     return { kind: "rejected", reason: "revoked" };
   }
+  // signed by its extension, but not what this runtime's cleaning makes of it (a browser with
+  // other Unicode tables, say): it waits rather than being thrown away or filed with that text
+  if (!opened.ok) return { kind: "released", reason: "unclean_clip" };
   const noteId = clipNoteId(queued.clipId);
   // filed before (a lost ack, or a clip posted again): this client knows the note, deleted or not
   if (context.noteFolders.has(noteId)) return { kind: "duplicate" };
-  let folderId = targetFolder(pass, payload.category);
-  if (folderId === undefined) {
+  // a missing category folder is made first, outside the queue (the web app makes it its way)
+  if (targetFolder(pass, payload.category) === undefined) {
     if (options.createFolder === undefined) return { kind: "released", reason: "new_category" };
-    folderId = await options.createFolder(payload.category, pass.inbox.folderId);
-    pass.made.set(foldName(payload.category), folderId);
+    const made = await options.createFolder(payload.category, pass.inbox.folderId);
+    pass.made.set(foldName(payload.category), made);
   }
-  const text = clipNoteText(payload);
-  const name = noteName(pass, folderId, clip);
-  const target = folderId;
-  // the write and its record take their turn in the engine's queue, one clip at a time, so the
-  // person's or the agent's own writes never wait on a whole pass
+  // the folder, the name, the write and its record take their turn in the engine's queue, one
+  // clip at a time, so they see the state the last pull left and the person's or the agent's own
+  // writes never wait on a whole pass
   return pass.queue(async (): Promise<Outcome> => {
     if (context.noteFolders.has(noteId)) return { kind: "duplicate" };
+    const folderId = targetFolder(pass, payload.category);
+    if (folderId === undefined) return { kind: "released", reason: "new_category" };
+    const name = noteName(pass, folderId, clip);
+    const text = clipNoteText(payload);
     const created = await createNote(pass, {
       noteId,
-      folderId: target,
+      folderId,
       name,
-      text: options.stamp?.(text, target) ?? text,
+      text: options.stamp?.(text, folderId) ?? text,
     });
     if (created === "duplicate") return { kind: "duplicate" };
     if (created !== "saved") return { kind: "released", reason: created };
     const at = new Date((options.now ?? Date.now)()).toISOString();
     const recorded = await recordClipped(pass, noteId, clip, at);
-    return {
-      kind: "filed",
-      filed: { clipId: queued.clipId, noteId, folderId: target, name, recorded },
-    };
+    return { kind: "filed", filed: { clipId: queued.clipId, noteId, folderId, name, recorded } };
   });
 }
 
@@ -443,6 +455,8 @@ export async function fileClips(
   const max = Math.min(Math.max(options.max ?? CLIP_QUEUE_LIMITS.claimDefault, 1), 50);
   // released clips keep their lease until the pass ends, so the next claim gets the ones behind
   const held: ClipId[] = [];
+  let limited: "rate_limited" | "daily_cap" | null = null;
+  let failuresInARow = 0;
   const hold = (clipId: ClipId, reason: ClipWaitReason) => {
     released.push({ clipId, reason });
     held.push(clipId);
@@ -462,17 +476,34 @@ export async function fileClips(
       if (newest > keys.current.generation) keys = await context.keys.refresh();
       try {
         for (const [index, queued] of data.clips.entries()) {
+          const rest = () => data.clips.slice(index);
           if (now() > deadline) {
-            for (const rest of data.clips.slice(index)) hold(rest.clipId, "time_limit");
+            for (const clip of rest()) hold(clip.clipId, "time_limit");
+            break;
+          }
+          // an agent's limit came: trying the rest of the batch would only meet it again
+          if (limited !== null) {
+            for (const clip of rest()) hold(clip.clipId, limited);
             break;
           }
           let outcome: Outcome;
           try {
             outcome = await fileOne(pass, queued, keys);
+            failuresInARow = 0;
           } catch (error) {
+            failuresInARow++;
+            // the engine stopped (access revoked), or every clip fails (the API, the network):
             // the rest wait for the next pass, released at once rather than after the lease
-            held.push(...data.clips.slice(index).map((clip) => clip.clipId));
-            throw error;
+            if (
+              error instanceof SyncStoppedError ||
+              isSyncApiError(error, "token_revoked") ||
+              failuresInARow >= MAX_FAILURES_IN_A_ROW
+            ) {
+              held.push(...rest().map((clip) => clip.clipId));
+              throw error;
+            }
+            // one clip that fails can't hold up the ones behind it, pass after pass
+            outcome = { kind: "released", reason: "failed" };
           }
           switch (outcome.kind) {
             case "filed":
@@ -489,12 +520,16 @@ export async function fileClips(
               break;
             case "released":
               hold(queued.clipId, outcome.reason);
+              if (outcome.reason === "rate_limited" || outcome.reason === "daily_cap") {
+                limited = outcome.reason;
+              }
               break;
           }
         }
       } finally {
         await send(context, routes.ackClips, acks).catch(() => undefined);
       }
+      if (limited !== null) break;
       // a short batch: nothing more waits unleased
       if (data.clips.length < max) break;
     }

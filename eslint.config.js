@@ -18,9 +18,10 @@ const cryptoLibraryImports = {
 // may import its own files and the few crypto files that use no libsodium at all, never the sumo
 // build, zod, yaml or anything that could open a clip, a note or a key copy
 const outsideClipImports = {
-  regex: "^\\.\\./(?!crypto/(encoding|canonical-json|errors|envelope-fields)\\.js$)",
+  regex:
+    "^\\.\\./(?!crypto/(encoding|canonical-json|errors|envelope-fields)\\.js$|protocol/sealed-clip\\.js$)",
   message:
-    "knowtarium/clip may import only its own files and crypto's encoding, canonical-json, errors and envelope-fields.",
+    "knowtarium/clip may import only its own files, crypto's encoding, canonical-json, errors and envelope-fields, and protocol's sealed-clip.",
 };
 const clipLibraryImports = {
   regex: "^(node:)?crypto$|^libsodium-wrappers-sumo$|^zod$|^yaml$",

@@ -83,8 +83,9 @@ export const EventRecord = z.discriminatedUnion("type", [
    * the clip's canonical JSON exactly as the extension signed it (`payload`) and the extension's
    * signature (base64url). A client shows "Saved from <extension>" only when the signature
    * verifies under that extension's owner-vouched key, `clipNoteId(clipId)` is this note's ID and
-   * the payload's `url` is the first version's `url` (`verifyClippedRecord` in knowtarium/client);
-   * otherwise only the version's signer. The web app appends it as the person's signed record,
+   * the note's first version is exactly the note the payload makes, the filer's `generated` and
+   * `verified` stamps aside (`verifyClippedRecord` in knowtarium/client); otherwise only the
+   * version's signer. The web app appends it as the person's signed record,
    * the CLI unsigned (like `wrote`): the extension's signature is the proof either way.
    */
   z.looseObject({

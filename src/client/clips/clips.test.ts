@@ -32,9 +32,11 @@ import {
   type SignedInboxKey,
 } from "../../protocol/index.js";
 import { createApiClient } from "../api/index.js";
-import { isVaultError, RequestValidationError } from "../errors/index.js";
+import { isSyncApiError, isVaultError, RequestValidationError } from "../errors/index.js";
 import type { FetchLike } from "../platform/fetch.js";
+import { DEFAULT_FILING_MS } from "../sync/file-clips.js";
 import { SyncEngine } from "../sync/index.js";
+import { flush } from "../testing/http.js";
 import { response } from "../testing/http.js";
 import { decryptExtensionName } from "../vault/index.js";
 import { approveExtension } from "./approval.js";
@@ -200,9 +202,12 @@ interface Paired {
 }
 
 /** Pairs an extension as the web app's approval does: the owner signs its key. */
-function pair(world: World, revokedAt: string | null = null): Paired {
-  const keys = createExtensionKeys();
-  const extensionId = newId("ext");
+function pair(
+  world: World,
+  revokedAt: string | null = null,
+  existing: Paired = { extensionId: newId("ext"), keys: createExtensionKeys() },
+): Paired {
+  const { extensionId, keys } = existing;
   const signed = signExtensionKey(world.signer, {
     workspaceId: world.workspaceId,
     extensionId,
@@ -816,6 +821,146 @@ describe("filing passes", () => {
     const error = await engine.fileClips(viewOf(cli).options()).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(RequestValidationError);
     expect(world.server.claims).toBe(0);
+  });
+});
+
+describe("filing passes, continued", () => {
+  it("reads the extensions again for one paired after the pass read them", async () => {
+    const { world, web, view, inboxKey } = await withInbox();
+    const late: Paired = { extensionId: newId("ext"), keys: createExtensionKeys() };
+    const clipId = save(world, late, inboxKey);
+    let open = (): void => undefined;
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    world.server.tamper.hold = (route) => (route === "listExtensions" ? gate : undefined);
+    const pass = web.engine.fileClips(view.options());
+    const listed = () => world.server.requests.some((call) => call.url.endsWith("/extensions"));
+    for (let i = 0; i < 50 && !listed(); i++) await flush();
+    // the pass read the list without it; the extension pairs now
+    pair(world, null, late);
+    delete world.server.tamper.hold;
+    open();
+    const result = await pass;
+    expect(result.filed.map((entry) => entry.clipId)).toEqual([clipId]);
+    expect(result.released).toEqual([]);
+  });
+
+  it("stops after 30 seconds when the caller sets no deadline", async () => {
+    const { world, web, view, inboxKey } = await withInbox();
+    const paired = pair(world);
+    const ids = [1, 2].map((second) =>
+      save(world, paired, inboxKey, {}, `2026-10-10T09:00:0${String(second)}.000Z`),
+    );
+    let clock = 0;
+    const result = await web.engine.fileClips(
+      view.options({
+        now: () => clock,
+        // each clip's note takes just over the default time
+        stamp: (text) => {
+          clock += DEFAULT_FILING_MS + 1;
+          return text;
+        },
+      }),
+    );
+    expect(DEFAULT_FILING_MS).toBe(30_000);
+    expect(result.filed.map((entry) => entry.clipId)).toEqual([ids[0]]);
+    expect(result.released).toEqual([{ clipId: ids[1], reason: "time_limit" }]);
+  });
+
+  it("releases the rest of the batch at once after a rate limit", async () => {
+    const { world, inboxKey } = await withInbox();
+    const paired = pair(world);
+    const ids = [1, 2, 3].map((second) =>
+      save(world, paired, inboxKey, {}, `2026-10-10T09:00:0${String(second)}.000Z`),
+    );
+    world.server.agentWriteDailyCap = 0;
+    world.server.agentWriteRetryAfterSeconds = 30;
+    const cli = world.cli({ retry: { maxAttempts: 1 } });
+    const view = viewOf(cli);
+    await cli.engine.pull();
+    const writes = () =>
+      world.server.requests.filter((call) => call.url.endsWith("/agent-version")).length;
+    const before = writes();
+    const result = await cli.engine.fileClips(view.options());
+    expect(writes() - before).toBe(1);
+    expect(result.released).toEqual(ids.map((clipId) => ({ clipId, reason: "rate_limited" })));
+    expect(world.server.claims).toBe(1);
+  });
+
+  it("files the clips behind one whose write fails, and stops when every write fails", async () => {
+    const { world, web, view, inboxKey } = await withInbox();
+    const paired = pair(world);
+    const [failing, behind] = [1, 2].map((second) =>
+      save(world, paired, inboxKey, {}, `2026-10-10T09:00:0${String(second)}.000Z`),
+    );
+    let writes = 0;
+    world.server.tamper.refuse = (route) =>
+      route === "writeNote" && writes++ === 0 ? "internal" : undefined;
+    const result = await web.engine.fileClips(view.options());
+    expect(result.released).toEqual([{ clipId: failing, reason: "failed" }]);
+    expect(result.filed.map((entry) => entry.clipId)).toEqual([behind]);
+    // the next pass files it
+    expect((await web.engine.fileClips(view.options())).filed.map((e) => e.clipId)).toEqual([
+      failing,
+    ]);
+    const more = [3, 4, 5, 6].map((second) =>
+      save(world, paired, inboxKey, {}, `2026-10-10T09:00:0${String(second)}.000Z`),
+    );
+    world.server.tamper.refuse = (route) => (route === "writeNote" ? "internal" : undefined);
+    const error = await web.engine.fileClips(view.options()).catch((caught: unknown) => caught);
+    expect(isSyncApiError(error, "internal")).toBe(true);
+    for (const clipId of more) expect(world.server.clipQueue.get(clipId)?.leaseUntil).toBe(0);
+    delete world.server.tamper.refuse;
+  });
+
+  it("leaves waiting a signed clip this runtime would clean differently", async () => {
+    const { world, web, view } = await withInbox();
+    const paired = pair(world);
+    const clipId = newId("clip");
+    const lib = sodium();
+    const raw = {
+      v: 1 as const,
+      clipId,
+      workspaceId: world.workspaceId,
+      extensionId: paired.extensionId,
+      url: "https://example.com/",
+      title: "Invoice \u202egnp.exe",
+      note: "",
+      category: "",
+      savedAt: "2026-10-10T09:41:07.512Z",
+    };
+    const plaintext = signClip(lib, raw, paired.keys.privateKey);
+    const inboxPublic = deriveInboxKeyPair(world.key).publicKey;
+    world.server.queueClip({
+      clipId,
+      extensionId: paired.extensionId,
+      blob: concatBytes(
+        Uint8Array.of(1),
+        uint32BE(1),
+        lib.crypto_box_seal(lib.pad(plaintext, 1024), inboxPublic),
+      ),
+    });
+    const result = await web.engine.fileClips(view.options());
+    expect(result).toMatchObject({ filed: [], rejected: [] });
+    expect(result.released).toEqual([{ clipId, reason: "unclean_clip" }]);
+    expect(world.server.clipQueue.has(clipId)).toBe(true);
+  });
+
+  it("doesn't let a slow server hold up a rotation for the inbox key", async () => {
+    const { world, web } = await withInbox();
+    world.server.tamper.hold = (route) =>
+      route === "getInboxKey" ? new Promise<void>(() => undefined) : undefined;
+    const rotated = await rotateWorkspace(web.api, {
+      workspaceId: world.workspaceId,
+      signer: world.signer,
+      ownerBoxPublicKey: world.account.encryption.publicKey,
+      keys: web.keys,
+      trust: web.trust,
+      inboxKeyWaitMs: 20,
+    });
+    expect(rotated.generation).toBe(2);
+    delete world.server.tamper.hold;
   });
 });
 

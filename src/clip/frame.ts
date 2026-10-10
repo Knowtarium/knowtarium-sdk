@@ -2,11 +2,11 @@ import { isCryptoError } from "../crypto/errors.js";
 import {
   concatBytes,
   fromBase64Url,
-  readUint32BE,
   uint32BE,
   utf8Decode,
   utf8Encode,
 } from "../crypto/encoding.js";
+import { SEAL_OVERHEAD_BYTES } from "../protocol/sealed-clip.js";
 import { ClipError } from "./errors.js";
 import type { ClipSodium } from "./lib.js";
 import {
@@ -30,10 +30,6 @@ import {
 
 /** Bytes of an Ed25519 signature. */
 const SIGNATURE_BYTES = 64;
-/** Bytes `crypto_box_seal` adds: the ephemeral public key and the tag. */
-export const SEAL_OVERHEAD_BYTES = 48;
-/** The sealed clip's header: the format byte and the key generation. */
-export const SEALED_CLIP_HEADER_BYTES = 5;
 
 /** The inbox public key a clip is sealed to: its key generation and the X25519 public half. */
 export interface InboxPublicKey {
@@ -116,17 +112,6 @@ export function signAndSealClipWith(
   return concatBytes(header, sealed);
 }
 
-/** The header of a sealed clip, as the server reads it; throws `invalid` for a malformed one. */
-export function readSealedClipHeader(blob: Uint8Array): {
-  readonly version: number;
-  readonly generation: number;
-} {
-  if (blob.length < SEALED_CLIP_HEADER_BYTES + SEAL_OVERHEAD_BYTES) {
-    throw new ClipError("invalid", "the sealed clip is too short");
-  }
-  return { version: blob[0] ?? 0, generation: readUint32BE(blob, 1) };
-}
-
 /**
  * Splits an unpadded signed plaintext into the signature and the payload's JSON text. Throws
  * `invalid` for another version byte, a short plaintext or bytes that aren't UTF-8.
@@ -144,11 +129,29 @@ export function parseClipPlaintext(plaintext: Uint8Array): ClipPlaintext {
   return { signature: plaintext.slice(1, 1 + SIGNATURE_BYTES), json };
 }
 
+const TEXT_FIELDS = [
+  "clipId",
+  "workspaceId",
+  "extensionId",
+  "url",
+  "title",
+  "note",
+  "category",
+  "savedAt",
+];
+
 /**
- * The payload of a clip's JSON text, when the text is exactly the canonical JSON of a clean
- * payload (what `normalizeClip` would leave unchanged); `invalid` otherwise.
+ * A clip's JSON text read as a payload: it must be the canonical JSON of an object with exactly
+ * the payload's fields, of the right types and valid (`normalizeClip` accepts it), or `invalid`.
+ * `clean` says whether it is also exactly what `normalizeClip` makes of it. A payload that is
+ * well formed but not clean may come from a browser whose Unicode tables differ from this
+ * runtime's (which characters are format or default ignorable, NFC): the filer leaves such a clip
+ * waiting instead of throwing it away or filing it.
  */
-export function readClipJson(json: string): ClipPayload {
+export function readClipJsonLoose(json: string): {
+  readonly payload: ClipPayload;
+  readonly clean: boolean;
+} {
   let value: unknown;
   try {
     value = JSON.parse(json);
@@ -159,11 +162,33 @@ export function readClipJson(json: string): ClipPayload {
     throw new ClipError("invalid", "a clip is an object");
   }
   const record = value as Record<string, unknown>;
-  if (record["v"] !== CLIP_FORMAT_VERSION) throw new ClipError("invalid", "not a version 1 clip");
-  const payload = normalizeClip(record as unknown as ClipPayload);
-  if (clipCanonicalJson(payload) !== json) {
-    throw new ClipError("invalid", "the clip isn't canonical and clean");
+  const keys = Object.keys(record);
+  if (
+    record["v"] !== CLIP_FORMAT_VERSION ||
+    keys.length !== TEXT_FIELDS.length + 1 ||
+    TEXT_FIELDS.some((key) => typeof record[key] !== "string")
+  ) {
+    throw new ClipError("invalid", "not a version 1 clip");
   }
+  const payload = record as unknown as ClipPayload;
+  let canonical: string;
+  try {
+    canonical = clipCanonicalJson(payload);
+  } catch {
+    throw new ClipError("invalid", "the clip has no canonical JSON");
+  }
+  if (canonical !== json) throw new ClipError("invalid", "the clip isn't canonical");
+  const clean = clipCanonicalJson(normalizeClip(payload)) === json;
+  return { payload, clean };
+}
+
+/**
+ * The payload of a clip's JSON text, when the text is exactly the canonical JSON of a clean
+ * payload (what `normalizeClip` would leave unchanged); `invalid` otherwise.
+ */
+export function readClipJson(json: string): ClipPayload {
+  const { payload, clean } = readClipJsonLoose(json);
+  if (!clean) throw new ClipError("invalid", "the clip isn't clean");
   return payload;
 }
 
