@@ -25,7 +25,7 @@ import { fetchInboxKey } from "../clips/inbox.js";
 import { type ClipRejection, clipSignedBy, type OpenedClip, openClip } from "../clips/open.js";
 import { isSyncApiError, RequestValidationError, SyncStoppedError } from "../errors/index.js";
 import { newId } from "../platform/ids.js";
-import { encryptEvent, signingFields, signRecorded } from "../vault/index.js";
+import { encryptEvent, signedAtNow, signingFields, signRecorded } from "../vault/index.js";
 import { type AgentNoteWrite, writeAsAgent } from "./agent-writes.js";
 import { requireIdentity, type SyncContext, withCurrentKey } from "./context.js";
 import { writeNote } from "./writes.js";
@@ -106,8 +106,13 @@ export interface FileClipsOptions {
    * `folder_created`) and returns its ID. Without it, such clips are released (`new_category`).
    */
   readonly createFolder?: (name: string, parentId: FolderId) => Promise<FolderId>;
-  /** The filer's own stamps on the note text (`generated`, and `verified` where it asks first). */
-  readonly stamp?: (text: string, folderId: FolderId) => string;
+  /**
+   * The filer's own stamps on the note text (`generated`, and `verified` where it asks first),
+   * at `at`: for a person's session, the time the version is signed (`signedAt`), so the signed
+   * `edited` confirms the person's `human:` entries exactly as a person's own edit does; for an
+   * agent, now (its version is signed `agent_edited` like any other direct write).
+   */
+  readonly stamp?: (text: string, folderId: FolderId, at: string) => string;
   /**
    * The agent's actor (the CLI's `<client>/<version>`), which its unsigned `clipped` record names.
    * A person's session always names `human:<account>`, as its signed record must.
@@ -259,7 +264,7 @@ async function recordClipped(
  */
 async function createNote(
   pass: Pass,
-  write: { noteId: NoteId; folderId: FolderId; name: string; text: string },
+  write: { noteId: NoteId; folderId: FolderId; name: string; text: string; signedAt?: string },
 ): Promise<"saved" | "duplicate" | ClipWaitReason> {
   const { context, options } = pass;
   const report = { readConflict: false } as const;
@@ -359,11 +364,18 @@ async function fileOne(pass: Pass, queued: QueuedClip, keys: WorkspaceKeyring): 
     if (folderId === undefined) return { kind: "released", reason: "new_category" };
     const name = noteName(pass, folderId, clip);
     const text = clipNoteText(payload);
+    // a person signs the version at the time its stamps name, as a person's own edit does
+    const signedAt =
+      context.api.auth.kind === "session"
+        ? signedAtNow(requireIdentity(context, "writeNote"))
+        : undefined;
+    const stampedAt = signedAt ?? new Date(Date.now()).toISOString();
     const created = await createNote(pass, {
       noteId,
       folderId,
       name,
-      text: options.stamp?.(text, folderId) ?? text,
+      text: options.stamp?.(text, folderId, stampedAt) ?? text,
+      ...(signedAt === undefined ? {} : { signedAt }),
     });
     if (created === "duplicate") return { kind: "duplicate" };
     if (created !== "saved") return { kind: "released", reason: created };

@@ -10,7 +10,13 @@ import {
   ready as clipReady,
   signAndSealClip,
 } from "../../clip/index.js";
-import { addVerified, clipNoteText, parseNote, setGenerated } from "../../core/index.js";
+import {
+  addVerified,
+  clipNoteText,
+  parseNote,
+  readProvenance,
+  setGenerated,
+} from "../../core/index.js";
 import { concatBytes, fromHex, uint32BE, utf8Encode } from "../../crypto/encoding.js";
 import {
   boxKeyPairFromPrivateKey,
@@ -407,6 +413,27 @@ describe("filing clips in the web app", () => {
     const note = await web.engine.readNote(clipNoteId(clipId));
     expect(note.text).toContain("url: https://example.com/private");
     expect(note.text).not.toContain("s3cret");
+  });
+
+  it("signs a person's clip note at the time its stamps name, confirming them", async () => {
+    const { world, web, view, inboxKey } = await withInbox();
+    const clipId = save(world, pair(world), inboxKey);
+    const person = `human:${world.accountId}` as const;
+    const result = await web.engine.fileClips(
+      view.options({
+        // as the web app stamps a note in a folder that asks first
+        stamp: (text, _folderId, at) =>
+          addVerified(setGenerated(parseNote(text), person, at), person, at).text,
+      }),
+    );
+    expect(result.filed).toHaveLength(1);
+    const note = await web.engine.readNote(clipNoteId(clipId));
+    const provenance = readProvenance(parseNote(note.text ?? "").frontmatter?.data ?? {});
+    const [verified] = provenance.verified;
+    expect(verified?.by).toBe(person);
+    // the signed edit is at exactly that time, so it confirms the entry
+    expect(note.signedWrite).toEqual({ by: world.accountId, at: verified?.at });
+    expect(provenance.generated?.at).toBe(verified?.at);
   });
 
   it("numbers a name taken in the folder", async () => {

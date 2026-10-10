@@ -651,7 +651,7 @@ export class WorkspaceSession {
           [...this.view.notes.values()]
             .filter((note) => note.folderId === folderId && note.name !== null)
             .map((note) => note.name ?? ""),
-        stamp: (text) => setGenerated(parseNote(text), actor, new Date(this.now())).text,
+        stamp: (text, _folderId, at) => setGenerated(parseNote(text), actor, at).text,
         actor,
         agentWrite: {
           minPolicyRevision: this.policyFloor,
