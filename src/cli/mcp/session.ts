@@ -435,7 +435,7 @@ export class WorkspaceSession {
     if (this.deps.stillConnected === undefined || (await this.deps.stillConnected())) return true;
     this.settle(
       "disconnected",
-      "This workspace was disconnected on this computer (`knowtarium disconnect`); connect it again with `npx knowtarium connect`, then restart the agent.",
+      "This workspace was disconnected on this computer (`npx knowtarium disconnect`); connect it again with `npx knowtarium connect`, then restart the agent.",
     );
     this.deps.onDisconnected?.();
     return false;
