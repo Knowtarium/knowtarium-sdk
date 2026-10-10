@@ -31,4 +31,11 @@ export {
   setHistorySettings,
 } from "./history-settings.js";
 export { fetchPending, fetchVersions } from "./records.js";
+export type {
+  ClipFolder,
+  ClipWaitReason,
+  FileClipsOptions,
+  FileClipsResult,
+  FiledClip,
+} from "./file-clips.js";
 export type { NoteWrite } from "./writes.js";

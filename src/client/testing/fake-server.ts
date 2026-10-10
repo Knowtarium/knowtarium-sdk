@@ -63,6 +63,13 @@ import {
   MISSING_AGENT_POLICY_SHA256,
   missingAgentPolicy,
   type AgentWriteMode,
+  type ClipId,
+  clipNoteId,
+  CLIP_QUEUE_LIMITS,
+  type ExtensionId,
+  type ExtensionInfo,
+  type QueuedClip,
+  type SignedInboxKey,
 } from "../../protocol/index.js";
 import type { FetchInit, FetchLike, FetchResponse } from "../platform/fetch.js";
 import { type RecordedCall, response } from "./http.js";
@@ -267,6 +274,16 @@ export class FakeServer {
     string,
     { pollSecret: string; status: "pending" | "approved" | "denied" | "expired"; relay?: string }
   >();
+  /** Every `inbox_key` revision stored, oldest first (the web clipper). */
+  readonly inboxKeys: SignedInboxKey[] = [];
+  /** The clip queue, by clip ID, with each clip's lease (milliseconds; 0 or past: free). */
+  readonly clipQueue = new Map<ClipId, QueuedClip & { leaseUntil: number }>();
+  /** The paired extensions `listExtensions` answers (push one to pair it). */
+  readonly extensions: (ExtensionInfo & { revokedAt: string | null })[] = [];
+  /** The clip IDs acked and released, in order, and how many claims came in. */
+  readonly acked: ClipId[] = [];
+  readonly releasedClips: ClipId[] = [];
+  claims = 0;
   private counter = 0;
 
   constructor(private readonly options: FakeServerOptions) {
@@ -1731,10 +1748,158 @@ export class FakeServer {
       }
       default:
         return (
+          this.routeClips(request) ??
           this.routeAttachments(request) ??
           this.routeHistorySettings(request) ??
           this.routeHistory(request)
         );
+    }
+  }
+
+  /**
+   * Queues a sealed clip as `postClip` would after its checks (the extension's side isn't faked):
+   * `duplicate` when it waits already or its note exists (deleted ones too).
+   */
+  queueClip(clip: {
+    readonly clipId: ClipId;
+    readonly extensionId: ExtensionId;
+    readonly blob: Uint8Array;
+    readonly postedAt?: string;
+  }): "queued" | "duplicate" {
+    if (this.clipQueue.has(clip.clipId) || this.notes.has(clipNoteId(clip.clipId))) {
+      return "duplicate";
+    }
+    const [, a = 0, b = 0, c = 0, d = 0] = clip.blob;
+    this.clipQueue.set(clip.clipId, {
+      clipId: clip.clipId,
+      extensionId: clip.extensionId,
+      generation: ((a << 24) | (b << 16) | (c << 8) | d) >>> 0,
+      blob: toBase64Url(clip.blob),
+      postedAt: clip.postedAt ?? new Date().toISOString(),
+      leaseUntil: 0,
+    });
+    return "queued";
+  }
+
+  /** The latest inbox key, if any. */
+  get inboxKey(): SignedInboxKey | null {
+    return this.inboxKeys.at(-1) ?? null;
+  }
+
+  /** Who may claim, ack and release: the owner's session, or a read-write agent over the inbox. */
+  private checkClipAccess(request: Request): void {
+    if (request.caller === "session") return;
+    const inbox = this.inboxKey;
+    if (
+      this.agentAccess !== "read-write" ||
+      (inbox !== null && !this.folderInScope(inbox.envelope.folderId))
+    ) {
+      throw new HttpError("scope_denied");
+    }
+  }
+
+  /** The web clipper's routes (the inbox key, the clip queue, the extensions), or undefined. */
+  private routeClips(request: Request): FetchResponse | undefined {
+    const workspaceId = this.options.workspaceId;
+    const now = Date.now();
+    switch (request.name) {
+      case "getInboxKey":
+        return response(200, { inboxKey: this.inboxKey });
+      case "putInboxKey": {
+        const body = this.json(request) as {
+          baseRevision: number;
+          generation: number;
+          publicKey: string;
+          folderId: FolderId;
+          signedAt: string;
+          signature: string;
+        };
+        const latest = this.inboxKey?.envelope.revision ?? 0;
+        if (body.baseRevision !== latest) {
+          throw new HttpError("conflict", { currentVersion: latest });
+        }
+        if (body.generation !== this.keyGeneration) throw new HttpError("stale_key_generation");
+        if (!this.folders.has(body.folderId) || this.deletedFolders.has(body.folderId)) {
+          throw new HttpError("not_found");
+        }
+        const fields = {
+          type: "inbox_key",
+          accountId: this.options.ownerId,
+          workspaceId,
+          revision: body.baseRevision + 1,
+          generation: body.generation,
+          publicKey: body.publicKey,
+          folderId: body.folderId,
+          createdAt: body.signedAt,
+        } as const;
+        this.verify(fields, body.signature);
+        const stored = { envelope: fields, signature: body.signature };
+        this.inboxKeys.push(stored);
+        return response(200, { inboxKey: stored });
+      }
+      case "claimClips": {
+        this.checkClipAccess(request);
+        this.claims++;
+        const max = Number(this.json(request)["max"] ?? CLIP_QUEUE_LIMITS.claimDefault);
+        const free = [...this.clipQueue.values()]
+          .filter((clip) => clip.leaseUntil <= now)
+          .sort((a, b) => Date.parse(a.postedAt) - Date.parse(b.postedAt))
+          .slice(0, max);
+        for (const clip of free) clip.leaseUntil = now + CLIP_QUEUE_LIMITS.leaseSeconds * 1000;
+        return response(200, {
+          clips: free.map(({ clipId, extensionId, generation, blob, postedAt }) => ({
+            clipId,
+            extensionId,
+            generation,
+            blob,
+            postedAt,
+          })),
+          leaseSeconds: CLIP_QUEUE_LIMITS.leaseSeconds,
+        });
+      }
+      case "ackClips":
+      case "releaseClips": {
+        this.checkClipAccess(request);
+        const { clipIds } = this.json(request) as { clipIds: ClipId[] };
+        for (const clipId of clipIds) {
+          if (request.name === "ackClips") {
+            this.clipQueue.delete(clipId);
+            this.acked.push(clipId);
+          } else {
+            const clip = this.clipQueue.get(clipId);
+            if (clip !== undefined) clip.leaseUntil = 0;
+            this.releasedClips.push(clipId);
+          }
+        }
+        return response(200, { ok: true });
+      }
+      case "clipSummary": {
+        this.checkClipAccess(request);
+        const clips = [...this.clipQueue.values()];
+        const oldest = clips.map((clip) => clip.postedAt).sort()[0] ?? null;
+        return response(200, {
+          pending: clips.length,
+          leased: clips.filter((clip) => clip.leaseUntil > now).length,
+          oldestPostedAt: oldest,
+        });
+      }
+      case "listExtensions":
+        return response(200, { extensions: this.extensions });
+      case "revokeExtension": {
+        const extension = this.extensions.find(
+          (entry) => entry.extensionId === request.params["extensionId"],
+        );
+        if (extension === undefined) throw new HttpError("not_found");
+        extension.revokedAt ??= new Date().toISOString();
+        return response(200, { ok: true });
+      }
+      case "postClip":
+      case "getExtensionInboxKey":
+      case "revokeCurrentExtension":
+      case "approveExtensionConnect":
+        throw new HttpError("not_found");
+      default:
+        return undefined;
     }
   }
 

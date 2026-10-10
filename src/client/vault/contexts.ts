@@ -93,6 +93,17 @@ export function agentNameContext(ref: AgentRef): BlobContext {
   return { kind: "agent_name", workspaceId: ref.workspaceId, id: ref.tokenId };
 }
 
+/** A paired browser extension of a workspace (the web clipper). */
+export interface ExtensionRef {
+  readonly workspaceId: string;
+  readonly extensionId: string;
+}
+
+/** The context of an extension's name (the name a person gave it at pairing). */
+export function extensionNameContext(ref: ExtensionRef): BlobContext {
+  return { kind: "extension_name", workspaceId: ref.workspaceId, id: ref.extensionId };
+}
+
 /** The kinds of blob that stay in a client's own encrypted cache and are never uploaded. */
 export const LOCAL_BLOB_KINDS = ["search_index", "graph_layout"] as const;
 export type LocalBlobKind = (typeof LOCAL_BLOB_KINDS)[number];

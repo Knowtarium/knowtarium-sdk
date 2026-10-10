@@ -1,5 +1,6 @@
 /** `knowtarium/core`: the OKF format logic shared by every client. No file system, no network. */
 export * from "./bundle/index.js";
+export * from "./clips/index.js";
 export * from "./files/index.js";
 export * from "./freshness/index.js";
 export * from "./frontmatter/index.js";

@@ -8,6 +8,7 @@
 export * from "./api/index.js";
 export * from "./attachments/index.js";
 export * from "./cache/index.js";
+export * from "./clips/index.js";
 export * from "./errors/index.js";
 export * from "./history/index.js";
 export * from "./live/index.js";

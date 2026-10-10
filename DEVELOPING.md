@@ -24,12 +24,16 @@ Check this repo out as `app/` next to `web/` and `sync/`: until the package is o
 | `knowtarium/protocol` | `src/protocol/`    | The sync API contract: route table, zod schemas, error codes     |
 | `knowtarium/core`     | `src/core/`        | OKF format logic, trust and verification, search, graph data     |
 | `knowtarium/client`   | `src/client/`      | API client, vault helpers, sync engine, live pings, cache        |
+| `knowtarium/clip`     | `src/clip/`        | The web clipper extension's light entry: clean, sign, seal clips |
 | `knowtarium` (binary) | `src/cli/index.ts` | The CLI: `connect`, `agents`, `status`, `disconnect`, `validate` |
 
 Everything is ESM with type declarations, built to `dist/` (`dist/<name>/index.js` and `.d.ts`).
 The sync API imports only `knowtarium/protocol`, so it has no code path that could decrypt. ESLint
 lets `src/protocol` import only its own files (no `../` imports, no `node:crypto`, no libsodium),
-and `pnpm test:dist` fails if `dist/protocol` shares any module with `dist/crypto`.
+and `pnpm test:dist` fails if `dist/protocol` shares any module with `dist/crypto`. ESLint lets
+`src/clip` import only its own files and crypto's libsodium-free helpers (encoding, canonical JSON,
+errors, envelope fields), and `pnpm test:dist` fails if `dist/clip` reaches any package but
+`libsodium-wrappers` or exports a function that opens anything but the pairing payload.
 
 ## Encryption: `knowtarium/crypto`
 
@@ -80,6 +84,11 @@ change.
 | Connect payload       | `0x01` ‖ nonce (24) ‖ XChaCha20-Poly1305 of JSON `{ token, ownerSigningPublicKey, wrapped, signed, signedGeneration }`; key: KDF `ktconnct` of the one-time secret; AD: `knowtarium-connect-v1\n` ‖ CLI public key |
 | Recovery code         | 32-byte key ‖ 3-byte checksum (keyed BLAKE2b), Crockford base32, 14 groups of 4                                                                                                                                    |
 | Connect code          | First 40 bits of keyed BLAKE2b of the CLI public key ‖ owner signing public key, Crockford base32, `ABCD-EFGH`                                                                                                     |
+| Inbox key             | `crypto_box_seed_keypair(crypto_kdf_derive_from_key(32, 1, "ktinbox_", workspace key N))`, one per key generation, never stored or wrapped                                                                         |
+| Signed clip           | `0x01` ‖ Ed25519 signature (64) ‖ canonical JSON of the payload; the signature covers UTF-8 `knowtarium-clip-v1\n` + that JSON                                                                                     |
+| Sealed clip           | `0x01` ‖ key generation (uint32 BE) ‖ `crypto_box_seal(sodium_pad(signed clip, 1024), inbox public key)`, at most 24 KiB                                                                                           |
+| Extension pairing     | `0x01` ‖ nonce (24) ‖ XChaCha20-Poly1305 of the pairing JSON; key: KDF `ktextpar` of the one-time secret; AD: `knowtarium-extension-pairing-v1\n` ‖ the extension's Ed25519 public key                             |
+| Extension code        | First 40 bits of BLAKE2b-256 keyed `knowtarium extension confirmation v1` of the extension's Ed25519 public key ‖ UTF-8 request ID, `ABCD-EFGH`                                                                    |
 
 Every encrypt and decrypt takes a required blob context, `{ kind, workspaceId, id }`, with `kind`
 one of `note`, `pending_change`, `title`, `folder_name`, `workspace_name`, `comment`, `event`,
@@ -143,6 +152,8 @@ other field is refused, as are unknown types. `knowtarium/protocol` has the same
 | `agent_policy`   | `revision`, `policySha256` (the owner set the agent policy; protocol 2)                                                |
 | `agent_key`      | `tokenId`, `signPublicKey`, `policyRevision` (the owner vouches for an agent's Ed25519 key and its policy floor)       |
 | `agent_edited`   | `tokenId`, `noteId`, `version`, `folderId`, `ciphertextSha256`, `revision`, `policySha256` (signed by the agent's key) |
+| `inbox_key`      | `revision`, `generation`, `publicKey` (the derived inbox X25519 key, base64url), `folderId` (the web clipper)          |
+| `extension_key`  | `extensionId` (an `ext_` id), `signPublicKey` (the owner vouches for a paired extension's Ed25519 key)                 |
 
 A folder at the workspace root has no `parentId` (never an empty or null one), so a signed
 move always says where the folder goes.
@@ -222,12 +233,63 @@ The crypto can't stop a server from serving old but genuine data (rollback). Cal
   `edited` or `approved` envelope whose `version` and `ciphertextSha256` match the blob, and never
   go back below the highest version seen for a note.
 
+### The web clipper
+
+A browser extension saves the current tab's link and title, an optional note and a category, and
+never holds a workspace key (the design and its reasons are in the product vault's Web clipper
+page and decisions 96 to 104). The pieces here:
+
+- **The inbox key.** `deriveInboxKeyPair(key)` derives one X25519 key pair per workspace key
+  generation (format table). Nothing is stored: whoever holds generation N derives inbox key N, so
+  a rotation moves the inbox with the workspace key. The owner signs the public half in
+  `inbox_key` with the inbox folder; every new signature is the next `revision`.
+  `ensureInboxKey` (`knowtarium/client`, also `SyncEngine.ensureInboxKey`) signs it when the
+  latest is for an older generation or another folder (pairing, a new inbox folder, on open), and
+  `rotateWorkspace` (so also `revokeAndRotate`) runs it after the new generation is accepted, as a
+  best effort.
+- **The extension's key.** The extension makes an Ed25519 key pair when pairing starts; the owner
+  vouches for it in `extension_key` at approval (`signExtensionKey`). Filers rebuild the envelope
+  from `listExtensions` and verify it under the owner key they trust (`fetchExtensions`).
+- **The clip.** `normalizeClip` cleans the payload `{ v, clipId, workspaceId, extensionId, url,
+title, note, category, savedAt }`: `http:` and `https:` links only, as `new URL(raw).href`, at
+  most 2,048 bytes; control, format (bidi controls among them) and lone surrogate characters
+  removed, U+200D kept, the note keeping line breaks (as LF) and tabs; the title also without
+  `\ * ? " < > |` and trimmed; NFC applied after every removal, so cleaning twice changes nothing;
+  the category through `normalizeCategory` (as `safeSegment` would name a folder, cut to 60
+  characters, `Inbox` in any case meaning the inbox itself). Title 300 and note 4,000 characters
+  (code points); over a limit is refused, never cut. The signed and sealed formats are in the
+  table above; the largest valid clip seals to about 20 KB, under the 24 KiB limit.
+- **`knowtarium/clip`**, the extension's only import: `normalizeClip`, `normalizeCategory`,
+  `signAndSealClip`, `createExtensionKeys`, `createConnectSecret`, `createClipId`,
+  `extensionConfirmationCode`, `formatExtensionConnectFragment`, `openExtensionPairing` (the one
+  thing it decrypts: the pairing payload under its one-time secret, checking the
+  `extension_key` against its own key and the `inbox_key` under the owner key it carries),
+  `verifyInboxKey` and `verifyExtensionKey` (under the owner key the extension pinned at pairing),
+  the route paths, types and error statuses of the five routes the extension calls, `ready`, and
+  `toBase64Url`/`fromBase64Url`. It runs on the standard `libsodium-wrappers` build (pinned
+  exactly), through `src/clip/sodium.ts`; the format code is shared with the sumo side through a
+  small `ClipSodium` interface, so the web app seals pairings (`sealExtensionPairing`) and shows
+  the code (`extensionConfirmationCode`) from `knowtarium/crypto` with the same code. A test runs
+  the entry with the sumo build made to fail on import, another pins its export names, and
+  `pnpm test:dist` checks its import graph and prints its size.
+- **Opening and filing** live in `knowtarium/client` only: `openClip(blob, inboxKeyPair)` (the
+  header, `crypto_box_seal_open`, unpadding, the version byte, then a canonical, clean payload) and
+  `fileClips` (below). A filed clip's history record, `clipped`, keeps the payload exactly as
+  signed and the extension's signature; `verifyClippedRecord` holds only when the signature
+  verifies under the extension's vouched key, `clipNoteId(clipId)` is the note's ID and the
+  payload's `url` is the first version's.
+
 ### Test vectors
 
 `src/crypto/vectors.json` holds known-answer vectors for every format, plus tampered envelopes,
 attachments and connect payloads and invalid codes, with the error each must raise.
 `src/crypto/envelope-vectors.json` holds the canonical JSON and signed envelope vectors on their
-own, so `knowtarium/protocol` tests its own canonicalizer against the same file. Change either
+own, so `knowtarium/protocol` tests its own canonicalizer against the same file. The web
+clipper's are `inboxKeyPairs`, `clips` (with a sealed sample that must open with the listed inbox
+private key), `tamperedClips` (each with the reason a filer refuses it), `extensionPairings`,
+`tamperedExtensionPairings` and `extensionConfirmationCodes` in `vectors.json`, and the `inbox_key`
+and `extension_key` envelopes (valid, refused, and `serverRefusedEnvelopes`: an `inbox_key` at
+revision 0, which the envelope rules allow and the API refuses) in `envelope-vectors.json`. Change either
 only together with a new format version. The Argon2id, Ed25519, X25519 and SHA-256 values were
 cross-checked against `node:crypto`, and the signed envelopes against Web Crypto with a separate
 canonicalizer. `pnpm test` runs the crypto tests in Node and again under happy-dom, and
@@ -375,6 +437,20 @@ canonicalizer. `pnpm test` runs the crypto tests in Node and again under happy-d
   If that fails, both sides show a confirmation code the person matches, and the browser relays a
   sealed, authenticated payload through the server. The CLI pins the owner's signing key from that
   delivery, never from a server response.
+- **The web clipper** (`clips.ts`, added to protocol 2 without a bump): the extension's token
+  (`kte_`, ID `ext_`) authenticates only the routes under `/extensions/current` (`auth:
+"extension"`: `postClip`, `getExtensionInboxKey`, `revokeCurrentExtension`), which take the
+  workspace from the token; every other route refuses it. `getInboxKey` and `putInboxKey` (the
+  owner signs the next `inbox_key`, `baseRevision` and the current generation checked),
+  `claimClips` (up to 50 with a 120 second lease), `ackClips` (deletes, whatever became of the
+  clip), `releaseClips`, `clipSummary`, `listExtensions` and `revokeExtension` work the
+  workspace's queue. Connect requests carry `client` (`cli` or `extension`; an extension's version
+  goes where the CLI's does), and `approveExtensionConnect` registers an extension with the
+  owner's `extension_key` and no key copy. New error codes: `stale_inbox_key` (409, with the latest
+  `inboxKey`), `inbox_not_set` (409), `inbox_full` (429); new live message `clip_added`. A clip's
+  note is `clipNoteId(clipId)` (`clip_<body>` becomes `note_<body>`), created at base version 0,
+  so a clip filed twice makes one note. The sealed clip travels as `blob` (`SealedClip`, the
+  design's name; it is sealed to the inbox key, so it holds no readable content).
 - **Strict CSP**: loading the protocol calls `z.config({ jitless: true })` before any schema is
   built, so zod never compiles code or probes `Function` (a strict Content Security Policy
   reports even the probe). The setting is global to the app's zod.

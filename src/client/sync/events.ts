@@ -122,6 +122,11 @@ export type SyncEvent =
   | { readonly type: "synced"; readonly cursor: number }
   | { readonly type: "live"; readonly state: LiveState }
   | { readonly type: "keys_rotated"; readonly keyGeneration: number }
+  /**
+   * A clip was queued in the workspace's inbox (the web clipper): `pending` clips wait. A client
+   * that files clips runs `fileClips` now.
+   */
+  | { readonly type: "clip_added"; readonly pending: number }
   /** Access is gone for good: the engine stopped (see `SyncEngine`). */
   | { readonly type: "revoked" }
   /** The notes whose newest version failed verification, each time the set changes. */

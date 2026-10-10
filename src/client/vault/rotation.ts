@@ -12,6 +12,7 @@ import {
   WRAPPED_KEY_ACCOUNT_HOLDER,
 } from "../../crypto/index.js";
 import { toHex } from "../../crypto/encoding.js";
+import { ensureInboxKey } from "../clips/inbox.js";
 import {
   type ApproveConnectRequest,
   type KeyRecipient,
@@ -364,7 +365,9 @@ async function ownerKeys(api: ApiClient): Promise<{
  * owner-signed set for that generation, such as a rotation body it kept after answering an error,
  * is caught here and on every later read, since the commitment is pinned). Then it marks the
  * remembered revocations done. The verified sets are recorded in `trust` (`acceptGenerationSet`).
- * Returns the new generation, who it was wrapped for and who was left out.
+ * When the workspace has an inbox (the web clipper), it then signs the inbox key of the new
+ * generation (`ensureInboxKey`; a failure there doesn't fail the rotation). Returns the new
+ * generation, who it was wrapped for and who was left out.
  */
 export async function rotateWorkspace(
   api: ApiClient,
@@ -416,6 +419,9 @@ export async function rotateWorkspace(
     );
   }
   await trust.settleRevocations(workspaceId);
+  // the web clipper's inbox key follows the new generation; best effort: a device that opens the
+  // workspace later signs it when the latest one is for an older generation
+  await ensureInboxKey(api, flow).catch(() => undefined);
   return { generation: key.generation, recipients, excluded };
 }
 

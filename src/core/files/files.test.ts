@@ -13,12 +13,14 @@ import {
   NoteFileError,
   noteNameFromTitle,
   normalizeNoteName,
+  numberedNoteName,
   safeSegment,
   planImport,
   type StoredFolder,
   type StoredNote,
   uniqueName,
 } from "./index.js";
+import { utf8Length } from "./note-file.js";
 
 describe("the note file", () => {
   it("is canonical JSON with the name and the raw text", () => {
@@ -367,5 +369,32 @@ describe("hostile names", () => {
       const lower = paths.map(foldName);
       expect(new Set(lower).size).toBe(lower.length);
     }
+  });
+});
+
+describe("numberedNoteName", () => {
+  it("keeps a free name, and numbers a taken one from 2", () => {
+    expect(numberedNoteName("Title.md", ["Other.md"])).toBe("Title.md");
+    expect(numberedNoteName("Title.md", ["Title.md"])).toBe("Title 2.md");
+  });
+
+  it("compares names as a case-insensitive file system would (foldName)", () => {
+    expect(numberedNoteName("Title.md", ["title.MD"])).toBe("Title 2.md");
+    expect(numberedNoteName("Straße.md", ["STRASSE.md"])).toBe("Straße 2.md");
+    expect(numberedNoteName("Café.md", ["Cafe\u0301.md"])).toBe("Café 2.md");
+  });
+
+  it("goes past the numbers already taken, and numbers a name that holds one on", () => {
+    expect(numberedNoteName("Title.md", ["Title.md", "title 2.md", "Title 3.md"])).toBe(
+      "Title 4.md",
+    );
+    expect(numberedNoteName("Chapter 2.md", ["Chapter 2.md"])).toBe("Chapter 2 2.md");
+  });
+
+  it("stays within the file name length limit", () => {
+    const long = `${"é".repeat(126)}.md`;
+    const numbered = numberedNoteName(long, [long]);
+    expect(numbered.endsWith(" 2.md")).toBe(true);
+    expect(utf8Length(numbered)).toBeLessThanOrEqual(255);
   });
 });

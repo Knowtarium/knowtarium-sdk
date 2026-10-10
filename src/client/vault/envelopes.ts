@@ -82,6 +82,8 @@ const SIGNED_AT_PLACE: Partial<Record<SignedEnvelopeFields["type"], SignedAtPlac
   agent_policy: ["setAgentPolicy", "body", "signedAt"],
   agent_key: ["approveConnect", "body", "agentKeySignedAt"],
   agent_edited: ["writeNoteAsAgent", "headers", SIGNED_AT_HEADER],
+  inbox_key: ["putInboxKey", "body", "signedAt"],
+  extension_key: ["approveExtensionConnect", "body", "keySignedAt"],
 };
 
 /**
@@ -468,6 +470,60 @@ export function signAgentKey(
       tokenId: details.tokenId,
       signPublicKey: toBase64Url(details.signPublicKey),
       policyRevision: details.policyRevision,
+    },
+    details.signedAt,
+  );
+}
+
+/**
+ * The owner's `inbox_key` for `putInboxKey` (the web clipper): the next revision
+ * (`baseRevision + 1`), the current key generation, its derived inbox public key
+ * (`deriveInboxKeyPair`) and the inbox folder.
+ */
+export function signInboxKey(
+  signer: Signer,
+  details: {
+    readonly workspaceId: string;
+    readonly baseRevision: number;
+    readonly generation: number;
+    readonly publicKey: Uint8Array;
+    readonly folderId: string;
+  } & SigningTime,
+): SignedAction {
+  return sign(
+    signer,
+    details.workspaceId,
+    {
+      type: "inbox_key",
+      revision: details.baseRevision + 1,
+      generation: details.generation,
+      publicKey: toBase64Url(details.publicKey),
+      folderId: details.folderId,
+    },
+    details.signedAt,
+  );
+}
+
+/**
+ * The owner's `extension_key` for `approveExtensionConnect`: vouches for a paired extension's
+ * Ed25519 key (from the pairing link's fragment) under the extension ID the web app made. Send
+ * `signedAt` as `keySignedAt` and `signature` as `keySignature`.
+ */
+export function signExtensionKey(
+  signer: Signer,
+  details: {
+    readonly workspaceId: string;
+    readonly extensionId: string;
+    readonly signPublicKey: Uint8Array;
+  } & SigningTime,
+): SignedAction {
+  return sign(
+    signer,
+    details.workspaceId,
+    {
+      type: "extension_key",
+      extensionId: details.extensionId,
+      signPublicKey: toBase64Url(details.signPublicKey),
     },
     details.signedAt,
   );

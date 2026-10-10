@@ -74,6 +74,29 @@ export function noteNameFromTitle(title: string): string {
   }
 }
 
+/**
+ * `name` itself when no name in `taken` is the same (compared as a case-insensitive file system
+ * would, with `foldName`), else the first free numbered one: `Title 2.md`, `Title 3.md`, past any
+ * number already taken. A name that holds a number already is numbered on (`Chapter 2.md` gives
+ * `Chapter 2 2.md`), so a title's own number never changes. Kept within the file name length
+ * limit. `uniqueName` tags the note's ID instead, for names nobody chose; this one is for names a
+ * person sees taken from a title (a new note, a filed clip).
+ */
+export function numberedNoteName(name: string, taken: Iterable<string>): string {
+  const used = new Set([...taken].map(foldName));
+  if (!used.has(foldName(name))) return name;
+  const dot = name.lastIndexOf(".");
+  const [stem, extension] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ""];
+  for (let number = 2; ; number++) {
+    const suffix = ` ${String(number)}`;
+    const room = MAX_NOTE_NAME_BYTES - utf8Length(suffix + extension);
+    const chars = Array.from(stem);
+    while (chars.length > 0 && utf8Length(chars.join("")) > room) chars.pop();
+    const candidate = `${chars.join("").trimEnd()}${suffix}${extension}`;
+    if (!used.has(foldName(candidate))) return candidate;
+  }
+}
+
 /** A stored note name as it is when it is a valid note name, else one made safe from it. */
 function usableNoteName(name: string): string {
   try {

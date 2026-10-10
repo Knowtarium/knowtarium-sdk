@@ -5,7 +5,8 @@ import { z } from "zod";
  * recorded by the server from the signed write itself (only the signed envelope, no ciphertext),
  * and so is an agent's direct write (`agent_edited`, signed with the agent's own key, which the
  * owner vouched for); agents append their events (`proposed`, `checked`, `wrote`) as encrypted
- * records; a person can append signed records too (`restored`, `imported`). The client decrypts
+ * records; a person can append signed records too (`restored`, `imported`); a filed clip's
+ * `clipped` record comes from either. The client decrypts
  * the records and verifies the signatures; core turns both into typed events.
  */
 
@@ -76,6 +77,25 @@ export const EventRecord = z.discriminatedUnion("type", [
     at: At,
     version: Version,
     summary: Text(4000).optional(),
+  }),
+  /**
+   * A clip filed as this note (the web clipper), appended right after the note's first version:
+   * the clip's canonical JSON exactly as the extension signed it (`payload`) and the extension's
+   * signature (base64url). A client shows "Saved from <extension>" only when the signature
+   * verifies under that extension's owner-vouched key, `clipNoteId(clipId)` is this note's ID and
+   * the payload's `url` is the first version's `url` (`verifyClippedRecord` in knowtarium/client);
+   * otherwise only the version's signer. The web app appends it as the person's signed record,
+   * the CLI unsigned (like `wrote`): the extension's signature is the proof either way.
+   */
+  z.looseObject({
+    type: z.literal("clipped"),
+    actor: Actor,
+    at: At,
+    version: Version,
+    clipId: Text(64),
+    extensionId: Text(64),
+    payload: Text(32 * 1024),
+    signature: Text(128),
   }),
   z.looseObject({
     type: z.literal("imported"),

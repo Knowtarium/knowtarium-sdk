@@ -50,7 +50,7 @@ import {
   setAgentPolicy,
   writeAsAgent,
 } from "./agent-writes.js";
-import type { AgentConnection, SyncContext } from "./context.js";
+import { type AgentConnection, requireIdentity, type SyncContext } from "./context.js";
 import {
   type NoteSnapshot,
   SyncEmitter,
@@ -80,6 +80,8 @@ import type {
   WriteResult,
 } from "./results.js";
 import { Confirmations } from "./confirmations.js";
+import { type EnsuredInboxKey, ensureInboxKey } from "../clips/inbox.js";
+import { fileClips, type FileClipsOptions, type FileClipsResult } from "./file-clips.js";
 import { approvePending, readPending, rejectPending, submitPending } from "./review.js";
 import { deleteNote, type NoteWrite, writeNote } from "./writes.js";
 
@@ -452,6 +454,36 @@ export class SyncEngine {
     return this.run(() => undoAgentVersion(this.context, noteId, version, options));
   }
 
+  /**
+   * Files the waiting clips of the web clipper as notes (`fileClips`): a person's session as the
+   * person in every folder, an agent with its own key where the folder's mode is `direct` (the
+   * rest wait, released, with the reason). Run it after a pull, on a `clip_added` event and, in
+   * the web app, before revoking an extension.
+   */
+  fileClips(options: FileClipsOptions): Promise<FileClipsResult> {
+    return this.run(() => fileClips(this.context, options));
+  }
+
+  /**
+   * The owner keeps the workspace's inbox key current (session): signs the next `inbox_key` when
+   * the latest is for an older key generation, or for another inbox folder than `folderId` (see
+   * `ensureInboxKey`). Run it at pairing, after a rotation, on open and when the inbox folder had
+   * to be made again.
+   */
+  ensureInboxKey(options: { readonly folderId?: string } = {}): Promise<EnsuredInboxKey> {
+    return this.run(() =>
+      ensureInboxKey(
+        this.context.api,
+        {
+          workspaceId: this.context.workspaceId,
+          signer: requireIdentity(this.context, "putInboxKey"),
+          keys: this.context.keys,
+        },
+        options,
+      ),
+    );
+  }
+
   /** An agent proposes a new version (agent). */
   submitPending(proposal: NoteWrite): Promise<SubmitResult> {
     return this.run(() => submitPending(this.context, proposal));
@@ -544,6 +576,9 @@ export class SyncEngine {
             emitter.emit({ type: "error", error });
           },
         );
+        return;
+      case "clip_added":
+        emitter.emit({ type: "clip_added", pending: message.pending });
         return;
       case "revoked":
         this.revoke();

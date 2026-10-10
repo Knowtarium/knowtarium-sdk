@@ -21,6 +21,8 @@ import {
   type AgentRef,
   agentNameContext,
   checkContext,
+  extensionNameContext,
+  type ExtensionRef,
   commentContext,
   eventContext,
   folderNameContext,
@@ -113,6 +115,20 @@ export function encryptAgentName(key: WorkspaceKey, ref: AgentRef, name: string)
 /** Decrypts an agent's `encName`. */
 export function decryptAgentName(keys: WorkspaceKeys, ref: AgentRef, encName: string): string {
   return decryptText(keys, fromBase64Url(encName), agentNameContext(ref));
+}
+
+/** Encrypts the name a person gives a paired extension as its `encName`, bound to its ID. */
+export function encryptExtensionName(key: WorkspaceKey, ref: ExtensionRef, name: string): string {
+  return toBase64Url(encryptText(key, name, extensionNameContext(ref)));
+}
+
+/** Decrypts an extension's `encName`. */
+export function decryptExtensionName(
+  keys: WorkspaceKeys,
+  ref: ExtensionRef,
+  encName: string,
+): string {
+  return decryptText(keys, fromBase64Url(encName), extensionNameContext(ref));
 }
 
 /** Encrypts a workspace name as the `encName` field. */

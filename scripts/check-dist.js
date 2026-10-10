@@ -2,15 +2,17 @@
 // is imported by name (Node resolves a package's own name through its "exports"), each has its
 // .d.ts, core edits a note without touching other bytes and imports nothing platform specific,
 // the client reaches only libsodium, zod, yaml and jsdiff, the built crypto entry reproduces the
-// committed vectors, the binary runs (in a throwaway home: it never sees the real agent configs,
+// committed vectors, knowtarium/clip (the web clipper's light entry) reaches only the standard
+// libsodium-wrappers build and opens nothing but a pairing payload, the binary runs (in a throwaway home: it never sees the real agent configs,
 // the OS keychain or the production API), and knowtarium/protocol (all the sync API imports)
 // shares no module with knowtarium/crypto and never imports libsodium.
 // Run `pnpm build` first.
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { gzipSync } from "node:zlib";
 import { dirname, join, relative } from "node:path";
 import process from "node:process";
 
@@ -174,6 +176,84 @@ for (const specifier of importGraph("client/index.js").bare) {
   );
 }
 
+// knowtarium/clip, the extension's entry: the standard libsodium-wrappers build and its own
+// files only (no sumo build, zod or yaml), no module of knowtarium/crypto's own, and nothing that
+// opens a clip, a note or a key copy; it reproduces the committed clip and pairing vectors
+const clipGraph = importGraph("clip/index.js");
+assert.deepEqual(
+  clipGraph.bare,
+  ["libsodium-wrappers"],
+  "knowtarium/clip imports only libsodium-wrappers",
+);
+for (const entry of ["crypto/index.js", "client/index.js", "protocol/index.js", "core/index.js"]) {
+  assert.ok(
+    !importGraph(entry).bare.includes("libsodium-wrappers"),
+    `${entry} loads the standard libsodium build`,
+  );
+}
+for (const file of clipGraph.files) {
+  assert.ok(
+    !/\bcrypto_box_seal_open\b|\bunpad\b|libsodium-wrappers-sumo/.test(
+      readFileSync(join(dist, file), "utf8"),
+    ),
+    `knowtarium/clip's ${file} can open a sealed box`,
+  );
+}
+const clipEntry = await import("knowtarium/clip");
+const opening = Object.keys(clipEntry).filter((name) =>
+  /^(open|decrypt|unwrap|unseal)/i.test(name),
+);
+assert.deepEqual(
+  opening,
+  ["openExtensionPairing"],
+  "knowtarium/clip opens only the pairing payload",
+);
+await clipEntry.ready();
+for (const vector of vectors.extensionPairings) {
+  const pairing = clipEntry.openExtensionPairing(fromHex(vector.sealed), {
+    secret: fromHex(vector.secret),
+    signPublicKey: fromHex(vector.signPublicKey),
+  });
+  assert.equal(pairing.token, vector.expected.token, vector.name);
+}
+for (const vector of vectors.extensionConfirmationCodes) {
+  assert.equal(
+    clipEntry.extensionConfirmationCode(fromHex(vector.signPublicKey), vector.requestId),
+    vector.code,
+    vector.name,
+  );
+}
+for (const vector of vectors.inboxKeyPairs) {
+  const pair = crypto.deriveInboxKeyPair({
+    generation: vector.generation,
+    key: fromHex(vector.workspaceKey),
+  });
+  assert.equal(Buffer.from(pair.publicKey).toString("hex"), vector.publicKey, vector.name);
+}
+// a clip sealed by the built clip entry opens with the built client
+const clipVector = vectors.clips[0];
+const inbox = vectors.inboxKeyPairs[0];
+const sealedClip = clipEntry.signAndSealClip(clipVector.payload, {
+  signingSecretKey: Uint8Array.from([
+    ...fromHex(clipVector.signingSeed),
+    ...fromHex(clipVector.signPublicKey),
+  ]),
+  inboxKey: { generation: inbox.generation, publicKey: fromHex(inbox.publicKey) },
+});
+const openedClip = (await import("knowtarium/client")).openClip(sealedClip, {
+  generation: inbox.generation,
+  publicKey: fromHex(inbox.publicKey),
+  privateKey: fromHex(inbox.privateKey),
+});
+assert.ok(openedClip.ok, "the client opens a clip the clip entry sealed");
+assert.equal(openedClip.clip.json, clipVector.canonical);
+// the entry's own size, without libsodium (record it in the release notes; there is no target)
+const clipBytes = clipGraph.files.reduce((sum, file) => sum + statSync(join(dist, file)).size, 0);
+const clipGzip = clipGraph.files.reduce(
+  (sum, file) => sum + gzipSync(readFileSync(join(dist, file))).length,
+  0,
+);
+
 // the binary, run in a throwaway home with the keychain off and an API that isn't there
 const sandbox = mkdtempSync(join(tmpdir(), "knowtarium-dist-"));
 const isolated = {
@@ -283,3 +363,6 @@ try {
 }
 
 process.stdout.write(`dist OK: ${Object.keys(pkg.exports).join(", ")} and the knowtarium bin\n`);
+process.stdout.write(
+  `knowtarium/clip: ${String(clipGraph.files.length)} files, ${(clipBytes / 1024).toFixed(1)} KiB (${(clipGzip / 1024).toFixed(1)} KiB gzipped), plus libsodium-wrappers\n`,
+);

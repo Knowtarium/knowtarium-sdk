@@ -7,6 +7,7 @@ export {
   mergeNoteNames,
   noteNameFromTitle,
   noteTitle,
+  numberedNoteName,
   planImport,
   ROOT_FOLDER_NAME,
   rootFolderOf,
