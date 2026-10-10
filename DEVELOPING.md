@@ -721,12 +721,16 @@ package, applies the folder's `.npmrc` (`node-options=--require ./x.cjs` runs co
 CLI), and runs the package's bin with the folder's `node_modules/.bin` on the PATH ahead of the
 real `node`, so a planted `node_modules/.bin/node` runs instead. Opening a hostile repository would
 run its code in the process that holds the Knowtarium keys. So the command goes to the user's home
-folder before npx starts: `/bin/sh -c "cd && exec npx -y knowtarium@<version> mcp"`, and on
-Windows `<%ComSpec%> /d /v:on /s /c "cd /d !USERPROFILE!&& npx -y knowtarium@<version> mcp"`:
-Windows' own `cmd.exe` by its full path (a bare `cmd` or `npx` is looked up in the current folder
-first), `/d` so no AutoRun runs, and the profile path expanded only after the line is parsed
-(`/v:on`), so a path with `&` in it stays a path. npm then finds no project but the user's home,
-whose `.npmrc` is the user's own config anyway; the user's `~/.npmrc` and `npm_config_*` settings
+folder before npx starts: `/bin/sh -c 'cd -- "${HOME:?}" && exec npx -y knowtarium@<version> mcp'`
+(with HOME unset or empty the shell stops with an error: a bare `cd` would stay in the project
+folder in dash and busybox, Debian's and Alpine's `/bin/sh`), and on Windows
+`<%ComSpec%> /d /v:on /s /c "if defined USERPROFILE (cd /d !USERPROFILE!&& npx -y
+knowtarium@<version> mcp) else exit 1"`: Windows' own `cmd.exe` by its full path (a bare `cmd` or
+`npx` is looked up in the current folder first), `/d` so no AutoRun runs, the profile path expanded
+only after the line is parsed (`/v:on`), so a path with `&` or `)` in it stays a path, and no
+USERPROFILE ends the command with 1 instead of a bare `cd /d` that stays put. npx then runs with
+delayed expansion on, so a `!` in the path of Node or npm breaks it, which fails closed. npm then
+finds no project but the user's home, whose `.npmrc` is the user's own config anyway; the user's `~/.npmrc` and `npm_config_*` settings
 (a company registry) apply as before. `--prefix <private folder>` was considered and isn't used:
 it stops the planted package and `.npmrc`, but npx still runs the bin from the current folder (the
 planted `node` runs), and it moves npm's global config to `<prefix>/etc/npmrc`. Claude Code starts
@@ -737,8 +741,13 @@ version must be a plain semver and every argument plain (`[\w@.\-/=:]`), checked
 is written. `src/cli/agents/hostile-folder.test.ts` plants all of the above, runs the written
 command and the plugins' launcher in that folder with the real npx and a registry on `127.0.0.1`
 (set in the user's own `~/.npmrc`), and checks that the registry's package runs and nothing
-planted does (a bare `npx` there runs a planted one); on Windows (CI) a stand-in npx checks that
-the command moves to the profile folder before it looks for `npx`.
+planted does (a bare `npx` there runs a planted one), and that the command (under `/bin/sh` and,
+where there is one, dash) and the launcher stop when HOME is unset or empty; on Windows (CI)
+stand-in npx files, one that turns delayed expansion on itself and one that doesn't, check that the
+command moves to the profile folder before it looks for `npx`, and that it stops without
+USERPROFILE. NODE_OPTIONS and `npm_config_*` settings in the agent's own environment still reach
+npx: they are the user's, and project-level ones (Claude Code's `env` in a project's
+`.claude/settings.json`, direnv) need the user's trust in that project first.
 
 `connect` and `agents` ask which of the agents found to add with a checkbox list (`CliIo.choose`)
 when stdin and stdout are both terminals: every agent starts ticked, so Enter at once adds them
@@ -997,9 +1006,11 @@ Knowtarium/knowtarium-plugins`, then `codex plugin add knowtarium@knowtarium`. T
   the launcher starts `npx` with those arguments in the user's home folder, never the project the
   client starts it in (see **Never in the project's folder** above; on Windows through
   `%ComSpec%`, `cmd.exe` by its full path, with `/d /s /c`), refuses any argument that isn't plain
-  (`[\w@.\-/=:]`, so cmd reads none as a command), passes signals on, returns the exit code and
-  stops the whole process tree on Windows. Connect with `npx knowtarium connect --no-agents` (the
-  plugin already adds the server), or through the `connect` tool.
+  (`[\w@.\-/=:]`, so cmd reads none as a command) and doesn't start without a home folder (an
+  empty HOME), passes signals on, returns the exit code and stops the whole process tree on Windows
+  (`%SystemRoot%\System32\taskkill.exe`, by its full path). Connect with
+  `npx knowtarium connect --no-agents` (the plugin already adds the server), or through the
+  `connect` tool.
 
 `pnpm build:extras` builds them into `dist-extras/` (see `RELEASING.md`): it refuses a release
 build until `knowtarium@<version>` is on npm (`--dev` makes a labeled development build), checks

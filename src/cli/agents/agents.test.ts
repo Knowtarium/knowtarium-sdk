@@ -24,7 +24,7 @@ afterEach(async () => {
 
 const server = serverCommand("1.2.3", "linux");
 const COMMAND = "/bin/sh";
-const ARGS = ["-c", "cd && exec npx -y knowtarium@1.2.3 mcp"];
+const ARGS = ["-c", 'cd -- "${HOME:?}" && exec npx -y knowtarium@1.2.3 mcp'];
 
 async function userHome() {
   const created = await temporaryFolder();
@@ -45,12 +45,14 @@ describe("the server command", () => {
     expect(COMMANDS[MCP_COMMAND]).toBe(mcpCommand);
     expect(server.args.at(-1)?.endsWith(` ${MCP_COMMAND}`)).toBe(true);
     expect(commandLine(server, "linux")).toBe(
-      "/bin/sh -c 'cd && exec npx -y knowtarium@1.2.3 mcp'",
+      `/bin/sh -c 'cd -- "\${HOME:?}" && exec npx -y knowtarium@1.2.3 mcp'`,
     );
   });
 
   it("goes through Windows' own cmd.exe, by its full path, to the profile folder first", () => {
-    const args = ["/d", "/v:on", "/s", "/c", "cd /d !USERPROFILE!&& npx -y knowtarium@1.2.3 mcp"];
+    const script =
+      "if defined USERPROFILE (cd /d !USERPROFILE!&& npx -y knowtarium@1.2.3 mcp) else exit 1";
+    const args = ["/d", "/v:on", "/s", "/c", script];
     expect(serverCommand("1.2.3", "win32", { comSpec: "C:\\WINDOWS\\system32\\cmd.exe" })).toEqual({
       command: "C:\\WINDOWS\\system32\\cmd.exe",
       args,
@@ -63,7 +65,7 @@ describe("the server command", () => {
     }
     expect(serverCommand("1.2.3", "win32").command).toBe("C:\\Windows\\System32\\cmd.exe");
     expect(commandLine(serverCommand("1.2.3", "win32"), "win32")).toBe(
-      '"C:\\Windows\\System32\\cmd.exe" /d /v:on /s /c "cd /d !USERPROFILE!&& npx -y knowtarium@1.2.3 mcp"',
+      `"C:\\Windows\\System32\\cmd.exe" /d /v:on /s /c "${script}"`,
     );
   });
 
@@ -137,7 +139,7 @@ describe("Codex's TOML", () => {
     const added = upsertCodexServer(base, server);
     if (added.status !== "added") throw new Error("expected an add");
     expect(added.text).toBe(
-      `${base}\n[mcp_servers.knowtarium]\ncommand = "/bin/sh"\nargs = ["-c", "cd && exec npx -y knowtarium@1.2.3 mcp"]\n`,
+      `${base}\n[mcp_servers.knowtarium]\ncommand = "/bin/sh"\nargs = ["-c", "cd -- \\"\${HOME:?}\\" && exec npx -y knowtarium@1.2.3 mcp"]\n`,
     );
     expect(upsertCodexServer(added.text, server)).toEqual({ status: "unchanged" });
 
@@ -146,7 +148,7 @@ describe("Codex's TOML", () => {
     const updated = upsertCodexServer(stale, server);
     if (updated.status !== "updated") throw new Error("expected an update");
     expect(updated.text).toBe(
-      '[mcp_servers."knowtarium"] # ours\ncommand = "/bin/sh"\nargs = ["-c", "cd && exec npx -y knowtarium@1.2.3 mcp"]\nenv = { A = "1" }\n\n[mcp_servers.knowtarium.env2]\nB = "2"\n\n[profiles.x]\nmodel = "y"\n',
+      '[mcp_servers."knowtarium"] # ours\ncommand = "/bin/sh"\nargs = ["-c", "cd -- \\"${HOME:?}\\" && exec npx -y knowtarium@1.2.3 mcp"]\nenv = { A = "1" }\n\n[mcp_servers.knowtarium.env2]\nB = "2"\n\n[profiles.x]\nmodel = "y"\n',
     );
   });
 
@@ -333,13 +335,13 @@ describe("configs it can't edit", () => {
     expect(commented?.reason).toMatch(/has comments/);
     if (broken === undefined || commented === undefined) throw new Error("expected results");
     expect(handAdd(broken, server, "linux")).toBe(
-      `in ${broken.path}, under "mcpServers": "knowtarium": { "command": "/bin/sh", "args": ["-c","cd && exec npx -y knowtarium@1.2.3 mcp"] }`,
+      `in ${broken.path}, under "mcpServers": "knowtarium": { "command": "/bin/sh", "args": ["-c","cd -- \\"\${HOME:?}\\" && exec npx -y knowtarium@1.2.3 mcp"] }`,
     );
     expect(handAdd(commented, server, "linux")).toContain(
       'under "mcp": "knowtarium": { "type": "local"',
     );
     expect(handAdd({ ...broken, agent: "claude-code", name: "Claude Code" }, server, "linux")).toBe(
-      "claude mcp add --scope user knowtarium -- /bin/sh -c 'cd && exec npx -y knowtarium@1.2.3 mcp'",
+      `claude mcp add --scope user knowtarium -- /bin/sh -c 'cd -- "\${HOME:?}" && exec npx -y knowtarium@1.2.3 mcp'`,
     );
 
     // a .jsonc without comments is edited like JSON

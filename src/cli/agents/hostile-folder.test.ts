@@ -9,7 +9,7 @@
 // through cmd.exe, a stand-in npx checks it moves to the profile folder before it looks for npx.
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { chmod, copyFile, mkdir, readdir, realpath, symlink, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -199,20 +199,60 @@ describe.skipIf(windows)("a hostile project folder, with the real npx", () => {
       "package.json",
     ]);
   }, 60_000);
+
+  // a bare `cd` without HOME stays where it is in dash and busybox (Debian's and Alpine's /bin/sh)
+  const shells = ["/bin/sh", ...(existsSync("/bin/dash") ? ["/bin/dash"] : [])];
+  it.each(shells)(
+    "stops, in %s, when HOME is unset or empty",
+    async (shell) => {
+      const server = serverCommand(VERSION, process.platform);
+      const unset = Object.fromEntries(Object.entries(env).filter(([key]) => key !== "HOME"));
+      for (const without of [unset, { ...unset, HOME: "" }]) {
+        const result = await run(shell, server.args, project, without);
+        expect(result.output).not.toContain("PLANTED");
+        expect(result.output).not.toContain("registry knowtarium");
+        expect(result.output).toMatch(/HOME/);
+        expect(result.code).not.toBe(0);
+      }
+    },
+    60_000,
+  );
+
+  it("stops the plugins' launcher when HOME is empty", async () => {
+    const launcher = join(dirname(project), "launch.mjs");
+    await copyFile("extras/launch.mjs", launcher);
+    const result = await run(
+      process.execPath,
+      [launcher, "-y", `knowtarium@${VERSION}`, "mcp"],
+      project,
+      { ...env, HOME: "" },
+    );
+    expect(result.output).not.toContain("PLANTED");
+    expect(result.output).toContain("couldn't find your home folder");
+    expect(result.code).toBe(1);
+  }, 60_000);
 });
 
 describe.runIf(windows)("a hostile project folder, on Windows", () => {
-  it("runs the agent config's npx from the profile folder, never the project's", async () => {
+  /** A stand-in npx that prints the folder it runs in with `cd`, so it needs no expansion. */
+  const plainNpx = (marker: string) => `@echo off\r\necho ${marker}args: %*\r\ncd\r\n`;
+  /** One that prints it with delayed expansion, which it turns on itself. */
+  const delayedNpx = (marker: string) =>
+    `@echo off\r\nsetlocal EnableDelayedExpansion\r\necho ${marker}cwd: !CD!\r\necho args: %*\r\n`;
+
+  /**
+   * Runs the agent config's command in a project folder that has an npx of its own, with the
+   * stand-in on the PATH and a profile folder whose path cmd would split at the & if it read it
+   * before the line is parsed. `profile` false runs it without USERPROFILE.
+   */
+  async function runConfigured(npx: (marker: string) => string, profile = true) {
     const folder = await temporaryFolder();
     try {
       const root = await realpath(folder.path);
-      // a profile path cmd would split at the & if it read it before the line is parsed
       const home = join(root, "user & home");
       const project = join(root, "project");
       const bin = join(root, "bin");
       for (const path of [home, project, bin]) await mkdir(path, { recursive: true });
-      const npx = (marker: string) =>
-        `@echo off\r\nsetlocal EnableDelayedExpansion\r\necho ${marker}cwd: !CD!\r\necho args: %*\r\n`;
       await writeFile(join(bin, "npx.cmd"), npx(""));
       await writeFile(join(project, "npx.cmd"), npx("PLANTED "));
       const server = serverCommand(VERSION, "win32", {
@@ -221,18 +261,37 @@ describe.runIf(windows)("a hostile project folder, on Windows", () => {
           ? {}
           : { systemRoot: process.env["SystemRoot"] }),
       });
-      // Windows spells it Path; a second PATH key would leave which one wins to chance
-      const pathKey =
-        Object.keys(process.env).find((key) => key.toUpperCase() === "PATH") ?? "PATH";
-      const result = await run(server.command, server.args, project, {
-        ...process.env,
-        USERPROFILE: home,
-        [pathKey]: `${bin}${delimiter}${process.env[pathKey] ?? ""}`,
-      });
-      expect(result.output).toBe(`cwd: ${home}\nargs: -y knowtarium@${VERSION} mcp\n`);
-      expect(result.code).toBe(0);
+      // Windows spells some names its own way (Path); a second key would leave which one wins to
+      // chance
+      const keyOf = (name: string) =>
+        Object.keys(process.env).find((key) => key.toUpperCase() === name) ?? name;
+      const environment: NodeJS.ProcessEnv = Object.fromEntries(
+        Object.entries(process.env).filter(([key]) => key.toUpperCase() !== "USERPROFILE"),
+      );
+      environment[keyOf("PATH")] = `${bin}${delimiter}${process.env[keyOf("PATH")] ?? ""}`;
+      if (profile) environment["USERPROFILE"] = home;
+      return { home, ...(await run(server.command, server.args, project, environment)) };
     } finally {
       await folder.cleanup();
     }
+  }
+
+  it("runs the agent config's npx from the profile folder, never the project's", async () => {
+    const result = await runConfigured(delayedNpx);
+    expect(result.output).toBe(`cwd: ${result.home}\nargs: -y knowtarium@${VERSION} mcp\n`);
+    expect(result.code).toBe(0);
+  });
+
+  it("does the same for an npx that doesn't turn delayed expansion on itself", async () => {
+    const result = await runConfigured(plainNpx);
+    expect(result.output).toBe(`args: -y knowtarium@${VERSION} mcp\n${result.home}\n`);
+    expect(result.code).toBe(0);
+  });
+
+  it("stops without USERPROFILE instead of staying in the project folder", async () => {
+    const result = await runConfigured(plainNpx, false);
+    expect(result.output).not.toContain("PLANTED");
+    expect(result.output).not.toContain("args:");
+    expect(result.code).toBe(1);
   });
 });

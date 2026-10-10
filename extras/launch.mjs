@@ -11,10 +11,11 @@
 // instead, never the project's. On Windows, where npx is a batch file, it goes through Windows'
 // own cmd.exe by its full path (`/d`: no AutoRun), which then looks for npx in the home folder and
 // on the PATH, and the arguments must be plain (a version, flags, `mcp`), so cmd can't read any of
-// them as a command.
+// them as a command. Without a home folder it doesn't start at all, and taskkill is named by its
+// full path too.
 import { spawn, spawnSync } from "node:child_process";
 import { constants, homedir } from "node:os";
-import { win32 } from "node:path";
+import { isAbsolute, win32 } from "node:path";
 import process from "node:process";
 
 const fail = (message) => {
@@ -27,20 +28,31 @@ if (args.length === 0) fail("launch.mjs needs the npx arguments, such as -y know
 const unsafe = args.find((arg) => !/^[\w@.\-/=:]+$/.test(arg));
 if (unsafe !== undefined) fail(`launch.mjs refuses the argument ${JSON.stringify(unsafe)}`);
 
+/** A program in Windows' System32 folder, by its full path (`%SystemRoot%\System32\<name>`). */
+function systemTool(name) {
+  const root = process.env.SystemRoot;
+  return win32.join(
+    typeof root === "string" && win32.isAbsolute(root) ? root : "C:\\Windows",
+    "System32",
+    name,
+  );
+}
+
 /** Windows' own cmd.exe: %ComSpec% when it names one by its full path, else the system's. */
 function windowsShell() {
-  const isCmd = (path) =>
-    typeof path === "string" && win32.isAbsolute(path) && /(^|\\)cmd\.exe$/i.test(path);
-  if (isCmd(process.env.ComSpec)) return process.env.ComSpec;
-  const fromRoot =
-    process.env.SystemRoot === undefined
-      ? undefined
-      : win32.join(process.env.SystemRoot, "System32", "cmd.exe");
-  return isCmd(fromRoot) ? fromRoot : "C:\\Windows\\System32\\cmd.exe";
+  const comSpec = process.env.ComSpec;
+  return typeof comSpec === "string" &&
+    win32.isAbsolute(comSpec) &&
+    /(^|\\)cmd\.exe$/i.test(comSpec)
+    ? comSpec
+    : systemTool("cmd.exe");
 }
 
 const windows = process.platform === "win32";
-const options = { cwd: homedir(), stdio: "inherit" };
+// never the folder the client started this in: no home folder, no server
+const home = homedir();
+if (!isAbsolute(home)) fail("couldn't find your home folder (set HOME, or USERPROFILE on Windows)");
+const options = { cwd: home, stdio: "inherit" };
 const child = windows
   ? spawn(windowsShell(), ["/d", "/s", "/c", "npx", ...args], { ...options, windowsHide: true })
   : spawn("npx", args, options);
@@ -51,8 +63,8 @@ function stop(signal) {
   stopping = true;
   if (windows) {
     if (child.pid !== undefined) {
-      spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
-        cwd: homedir(),
+      spawnSync(systemTool("taskkill.exe"), ["/pid", String(child.pid), "/T", "/F"], {
+        cwd: home,
         stdio: "ignore",
       });
     }

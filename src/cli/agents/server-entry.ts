@@ -49,10 +49,13 @@ export function windowsShell(env: { readonly comSpec?: string; readonly systemRo
  * there or in a parent instead of the registry's package, apply the folder's `.npmrc` (whose
  * `node-options` runs code before the CLI), and put its `node_modules/.bin` on the PATH ahead of
  * the real `node`. So the command first goes to the user's home folder, and only then runs npx:
- * `/bin/sh -c "cd && exec npx ..."`. On Windows, `npx` is a batch file agents can't start directly
- * and `cmd` looks in the current folder first, so it is Windows' own `cmd.exe` by its full path,
- * `/d` (no AutoRun), `/v:on` and `!USERPROFILE!`, expanded after the line is parsed, so a profile
- * path with `&` in it stays one path. `--prefix` isn't used: it stops neither the PATH nor the
+ * `/bin/sh -c 'cd -- "${HOME:?}" && exec npx ...'`, which stops (non-zero) when HOME is unset or
+ * empty, where a bare `cd` would stay in the project folder in some shells (dash, busybox). On
+ * Windows, `npx` is a batch file agents can't start directly and `cmd` looks in the current folder
+ * first, so it is Windows' own `cmd.exe` by its full path, `/d` (no AutoRun), `/v:on` and
+ * `!USERPROFILE!`, expanded after the line is parsed, so a profile path with `&` or `)` in it stays
+ * one path; without USERPROFILE it exits with 1 instead of a bare `cd /d` that stays put. npx then
+ * runs with delayed expansion on, so a `!` in the path of Node or npm makes it fail (closed). `--prefix` isn't used: it stops neither the PATH nor the
  * planted bin, and it moves npm's global config. The arguments live in `server-command.json`,
  * which the bundle build (`scripts/build-extras.js`) reads too, for the plugins' launcher.
  */
@@ -65,9 +68,15 @@ export function serverCommand(
   return platform === "win32"
     ? {
         command: windowsShell(windows),
-        args: ["/d", "/v:on", "/s", "/c", `cd /d !USERPROFILE!&& ${npx}`],
+        args: [
+          "/d",
+          "/v:on",
+          "/s",
+          "/c",
+          `if defined USERPROFILE (cd /d !USERPROFILE!&& ${npx}) else exit 1`,
+        ],
       }
-    : { command: "/bin/sh", args: ["-c", `cd && exec ${npx}`] };
+    : { command: "/bin/sh", args: ["-c", `cd -- "\${HOME:?}" && exec ${npx}`] };
 }
 
 /** The command as one line, for people adding it by hand (an argument with spaces is quoted). */
