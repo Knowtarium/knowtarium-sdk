@@ -20,6 +20,8 @@ export class TestIo implements CliIo {
   choices: (number[] | null)[] = [];
   /** The labels of every checkbox list shown. */
   readonly offered: (readonly string[])[] = [];
+  /** The lines each list started unticked. */
+  readonly unticked: (readonly number[])[] = [];
   interactive = true;
   onOpen: ((url: string) => void) | undefined;
 
@@ -35,8 +37,13 @@ export class TestIo implements CliIo {
     return Promise.resolve(this.answers.shift() ?? false);
   }
 
-  choose(_question: string, labels: readonly string[]): Promise<number[] | null> {
+  choose(
+    _question: string,
+    labels: readonly string[],
+    unticked: readonly number[] = [],
+  ): Promise<number[] | null> {
     this.offered.push(labels);
+    this.unticked.push(unticked);
     return Promise.resolve(this.choices.shift() ?? null);
   }
 

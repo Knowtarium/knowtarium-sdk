@@ -21,10 +21,15 @@ export interface CliIo {
   /** A yes-or-no question; `false` when there is no terminal to ask in. */
   confirm(question: string, defaultYes?: boolean): Promise<boolean>;
   /**
-   * A checkbox list of `labels`, all ticked: the indexes the person keeps, none when they cancel.
-   * Null when there is no terminal to show it in (stdin or stdout isn't one): ask with `confirm`.
+   * A checkbox list of `labels`, all ticked but those in `unticked`: the indexes the person keeps,
+   * none when they cancel. Null when there is no terminal to show it in (stdin or stdout isn't
+   * one): ask with `confirm`.
    */
-  choose(question: string, labels: readonly string[]): Promise<number[] | null>;
+  choose(
+    question: string,
+    labels: readonly string[],
+    unticked?: readonly number[],
+  ): Promise<number[] | null>;
   openUrl(url: string): Promise<void>;
 }
 
@@ -72,12 +77,16 @@ const ENDING_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
  * and the cursor are always put back, also on an error or a signal. Ctrl+C (which raw mode turns
  * into a key) puts them back, then interrupts the process as Ctrl+C does anywhere else.
  */
-function chooseInTerminal(question: string, labels: readonly string[]): Promise<number[] | null> {
+function chooseInTerminal(
+  question: string,
+  labels: readonly string[],
+  unticked: readonly number[] = [],
+): Promise<number[] | null> {
   const { stdin, stdout } = process;
   if (!stdin.isTTY || !stdout.isTTY) return Promise.resolve(null);
   return new Promise((resolve, reject) => {
     const wasRaw = stdin.isRaw;
-    let state = startChoice(labels.length);
+    let state = startChoice(labels.length, unticked);
     let rows = 0;
     const draw = (lines: readonly string[]) => {
       // back to the start of what was drawn, cleared, so no line of it is left behind

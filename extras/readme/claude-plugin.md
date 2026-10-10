@@ -16,14 +16,15 @@ On Claude Code 2.1.275 or later, one line does both:
 `/plugin install knowtarium --marketplace Knowtarium/knowtarium-plugins`. From a shell (Claude
 Code 2.1.292 or later): `claude plugin install knowtarium --marketplace Knowtarium/knowtarium-plugins`.
 
-Then connect this computer once: run `npx knowtarium connect` in a terminal, or ask Claude to
-connect Knowtarium. Either way your browser opens, you sign in and approve this computer, and no
-password, token or key goes in Claude's settings. You need Node.js 20 or later.
+Then connect this computer once: ask Claude to connect Knowtarium, or run
+`npx knowtarium connect --no-agents` in a terminal (the plugin already adds the server). Either way
+your browser opens, you sign in and approve this computer, and no password, token or key goes in
+Claude's settings. You need Node.js 20 or later.
 
 ## What it adds
 
 - **The `knowtarium` MCP server**: the tools Claude uses to search, read, write and check notes.
-- **The `knowtarium-conventions` skill**: how a Knowtarium workspace works, how Claude's changes
+- **A skill for working in a Knowtarium workspace** (`knowtarium-conventions`): how it works, how Claude's changes
   land, and how to check a person's edit.
 
 ## What it runs, sends and stores
@@ -37,13 +38,15 @@ password, token or key goes in Claude's settings. You need Node.js 20 or later.
   starts its MCP server on stdio. Its source is at {{repository}}.
 - **It talks** only to the Knowtarium sync API at `{{apiHost}}`. Note text, file and folder
   names, comments and history are encrypted on this computer before they're sent, and decrypted
-  only here (XChaCha20-Poly1305 with libsodium); the API sees only IDs, versions, sizes and
-  timing. Connecting opens `app.knowtarium.com` in your browser so you can approve this computer.
+  only here (XChaCha20-Poly1305 with libsodium). The API never sees note content or names: it sees
+  IDs and how they nest, versions, sizes, timestamps, signatures and public keys, your account
+  email, and which agent changed what (the full list: https://knowtarium.com/security). Connecting
+  opens `app.knowtarium.com` in your browser so you can approve this computer.
 - **It stores** the connection, encrypted, in your app data folder, with its key in the OS
   keychain (or, where there is none, in a file only you can read), and an encrypted local copy of
   your notes.
 - **People stay in charge**: Claude's changes are signed as its own and can be undone, folders can
-  ask for approval first, and Claude can't delete notes or mark a note as verified by a person.
+  ask for approval first, and Claude can't delete notes or mark a note as checked by a person.
   Note text, comments and diffs reach Claude as data to read, never as instructions to follow.
 
 ## Versions
@@ -63,6 +66,7 @@ does the same.
 ## Links
 
 - [Privacy policy]({{privacyPolicy}})
+- [Security](https://knowtarium.com/security)
 - [Terms]({{termsOfService}})
 - [Source code]({{repository}})
 - [Report a problem]({{support}}) or write to {{email}}

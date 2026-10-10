@@ -7,8 +7,8 @@ encrypted.
 
 Knowtarium keeps a team's knowledge as notes in the Open Knowledge Format (OKF): plain Markdown
 files with a little frontmatter that people and agents both read. `knowtarium` is the command-line
-tool that connects this computer to a workspace and adds Knowtarium to Claude Code, Claude
-Desktop, Cursor, Codex and OpenCode. Agents can then search and read the notes, change them (saved
+tool that connects this computer to a workspace and adds Knowtarium to Claude Code, Codex,
+Cursor, OpenCode and Claude Desktop. Agents can then search and read the notes, change them (saved
 at once and signed as the agent's, or proposed for a person's approval in folders that ask for
 it), and check a person's edits against related notes. Your notes are decrypted
 only on your devices, never on Knowtarium's servers.
@@ -33,9 +33,10 @@ To keep the command around, install it globally with `npm install -g knowtarium`
 download
 [knowtarium.mcpb](https://github.com/Knowtarium/knowtarium-sdk/releases/latest/download/knowtarium.mcpb)
 (checksums in each [release](https://github.com/Knowtarium/knowtarium-sdk/releases)), open it,
-then ask Claude to connect Knowtarium. From 0.1.3 on, the extension also shows its tools, icon and
-support links in Claude Desktop (the 0.1.2 file has the earlier, shorter manifest). **Claude Code** and **Codex** can also use the Knowtarium
-plugin from [knowtarium-plugins](https://github.com/Knowtarium/knowtarium-plugins):
+then ask Claude to connect Knowtarium. Claude Desktop shows the extension's tools, icon and support
+links. **Claude Code** and **Codex** can also use the Knowtarium plugin from
+[knowtarium-plugins](https://github.com/Knowtarium/knowtarium-plugins), which adds the server and a
+skill for working in a Knowtarium workspace (`knowtarium-conventions`):
 
 ```sh
 # Claude Code
@@ -48,7 +49,10 @@ codex plugin marketplace add Knowtarium/knowtarium-plugins
 codex plugin add knowtarium@knowtarium
 ```
 
-All of them run the same server as `npx knowtarium connect` sets up.
+All of them run the same server as `npx knowtarium connect` sets up. With a plugin, connect this
+computer by asking your agent to connect Knowtarium, or with `npx knowtarium connect --no-agents`:
+the plugin already adds the server (`connect` and `agents` leave an agent with the plugin unticked,
+so it doesn't run twice).
 
 ## Commands
 
@@ -65,9 +69,11 @@ All of them run the same server as `npx knowtarium connect` sets up.
 Run `knowtarium help`, or `knowtarium <command> --help`, for details. `login` is the same as
 `connect`.
 
-`agents` only adds or updates Knowtarium's own entry in each agent's settings. Other servers and
-settings stay as they are, the previous file is backed up next to it, and `--dry-run` shows the
-changes without writing anything.
+`agents` only adds or updates Knowtarium's own entry in each agent's settings (Claude Code's in
+`$CLAUDE_CONFIG_DIR` and Codex's in `$CODEX_HOME` when you set those). Other servers and settings
+stay as they are, the previous file is backed up next to it, and `--dry-run` shows the changes
+without writing anything. The entry runs npx from your home folder, never from the project an
+agent has open, so a project can't swap in its own code for Knowtarium's.
 
 `convert` and `validate` work without an account. `convert` only reads your vault: it writes a
 new folder with the converted notes, an `index.md` per folder and a report of everything it
@@ -94,9 +100,9 @@ new version. Then restart them.
 - **People stay in charge.** By default an agent's change is saved at once, signed with a key made
   on this computer that the workspace owner vouched for when approving it; the web app shows it as
   the agent's, and a person can undo it. Where a workspace or folder asks for approval, the change
-  is a proposal a person approves first. Agents can't delete notes, can never mark a note as
-  verified by a person, and a note reaches them only after its version's signature is checked
-  against the workspace owner's key.
+  is a proposal a person approves first. Agents can't delete notes or mark a note as checked by a
+  person, and a note reaches them only after its version's signature is checked against the
+  workspace owner's key.
 - **Limited access.** You can connect an agent read-only or only to some folders. `disconnect`, or
   the web app's settings, revokes access at any time.
 

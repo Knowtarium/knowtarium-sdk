@@ -360,14 +360,32 @@ describe("choosing the agents", () => {
       await mkdir(join(home, folder), { recursive: true });
     }
     const has = async (path: string) =>
-      (await readFile(join(home, path), "utf8").catch(() => "")).includes("knowtarium");
+      // the server's entry, not a plugin's record
+      /knowtarium@\d/.test(await readFile(join(home, path), "utf8").catch(() => ""));
     const added = async () =>
       [
         (await has(".claude.json")) && "claude-code",
         (await has(join(".cursor", "mcp.json"))) && "cursor",
         (await has(join(".codex", "config.toml"))) && "codex",
       ].filter(Boolean);
-    return { context, added };
+    return { context, added, home };
+  }
+
+  /** Claude Code and Codex with the Knowtarium plugin, as each records it. */
+  async function withPlugins(home: string, claudeScope = "user") {
+    await write(
+      join(home, ".claude", "plugins", "installed_plugins.json"),
+      JSON.stringify({
+        version: 2,
+        plugins: {
+          "knowtarium@knowtarium": [{ scope: claudeScope, installPath: "/x", version: "1.0.0" }],
+        },
+      }),
+    );
+    await write(
+      join(home, ".codex", "config.toml"),
+      'model = "o3"\n\n[plugins."knowtarium@knowtarium"]\nenabled = true\n',
+    );
   }
 
   it("adds only the agents left ticked", async () => {
@@ -395,6 +413,50 @@ describe("choosing the agents", () => {
     expect(await COMMANDS["agents"]?.(context, [])).toBe(0);
     expect(context.io.offered).toHaveLength(1);
     expect(await added()).toEqual(["claude-code", "cursor", "codex"]);
+  });
+
+  it("leaves agents with the Knowtarium plugin unticked, and out with --yes", async () => {
+    const { context, added, home } = await threeAgents();
+    await withPlugins(home);
+    context.io.choices = [[1]];
+    expect(await COMMANDS["agents"]?.(context, [])).toBe(0);
+    expect(context.io.unticked).toEqual([[0, 2]]);
+    expect(context.io.lines).toContain(
+      "Claude Code already runs Knowtarium through its plugin, so it isn't ticked: adding it too would run a second server. To add it anyway: `knowtarium agents --agent claude-code`.",
+    );
+    expect(context.io.lines).toContain(
+      "Codex already runs Knowtarium through its plugin, so it isn't ticked: adding it too would replace the plugin's server. To add it anyway: `knowtarium agents --agent codex`.",
+    );
+    expect(await added()).toEqual(["cursor"]);
+    // without a list, the question is only about the others
+    context.io.answers = [true];
+    expect(await COMMANDS["agents"]?.(context, [])).toBe(0);
+    expect(await added()).toEqual(["cursor"]);
+    expect(await COMMANDS["agents"]?.(context, ["--yes"])).toBe(0);
+    expect(await added()).toEqual(["cursor"]);
+    // named, it is added anyway
+    expect(await COMMANDS["agents"]?.(context, ["--agent", "codex"])).toBe(0);
+    expect(await added()).toEqual(["cursor", "codex"]);
+  });
+
+  it("counts only a plugin installed for the user and turned on", async () => {
+    const { context, home } = await threeAgents();
+    await withPlugins(home, "project");
+    await write(
+      join(home, ".codex", "config.toml"),
+      '[plugins."knowtarium@knowtarium"]\nenabled = false\n',
+    );
+    context.io.choices = [[]];
+    expect(await COMMANDS["agents"]?.(context, [])).toBe(0);
+    expect(context.io.unticked).toEqual([[]]);
+    await withPlugins(home);
+    await write(
+      join(home, ".claude", "settings.json"),
+      JSON.stringify({ enabledPlugins: { "knowtarium@knowtarium": false } }),
+    );
+    context.io.choices = [[]];
+    expect(await COMMANDS["agents"]?.(context, [])).toBe(0);
+    expect(context.io.unticked.at(-1)).toEqual([2]);
   });
 
   it("shows no list with --yes, --agent or --dry-run", async () => {

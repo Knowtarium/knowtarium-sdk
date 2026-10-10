@@ -26,7 +26,8 @@ codex plugin marketplace add Knowtarium/knowtarium-plugins
 codex plugin add knowtarium@knowtarium
 ```
 
-Or add the marketplace, then install Knowtarium from the Plugins Directory in the app.
+Or, once the marketplace is added, type `/plugins` in Codex to open the plugin browser and install
+Knowtarium from the `knowtarium` marketplace.
 
 **Claude Desktop** runs the Knowtarium extension instead, which needs no terminal or Node.js:
 download [knowtarium.mcpb]({{mcpbUrl}}), open it, then ask Claude to connect Knowtarium.
@@ -34,14 +35,15 @@ download [knowtarium.mcpb]({{mcpbUrl}}), open it, then ask Claude to connect Kno
 **Other agents**, such as Cursor and OpenCode: run `npx knowtarium connect` in a terminal. It
 connects this computer and adds Knowtarium to the agents it finds.
 
-After installing a plugin, connect this computer once: run `npx knowtarium connect`, or ask your
-agent to connect Knowtarium. Your browser opens, you sign in and approve this computer, and no
+After installing a plugin, connect this computer once: ask your agent to connect Knowtarium, or run
+`npx knowtarium connect --no-agents` in a terminal (the plugin already adds the server, and adding
+it again would run it twice). Your browser opens, you sign in and approve this computer, and no
 password, token or key goes in your agent's settings. The plugins need Node.js 20 or later.
 
 ## What the plugins run, send and store
 
-Both plugins hold the same two things: the `knowtarium-conventions` skill and the `knowtarium` MCP
-server.
+Both plugins hold the same two things: a skill for working in a Knowtarium workspace
+(`knowtarium-conventions`) and the `knowtarium` MCP server.
 
 - **They run** a small launcher in the plugin, `node server/launch.mjs -y knowtarium@{{version}} mcp`
   (the arguments are in the plugin's `.mcp.json` or `mcp.json`), which runs
@@ -50,9 +52,12 @@ server.
   [`knowtarium`](https://www.npmjs.com/package/knowtarium) package at exactly that version, with the
   dependency versions its shrinkwrap pins, and starts its MCP server on stdio. Its source is at
   {{repository}}.
-- **They talk** only to the Knowtarium sync API at `{{apiHost}}`. Note text, names, comments and
-  history are encrypted on your computer before they're sent, and decrypted only there; the API
-  sees only IDs, versions, sizes and timing. Connecting opens `app.knowtarium.com` in your browser.
+- **They talk** only to the Knowtarium sync API at `{{apiHost}}`. Note text, file and folder
+  names, comments and history are encrypted on your computer before they're sent, and decrypted
+  only there. The API never sees note content or names: it sees IDs and how they nest, versions,
+  sizes, timestamps, signatures and public keys, your account email, and which agent changed what
+  (the full list: https://knowtarium.com/security). Connecting opens `app.knowtarium.com` in your
+  browser.
 - **They store** the connection, encrypted, with its key in the OS keychain (or, where there is
   none, in a file only you can read), and an encrypted local copy of your notes.
 
@@ -86,6 +91,7 @@ issues and changes go.
 ## Links
 
 - [Privacy policy]({{privacyPolicy}})
+- [Security](https://knowtarium.com/security)
 - [Terms]({{termsOfService}})
 - [Report a problem]({{support}}) or write to {{email}}
 

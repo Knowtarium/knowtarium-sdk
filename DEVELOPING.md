@@ -749,7 +749,16 @@ again in place after each key and leaves a one-line summary. Raw mode and the cu
 on every way out, an error or a signal included; Ctrl+C puts them back, then interrupts the
 process as it would anywhere else. Without both terminals it asks the old yes-or-no question for
 all of them (`false` without a terminal at all), and `--yes`, `--agent` and `--dry-run` ask
-nothing.
+nothing. An agent that has the Knowtarium plugin runs the server already, and adding it to its
+config too would run a second one (Claude Code) or replace the plugin's (Codex's
+`[mcp_servers.knowtarium]` wins over the plugin's server of the same name): such an agent starts
+unticked, `--yes` and `--dry-run` leave it out, the yes-or-no question doesn't include it, and a
+line says how to add it anyway (`--agent <id>`, which always adds). `src/cli/agents/plugins.ts`
+reads what each records: Claude Code's `plugins/installed_plugins.json` in `~/.claude` (or
+`$CLAUDE_CONFIG_DIR`) with a `user` scope install of `knowtarium@knowtarium` (a project install
+doesn't count), unless its `settings.json` sets `enabledPlugins` for it to `false`; Codex's
+`[plugins."knowtarium@knowtarium"]` in `config.toml`, unless `enabled = false`. A file that can't
+be read counts as no plugin.
 
 **Protocol versions.** When the API answers `unsupported_protocol`, a command (and the MCP
 server) says to update knowtarium, unless every version the error lists in `supportedVersions` is
@@ -989,8 +998,8 @@ Knowtarium/knowtarium-plugins`, then `codex plugin add knowtarium@knowtarium`. T
   client starts it in (see **Never in the project's folder** above; on Windows through
   `%ComSpec%`, `cmd.exe` by its full path, with `/d /s /c`), refuses any argument that isn't plain
   (`[\w@.\-/=:]`, so cmd reads none as a command), passes signals on, returns the exit code and
-  stops the whole process tree on Windows. Connect with `npx knowtarium connect` first, or through
-  the `connect` tool.
+  stops the whole process tree on Windows. Connect with `npx knowtarium connect --no-agents` (the
+  plugin already adds the server), or through the `connect` tool.
 
 `pnpm build:extras` builds them into `dist-extras/` (see `RELEASING.md`): it refuses a release
 build until `knowtarium@<version>` is on npm (`--dev` makes a labeled development build), checks

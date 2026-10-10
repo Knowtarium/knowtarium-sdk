@@ -95,6 +95,12 @@ describe("the checkbox list", () => {
     expect(chosenIndexes(interrupted)).toEqual([]);
   });
 
+  it("starts with the lines it is given unticked", () => {
+    const start = startChoice(LABELS.length, [0, 2]);
+    expect(start.ticked).toEqual([false, true, false, true]);
+    expect(chosenIndexes(pressKey(start, { name: "return" }))).toEqual([1, 3]);
+  });
+
   it("ignores other keys, and every key once done", () => {
     const start = startChoice(LABELS.length);
     expect(pressKey(start, { name: "x" })).toBe(start);

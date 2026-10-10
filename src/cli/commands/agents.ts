@@ -1,6 +1,7 @@
 import { parseArgs } from "node:util";
 
 import { type AgentResult, configureAgents, detectAgents } from "../agents/configure.js";
+import { agentsWithPlugin } from "../agents/plugins.js";
 import {
   commandLine,
   SERVER_NAME,
@@ -46,16 +47,32 @@ export function handAdd(
  * Which of the agents found to add, asked once: a checkbox list with every agent ticked in a
  * terminal, else (stdin or stdout isn't one) a yes-or-no question for all of them.
  */
-async function askWhich(context: CliContext, found: AgentTarget[]): Promise<AgentTarget[]> {
+async function askWhich(
+  context: CliContext,
+  found: AgentTarget[],
+  withPlugin: ReadonlySet<AgentId>,
+): Promise<AgentTarget[]> {
   const names = found.map((target) => target.name);
-  const ticked = await context.io.choose("Add Knowtarium to which agents?", names);
+  const unticked = found.flatMap((target, index) => (withPlugin.has(target.id) ? [index] : []));
+  const ticked = await context.io.choose("Add Knowtarium to which agents?", names, unticked);
   if (ticked !== null) return found.filter((_, index) => ticked.includes(index));
-  return (await context.io.confirm(`Add Knowtarium to ${names.join(", ")}?`)) ? found : [];
+  const asked = found.filter((target) => !withPlugin.has(target.id));
+  if (asked.length === 0) return [];
+  const question = `Add Knowtarium to ${asked.map((target) => target.name).join(", ")}?`;
+  return (await context.io.confirm(question)) ? asked : [];
+}
+
+/** Why an agent with the Knowtarium plugin isn't ticked or added. */
+function pluginNote(target: AgentTarget): string {
+  const effect = target.id === "codex" ? "replace the plugin's server" : "run a second server";
+  return `${target.name} already runs Knowtarium through its plugin, so it isn't ticked: adding it too would ${effect}. To add it anyway: \`knowtarium agents --agent ${target.id}\`.`;
 }
 
 /**
  * Adds the MCP server to the detected agents: all with `yes` (or `dryRun`), the named ones with
- * `only`, else the ones the person picks. Prints what it did (or would do, with `dryRun`).
+ * `only`, else the ones the person picks. An agent that has the Knowtarium plugin (Claude Code,
+ * Codex) runs the server already: it starts unticked, and `yes` and `dryRun` leave it out, unless
+ * `only` names it. Prints what it did (or would do, with `dryRun`).
  */
 export async function setUpAgents(
   context: CliContext,
@@ -78,10 +95,16 @@ export async function setUpAgents(
     io.out(`Add this MCP server to your agent by hand: ${commandLine(server, platform)}`);
     return [];
   }
-  const picked =
-    options.yes === true || options.only !== undefined || options.dryRun === true
-      ? chosen
-      : await askWhich(context, chosen);
+  // an agent named with --agent is added even with the plugin: the person asked for it
+  const withPlugin =
+    options.only === undefined ? await agentsWithPlugin(context.env) : new Set<AgentId>();
+  const asksNothing = options.yes === true || options.only !== undefined || options.dryRun === true;
+  for (const target of chosen) {
+    if (withPlugin.has(target.id)) io.out(pluginNote(target));
+  }
+  const picked = asksNothing
+    ? chosen.filter((target) => !withPlugin.has(target.id))
+    : await askWhich(context, chosen, withPlugin);
   if (picked.length === 0) {
     io.out("No agent was changed. Run `knowtarium agents` to add Knowtarium later.");
     return [];

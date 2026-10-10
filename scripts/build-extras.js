@@ -447,7 +447,9 @@ try {
         name,
         source: { source: "local", path: `./${codexPath}` },
         // Knowtarium connects through its own `connect` tool (or `npx knowtarium connect`) the
-        // first time it is used, not through a sign-in when the plugin is installed
+        // first time it is used, not through a sign-in when the plugin is installed. Codex knows
+        // only ON_INSTALL (its default) and ON_USE, and starts a sign-in only for a plugin's apps
+        // or OAuth MCP servers, which this one has none of, so neither prompts; ON_USE says so
         policy: { installation: "AVAILABLE", authentication: "ON_USE" },
         category: "Productivity",
       },

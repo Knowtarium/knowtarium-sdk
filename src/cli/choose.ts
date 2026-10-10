@@ -19,9 +19,15 @@ export interface ChoiceState {
 /** What the first line tells the person they can press. */
 export const CHOICE_KEYS = "(↑↓ move, space toggle, a all, enter confirm)";
 
-/** A list of `count` choices, all ticked, so Enter at once takes them all. */
-export function startChoice(count: number): ChoiceState {
-  return { cursor: 0, ticked: Array.from({ length: count }, () => true), status: "choosing" };
+/**
+ * A list of `count` choices, all ticked (so Enter at once takes them all) but those in `unticked`.
+ */
+export function startChoice(count: number, unticked: readonly number[] = []): ChoiceState {
+  return {
+    cursor: 0,
+    ticked: Array.from({ length: count }, (_, index) => !unticked.includes(index)),
+    status: "choosing",
+  };
 }
 
 /**
