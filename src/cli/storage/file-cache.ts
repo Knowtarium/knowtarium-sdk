@@ -1,8 +1,7 @@
-import { rm } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { CacheAdapter } from "../../client/index.js";
-import { listFiles, readIfExists, writePrivateFile } from "./files.js";
+import { listFiles, readIfExists, removeFile, writePrivateFile } from "./files.js";
 
 const SEGMENT = /^[A-Za-z0-9_.-]{1,128}$/;
 
@@ -31,7 +30,7 @@ export class FileCacheAdapter implements CacheAdapter {
   }
 
   async delete(key: string): Promise<void> {
-    await rm(this.pathOf(key), { force: true });
+    await removeFile(this.pathOf(key));
   }
 
   async list(prefix: string): Promise<string[]> {

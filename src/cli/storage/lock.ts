@@ -2,16 +2,18 @@ import { randomUUID } from "node:crypto";
 import { open, readFile, rm, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 
-import { ensurePrivateDir } from "./files.js";
+import {
+  BUSY_RETRY_MS,
+  ensurePrivateDir,
+  isWindowsBusy,
+  removeFile,
+  retryWhileBusy,
+  sleep,
+} from "./files.js";
 
 /** A lock older than this was left by a process that died; it is broken. */
 const STALE_MS = 30_000;
 const TIMEOUT_MS = 10_000;
-
-const sleep = (ms: number) =>
-  new Promise<void>((resolve) => {
-    setTimeout(resolve, ms);
-  });
 
 /**
  * Whether the process that wrote a lock is gone: the lock holds `<pid>:<token>`, and no process
@@ -30,7 +32,16 @@ function holderGone(content: string): boolean {
   }
 }
 
-const readLock = (lock: string) => readFile(lock, "utf8").catch(() => null);
+/**
+ * A lock's content, or null when it can't be read (gone, or on Windows being deleted). With
+ * `until`, a Windows busy error is retried until then: a holder releasing its own lock must not
+ * leave it behind over a moment's EPERM.
+ */
+const readLock = (lock: string, until?: number) =>
+  (until === undefined
+    ? readFile(lock, "utf8")
+    : retryWhileBusy(() => readFile(lock, "utf8"), until)
+  ).catch(() => null);
 
 /** How long a breaker may hold the break guard before another takes it from it. */
 const GUARD_STALE_MS = 2_000;
@@ -42,26 +53,46 @@ const GUARD_STALE_MS = 2_000;
  * of a check and a removal), and under it the lock is removed only if it still holds exactly the
  * content judged dead. Only breakers remove a dead holder's lock, so it can't have been replaced
  * between that check and the removal. A guard left by a breaker that died mid-way is taken after
- * two seconds. Resolves when the caller should try to take the lock again.
+ * two seconds.
+ *
+ * On Windows a guard or lock another process has just removed can't be created or removed for a
+ * moment (EPERM, EACCES or EBUSY). Creating the guard or removing a stale one that way counts as
+ * another breaker being at it. Under the guard, removals are retried only for the first half of
+ * `GUARD_STALE_MS`: a breaker still retrying once its guard could count as stale might remove a
+ * lock that another breaker's waiter has taken since. Still busy then, it gives up and looks
+ * again. Resolves to true when this call held the guard and the dead lock is gone or changed (the
+ * caller tries to take it again at once), false otherwise (the caller waits a little first).
  */
-async function breakLock(lock: string, dead: string): Promise<void> {
+async function breakLock(lock: string, dead: string): Promise<boolean> {
   const guard = `${lock}.break`;
+  const guardTakenAt = Date.now();
   try {
     const handle = await open(guard, "wx", 0o600);
     await handle.writeFile(String(process.pid));
     await handle.close();
   } catch (error) {
+    if (isWindowsBusy(error)) return false;
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     const info = await stat(guard).catch(() => null);
     if (info !== null && Date.now() - info.mtimeMs > GUARD_STALE_MS) {
-      await rm(guard, { force: true });
+      // not retried: busy means another breaker is removing it already
+      await rm(guard, { force: true }).catch((removal: unknown) => {
+        if (!isWindowsBusy(removal)) throw removal;
+      });
     }
-    return; // another breaker is at it: look again
+    return false; // another breaker is at it: look again
   }
+  const until = guardTakenAt + GUARD_STALE_MS / 2;
+  const unlessBusy = (error: unknown) => {
+    if (!isWindowsBusy(error)) throw error;
+    // still busy at the bound: look again (a guard left behind is taken as stale later)
+    return false;
+  };
   try {
-    if ((await readLock(lock)) === dead) await rm(lock, { force: true });
+    if ((await readLock(lock)) !== dead) return true;
+    return await removeFile(lock, until).then(() => true, unlessBusy);
   } finally {
-    await rm(guard, { force: true });
+    await removeFile(guard, until).catch(unlessBusy);
   }
 }
 
@@ -72,6 +103,11 @@ async function breakLock(lock: string, dead: string): Promise<void> {
  * once, any other after 30 seconds (`breakLock`, one breaker at a time, never a live lock);
  * waiting longer than 10 seconds fails with a message naming the lock file. On release only this
  * process's own lock is removed.
+ *
+ * On Windows a lock file another process has just removed stays "delete pending" until every
+ * handle on it closes, and creating it again meanwhile fails with EPERM (sometimes EACCES or
+ * EBUSY) instead of EEXIST. That is waited out like a held lock, within the same deadline, and
+ * never breaks a lock; if it lasts past the deadline, the error names the code and the folder.
  */
 export async function withFileLock<T>(
   path: string,
@@ -82,27 +118,38 @@ export async function withFileLock<T>(
   await ensurePrivateDir(dirname(path));
   const token = randomUUID();
   const mine = `${String(process.pid)}:${token}`;
+  const staleMs = options.staleMs ?? STALE_MS;
   const deadline = Date.now() + (options.timeoutMs ?? TIMEOUT_MS);
+  let takenAt: number;
   for (let wait = 10; ; wait = Math.min(wait * 2, 250)) {
     try {
+      takenAt = Date.now();
       const handle = await open(lock, "wx", 0o600);
       await handle.writeFile(mine);
       await handle.close();
       break;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const [info, content] = await Promise.all([stat(lock).catch(() => null), readLock(lock)]);
-      if (
-        info !== null &&
-        content !== null &&
-        (Date.now() - info.mtimeMs > (options.staleMs ?? STALE_MS) || holderGone(content))
-      ) {
-        await breakLock(lock, content);
-        continue;
+      const code = String((error as NodeJS.ErrnoException).code);
+      // on Windows, a lock file being deleted: waited for like a held lock, never broken over it
+      const busy = isWindowsBusy(error);
+      if (!busy && code !== "EEXIST") throw error;
+      if (!busy) {
+        const [info, content] = await Promise.all([stat(lock).catch(() => null), readLock(lock)]);
+        if (
+          info !== null &&
+          content !== null &&
+          (Date.now() - info.mtimeMs > staleMs || holderGone(content)) &&
+          (await breakLock(lock, content))
+        ) {
+          continue;
+        }
       }
       if (Date.now() > deadline) {
         throw new Error(
-          `Another knowtarium process is writing ${path}. If none is running, delete ${lock}.`,
+          busy
+            ? `Couldn't create ${lock}: Windows kept answering ${code}. Check that ` +
+                `${dirname(lock)} is writable and that no other program holds that file.`
+            : `Another knowtarium process is writing ${path}. If none is running, delete ${lock}.`,
           { cause: error },
         );
       }
@@ -112,7 +159,10 @@ export async function withFileLock<T>(
   try {
     return await run();
   } finally {
-    // only our own lock: a lock broken meanwhile (we were too slow) belongs to someone else now
-    if ((await readLock(lock)) === mine) await rm(lock, { force: true });
+    // only our own lock: a lock broken meanwhile (we were too slow) belongs to someone else now.
+    // A busy read or removal (Windows) is retried, but stops well before the lock could count as
+    // stale (30 s): after that a breaker may have replaced it with another holder's lock.
+    const until = Math.min(Date.now() + BUSY_RETRY_MS, takenAt + staleMs - BUSY_RETRY_MS);
+    if ((await readLock(lock, until)) === mine) await removeFile(lock, until);
   }
 }

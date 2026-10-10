@@ -1,4 +1,3 @@
-import { rm } from "node:fs/promises";
 import { join } from "node:path";
 
 import { z } from "zod";
@@ -15,7 +14,7 @@ import {
   TokenId,
   WorkspaceId,
 } from "../../protocol/index.js";
-import { readIfExists, writePrivateFile } from "./files.js";
+import { readIfExists, removeFile, writePrivateFile } from "./files.js";
 import { withFileLock } from "./lock.js";
 import type { SecretStore } from "./secret-store.js";
 
@@ -263,7 +262,7 @@ export class Credentials {
         Credentials.seal({ version: 1, agents }, key, AGENT_KEYS_AD),
       );
     } else {
-      await rm(this.agentKeysPath, { force: true });
+      await removeFile(this.agentKeysPath);
     }
     // only the known, non-secret fields: an unknown one may be a newer version's secret
     const summaries = records.connections.map((connection) =>
@@ -325,9 +324,9 @@ export class Credentials {
         await this.save({ connections: rest, agents: records.agents.filter(others) });
         return;
       }
-      await rm(this.path, { force: true });
-      await rm(this.agentKeysPath, { force: true });
-      await rm(this.summaryPath, { force: true });
+      await removeFile(this.path);
+      await removeFile(this.agentKeysPath);
+      await removeFile(this.summaryPath);
       await this.secrets.delete(FILE_KEY);
     });
   }

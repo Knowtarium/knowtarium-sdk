@@ -73,12 +73,15 @@ function same(a: Uint8Array | null, b: Uint8Array | null): boolean {
   return a === null || b === null ? a === b : Buffer.from(a).equals(Buffer.from(b));
 }
 
-/** Keeps the newest backups of a file (their names sort by time). */
+/**
+ * Keeps the newest backups of a file (their names sort by time). Best effort: a backup that
+ * can't be removed (on Windows, one another program has open) stays until a later run.
+ */
 async function pruneBackups(path: string): Promise<void> {
   const prefix = basename(path) + BACKUP_INFIX;
   const backups = (await readdir(dirname(path))).filter((name) => name.startsWith(prefix)).sort();
   for (const name of backups.slice(0, -KEPT_BACKUPS)) {
-    await rm(join(dirname(path), name), { force: true });
+    await rm(join(dirname(path), name), { force: true }).catch(() => undefined);
   }
 }
 
