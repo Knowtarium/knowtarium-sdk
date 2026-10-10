@@ -12,7 +12,14 @@ import { temporaryFolder, testContext } from "../testing/context.js";
 import { configureAgents, detectAgents } from "./configure.js";
 import { handAdd } from "../commands/agents.js";
 import { upsertJsonServer } from "./json-config.js";
-import { commandLine, MCP_COMMAND, npxArgs, serverCommand } from "./server-entry.js";
+import {
+  commandLine,
+  MCP_COMMAND,
+  npxArgs,
+  npxFolder,
+  pathFolder,
+  serverCommand,
+} from "./server-entry.js";
 import { agentTargets } from "./targets.js";
 import { upsertCodexServer } from "./toml-config.js";
 
@@ -24,7 +31,7 @@ afterEach(async () => {
 
 const server = serverCommand("1.2.3", "linux");
 const COMMAND = "/bin/sh";
-const ARGS = ["-c", 'cd -- "${HOME:?}" && exec npx -y knowtarium@1.2.3 mcp'];
+const ARGS = ["-c", '[ -n "$HOME" ] && cd -- "$HOME" && exec npx -y knowtarium@1.2.3 mcp'];
 
 async function userHome() {
   const created = await temporaryFolder();
@@ -45,7 +52,7 @@ describe("the server command", () => {
     expect(COMMANDS[MCP_COMMAND]).toBe(mcpCommand);
     expect(server.args.at(-1)?.endsWith(` ${MCP_COMMAND}`)).toBe(true);
     expect(commandLine(server, "linux")).toBe(
-      `/bin/sh -c 'cd -- "\${HOME:?}" && exec npx -y knowtarium@1.2.3 mcp'`,
+      `/bin/sh -c '[ -n "$HOME" ] && cd -- "$HOME" && exec npx -y knowtarium@1.2.3 mcp'`,
     );
   });
 
@@ -67,6 +74,112 @@ describe("the server command", () => {
     expect(commandLine(serverCommand("1.2.3", "win32"), "win32")).toBe(
       `"C:\\Windows\\System32\\cmd.exe" /d /v:on /s /c "${script}"`,
     );
+  });
+
+  it("never writes ${...}, which agents expand in their configs", () => {
+    // Cursor's mcpEnvExpansion, Claude Code's and Claude Desktop's plugin expansion, VS Code's
+    const expansions = [
+      /\$\{([^:}]+)(?::-([^}]*))?\}/,
+      /\$\{([A-Za-z_][A-Za-z0-9_]*(?::-[^}]*)?)\}/,
+    ];
+    for (const platform of ["linux", "darwin", "win32"] as const) {
+      const command = serverCommand("1.2.3", platform, {
+        nodeFolder: platform === "win32" ? "C:\\Program Files\\nodejs" : "/opt/node/bin",
+      });
+      for (const arg of [command.command, ...command.args]) {
+        expect(arg).not.toContain("${");
+        for (const expansion of expansions) expect(arg).not.toMatch(expansion);
+        expect(arg).not.toMatch(/\{env:/);
+      }
+    }
+  });
+
+  it("adds the folder of the Node.js that wrote it to the end of the PATH", () => {
+    const folder = "/Users/maya/.nvm/versions/node/v24.11.1/bin";
+    const posix = serverCommand("1.2.3", "darwin", { nodeFolder: folder });
+    expect(posix).toEqual({
+      command: COMMAND,
+      args: [
+        "-c",
+        `[ -n "$HOME" ] && cd -- "$HOME" && export PATH="$PATH:${folder}" && exec npx -y knowtarium@1.2.3 mcp`,
+      ],
+    });
+    const windows = serverCommand("1.2.3", "win32", { nodeFolder: "C:\\Program Files\\nodejs" });
+    expect(windows.args.at(-1)).toBe(
+      "if defined USERPROFILE (cd /d !USERPROFILE!&& set PATH=!PATH!;C:\\Program Files\\nodejs&& npx -y knowtarium@1.2.3 mcp) else exit 1",
+    );
+    // a folder the command couldn't hold as it is is left out, never quoted
+    for (const nodeFolder of ['/a/"b', "/a/$b", "/a/`b`", "/a:b", "~/bin", "/a/b/", "/a/./b"]) {
+      expect(serverCommand("1.2.3", "linux", { nodeFolder })).toEqual(server);
+    }
+  });
+
+  it("accepts only plain absolute folders for the PATH", () => {
+    for (const folder of [
+      "/usr/local/bin",
+      "/Users/José Díaz/.volta/tools/image/node/22.1.0/bin",
+      "/opt/homebrew/Cellar/node/24.9.0/bin",
+      "/home/m/.local/share/fnm/node-versions/v22.0.0/installation/bin",
+    ]) {
+      expect(pathFolder(folder, "linux")).toBe(folder);
+    }
+    for (const folder of [
+      "relative/bin",
+      "/",
+      "/a//b",
+      "/a/../b",
+      "/a/b/",
+      "/a:b",
+      "/a/${HOME}",
+      "/a/$HOME",
+      "/a/~b",
+      "/a/b\\c",
+      "/a/b'c",
+      "/a/b;c",
+      "/a/b!c",
+      "/a/b%c",
+      "/project/node_modules/.bin",
+      "/a/x ./b",
+      "/a/x .",
+      "/a/b\nc",
+    ]) {
+      expect(pathFolder(folder, "linux"), folder).toBeUndefined();
+    }
+    expect(pathFolder("C:\\Program Files\\nodejs", "win32")).toBe("C:\\Program Files\\nodejs");
+    expect(pathFolder("D:\\nvm4w\\nodejs", "win32")).toBe("D:\\nvm4w\\nodejs");
+    for (const folder of [
+      "C:\\Program Files (x86)\\nodejs",
+      "C:\\a&b\\nodejs",
+      "C:\\a^b",
+      "C:\\a!b!",
+      "C:\\%a%",
+      "C:\\a;b",
+      "C:\\a\\",
+      "C:nodejs",
+      "\\\\server\\share\\nodejs",
+      "C:/nodejs",
+      "C:\\x\\node_modules\\.bin",
+    ]) {
+      expect(pathFolder(folder, "win32"), folder).toBeUndefined();
+    }
+  });
+
+  it("finds the folder of this CLI's Node.js only when it holds npx", () => {
+    const has = (paths: string[]) => (path: string) => paths.includes(path);
+    expect(npxFolder("/opt/node/bin/node", "linux", has(["/opt/node/bin/npx"]))).toBe(
+      "/opt/node/bin",
+    );
+    expect(npxFolder("/opt/node/bin/node", "linux", has([]))).toBeUndefined();
+    // a runtime that isn't node (Bun, an Electron helper) isn't Node.js's folder
+    expect(npxFolder("/opt/bun/bin/bun", "linux", () => true)).toBeUndefined();
+    expect(npxFolder("/p/node_modules/.bin/node", "linux", () => true)).toBeUndefined();
+    expect(
+      npxFolder(
+        "C:\\Program Files\\nodejs\\node.exe",
+        "win32",
+        has(["C:\\Program Files\\nodejs\\npx.cmd"]),
+      ),
+    ).toBe("C:\\Program Files\\nodejs");
   });
 
   it("refuses a version a shell could read as a command", () => {
@@ -139,7 +252,7 @@ describe("Codex's TOML", () => {
     const added = upsertCodexServer(base, server);
     if (added.status !== "added") throw new Error("expected an add");
     expect(added.text).toBe(
-      `${base}\n[mcp_servers.knowtarium]\ncommand = "/bin/sh"\nargs = ["-c", "cd -- \\"\${HOME:?}\\" && exec npx -y knowtarium@1.2.3 mcp"]\n`,
+      `${base}\n[mcp_servers.knowtarium]\ncommand = "/bin/sh"\nargs = ["-c", "[ -n \\"$HOME\\" ] && cd -- \\"$HOME\\" && exec npx -y knowtarium@1.2.3 mcp"]\n`,
     );
     expect(upsertCodexServer(added.text, server)).toEqual({ status: "unchanged" });
 
@@ -148,7 +261,7 @@ describe("Codex's TOML", () => {
     const updated = upsertCodexServer(stale, server);
     if (updated.status !== "updated") throw new Error("expected an update");
     expect(updated.text).toBe(
-      '[mcp_servers."knowtarium"] # ours\ncommand = "/bin/sh"\nargs = ["-c", "cd -- \\"${HOME:?}\\" && exec npx -y knowtarium@1.2.3 mcp"]\nenv = { A = "1" }\n\n[mcp_servers.knowtarium.env2]\nB = "2"\n\n[profiles.x]\nmodel = "y"\n',
+      '[mcp_servers."knowtarium"] # ours\ncommand = "/bin/sh"\nargs = ["-c", "[ -n \\"$HOME\\" ] && cd -- \\"$HOME\\" && exec npx -y knowtarium@1.2.3 mcp"]\nenv = { A = "1" }\n\n[mcp_servers.knowtarium.env2]\nB = "2"\n\n[profiles.x]\nmodel = "y"\n',
     );
   });
 
@@ -335,13 +448,13 @@ describe("configs it can't edit", () => {
     expect(commented?.reason).toMatch(/has comments/);
     if (broken === undefined || commented === undefined) throw new Error("expected results");
     expect(handAdd(broken, server, "linux")).toBe(
-      `in ${broken.path}, under "mcpServers": "knowtarium": { "command": "/bin/sh", "args": ["-c","cd -- \\"\${HOME:?}\\" && exec npx -y knowtarium@1.2.3 mcp"] }`,
+      `in ${broken.path}, under "mcpServers": "knowtarium": { "command": "/bin/sh", "args": ["-c","[ -n \\"$HOME\\" ] && cd -- \\"$HOME\\" && exec npx -y knowtarium@1.2.3 mcp"] }`,
     );
     expect(handAdd(commented, server, "linux")).toContain(
       'under "mcp": "knowtarium": { "type": "local"',
     );
     expect(handAdd({ ...broken, agent: "claude-code", name: "Claude Code" }, server, "linux")).toBe(
-      `claude mcp add --scope user knowtarium -- /bin/sh -c 'cd -- "\${HOME:?}" && exec npx -y knowtarium@1.2.3 mcp'`,
+      `claude mcp add --scope user knowtarium -- /bin/sh -c '[ -n "$HOME" ] && cd -- "$HOME" && exec npx -y knowtarium@1.2.3 mcp'`,
     );
 
     // a .jsonc without comments is edited like JSON
@@ -460,7 +573,7 @@ describe("choosing the agents", () => {
     const codex = await readFile(join(home, ".codex", "config.toml"), "utf8");
     for (const text of [claude, codex]) {
       expect(text).not.toContain("knowtarium@0.1.2");
-      expect(text).toContain("HOME:?");
+      expect(text).toContain('[ -n \\"$HOME\\" ]');
     }
     expect(JSON.parse(claude)).toMatchObject({ mcpServers: { knowtarium: { env: { A: "1" } } } });
     expect(codex).toContain('[plugins."knowtarium@knowtarium"]\nenabled = true');
@@ -488,8 +601,10 @@ describe("choosing the agents", () => {
     context.io.choices = [[0, 1, 2]];
     expect(await COMMANDS["agents"]?.(context, [])).toBe(0);
     expect(context.io.unticked).toEqual([[]]);
-    expect(await readFile(join(home, ".claude.json"), "utf8")).toContain("HOME:?");
-    expect(await readFile(join(home, ".codex", "config.toml"), "utf8")).toContain("HOME:?");
+    expect(await readFile(join(home, ".claude.json"), "utf8")).toContain('[ -n \\"$HOME\\" ]');
+    expect(await readFile(join(home, ".codex", "config.toml"), "utf8")).toContain(
+      '[ -n \\"$HOME\\" ]',
+    );
     // with --dry-run too, the entry would be updated
     await oldEntries(home);
     expect(await COMMANDS["agents"]?.(context, ["--dry-run"])).toBe(0);

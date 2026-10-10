@@ -721,9 +721,16 @@ package, applies the folder's `.npmrc` (`node-options=--require ./x.cjs` runs co
 CLI), and runs the package's bin with the folder's `node_modules/.bin` on the PATH ahead of the
 real `node`, so a planted `node_modules/.bin/node` runs instead. Opening a hostile repository would
 run its code in the process that holds the Knowtarium keys. So the command goes to the user's home
-folder before npx starts: `/bin/sh -c 'cd -- "${HOME:?}" && exec npx -y knowtarium@<version> mcp'`
-(with HOME unset or empty the shell stops with an error: a bare `cd` would stay in the project
-folder in dash and busybox, Debian's and Alpine's `/bin/sh`), and on Windows
+folder before npx starts:
+`/bin/sh -c '[ -n "$HOME" ] && cd -- "$HOME" && exec npx -y knowtarium@<version> mcp'` (with HOME
+unset or empty the shell stops with 1: a bare `cd` would stay in the project folder in dash and
+busybox, Debian's and Alpine's `/bin/sh`, and `cd ""` stays put in bash). It has no `${...}`:
+agents expand that in their configs (Cursor's `mcpEnvExpansion` reads `${NAME}` and
+`${NAME:-default}`, so does Claude Code, VS Code reads `${env:NAME}` and others), and none of them
+reads a bare `$HOME` (OpenCode's own form is `{env:NAME}`; Codex expands only its plugins'
+`${PLUGIN_ROOT}` and `${PLUGIN_DATA}`, and Claude Desktop nothing in its own config, only in
+plugins' servers). 0.1.3 wrote `cd -- "${HOME:?}"`, which none of them rewrites either, but only
+because `:?` isn't a form they know. On Windows
 `<%ComSpec%> /d /v:on /s /c "if defined USERPROFILE (cd /d !USERPROFILE!&& npx -y
 knowtarium@<version> mcp) else exit 1"`: Windows' own `cmd.exe` by its full path (a bare `cmd` or
 `npx` is looked up in the current folder first), `/d` so no AutoRun runs, the profile path expanded
@@ -742,12 +749,53 @@ is written. `src/cli/agents/hostile-folder.test.ts` plants all of the above, run
 command and the plugins' launcher in that folder with the real npx and a registry on `127.0.0.1`
 (set in the user's own `~/.npmrc`), and checks that the registry's package runs and nothing
 planted does (a bare `npx` there runs a planted one), and that the command (under `/bin/sh` and,
-where there is one, dash) and the launcher stop when HOME is unset or empty; on Windows (CI)
-stand-in npx files, one that turns delayed expansion on itself and one that doesn't, check that the
-command moves to the profile folder before it looks for `npx`, and that it stops without
-USERPROFILE. NODE_OPTIONS and `npm_config_*` settings in the agent's own environment still reach
+where there are, bash, dash and busybox `sh`) and the launcher stop when HOME is unset or empty;
+on Windows (CI) stand-in npx files, one that turns delayed expansion on itself and one that
+doesn't, check that the command moves to the profile folder before it looks for `npx`, and that
+it stops without USERPROFILE. NODE_OPTIONS and `npm_config_*` settings in the agent's own environment still reach
 npx: they are the user's, and project-level ones (Claude Code's `env` in a project's
 `.claude/settings.json`, direnv) need the user's trust in that project first.
+
+**Agents started from the Dock.** An app started from the Dock or Finder on macOS gets
+launchd's PATH, `/usr/bin:/bin:/usr/sbin:/sbin`, which names no Node.js installed with nvm, fnm,
+Volta or Homebrew. Before 0.1.3 the config's command was a bare `npx`, which the agent looked up
+itself; since then it is `/bin/sh`, and the shell looks npx up on the PATH the agent gives it.
+Both lookups use the same PATH, so 0.1.3 changed nothing for any agent we checked (Claude Desktop
+2.31226.1, Cursor 3.22.12, Claude Code 2.1.296, the Codex app in ChatGPT 26.930 and Codex
+0.160.1, October 2026): Claude Desktop builds the server's PATH itself, from the PATH a login
+shell prints (a helper process, five seconds at most), then the usual tool folders
+(`~/.nvm/versions/node/*/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `~/.volta/bin`,
+`~/.asdf/shims` and more), then its own, and both finds the command on that list and passes it
+to the server as its PATH; Cursor, like VS Code, reads the login shell's environment at start and
+its MCP servers get it with the MCP SDK's `cross-spawn`; the Codex app reads the login shell's
+environment too; Claude Code, Codex and OpenCode in a terminal inherit the shell's. Where the
+PATH doesn't name npx (Claude Desktop when its login shell doesn't answer in time and Node.js
+lives somewhere its list doesn't name, like fnm or mise, or any client that keeps launchd's
+PATH), a bare npx failed with ENOENT before 0.1.3 and the shell fails with 127 now. "Use built-in
+Node.js for MCP" in Claude Desktop applies only to extensions whose server is `node <script>`,
+never to a config's `npx`, which is why the `.mcpb` (run on Claude Desktop's own Node.js) is still
+the way README and the site point people to for Claude Desktop.
+
+So the command now also adds the folder of the Node.js that wrote it (`process.execPath`, when
+that folder holds `npx` or `npx.cmd`; `npxFolder` in `server-entry.ts`) to the end of the PATH:
+`/bin/sh -c '[ -n "$HOME" ] && cd -- "$HOME" && export PATH="$PATH:<folder>" && exec npx -y
+knowtarium@<version> mcp'`, and on Windows `... (cd /d !USERPROFILE!&& set
+PATH=!PATH!;<folder>&& npx -y knowtarium@<version> mcp) else exit 1` (Windows apps get the user's
+PATH from the registry, but fnm, for one, sets it per shell). At the end, the agent's own PATH
+still comes first: a newer Node.js the person switched to wins, and once that folder is gone (`nvm
+uninstall`, `brew cleanup` after an upgrade) the lookup simply goes on without it, failing only
+where the bare npx failed anyway. `export` matters: npx is `#!/usr/bin/env node`, so node must be
+on the PATH npx gets, not only the shell's. The folder is added only when `pathFolder` accepts it:
+absolute and normalized, letters, digits, spaces and `_ . + @ -` only (so it needs nothing but the
+command's double quotes in sh and no quoting at all in cmd, where `&`, `)`, `%`, `!` and `^` would
+mean something, and no `$`, `{` or `~` an agent could rewrite), no word Cursor would read as
+relative to the project (it splits arguments at spaces and rewrites a word that starts with `./`
+or `~`), and never inside a `node_modules`; else the command is written without it. The web app's
+install links can't know the folder, so they carry the command without it. The tests run it with
+launchd's PATH: a stand-in npx in the folder runs (in sh, bash, dash and busybox `sh` where there
+are), an npx on the agent's own PATH wins, a removed folder fails like a bare npx, and the real npx
+from `dirname(process.execPath)` runs the registry's package; on Windows (CI) the same with a
+PATH of only System32.
 
 `connect` and `agents` ask which of the agents found to add with a checkbox list (`CliIo.choose`)
 when stdin and stdout are both terminals: every agent starts ticked, so Enter at once adds them
