@@ -1,13 +1,29 @@
 {
   "displayName": "Knowtarium",
   "description": "Your Knowtarium knowledge base in Claude: search, read and write notes (or propose changes where a folder asks for approval), and check a person's edits against connected notes. End-to-end encrypted.",
+  "agentDescription": "Your Knowtarium knowledge base in your agent: search, read and write notes (or propose changes where a folder asks for approval), and check a person's edits against connected notes. End-to-end encrypted.",
+  "shortDescription": "Your end-to-end encrypted knowledge base, for your agent",
   "author": {
     "name": "Knowtarium",
+    "email": "support@knowtarium.com",
     "url": "https://knowtarium.com"
   },
   "homepage": "https://knowtarium.com",
   "repository": "https://github.com/Knowtarium/knowtarium-sdk",
+  "pluginsRepository": "https://github.com/Knowtarium/knowtarium-plugins",
+  "documentation": "https://github.com/Knowtarium/knowtarium-plugins#readme",
+  "support": "https://github.com/Knowtarium/knowtarium-sdk/issues",
   "privacyPolicy": "https://knowtarium.com/privacy",
+  "termsOfService": "https://knowtarium.com/terms",
+  "apiHost": "api.knowtarium.com",
+  "brandColor": "#0E0E0E",
+  "keywords": ["knowledge-base", "notes", "okf", "mcp", "verification", "encryption"],
+  "defaultPrompts": [
+    "Connect Knowtarium and list my workspaces",
+    "Search my Knowtarium notes for our onboarding process",
+    "Check the edits waiting for review in Knowtarium"
+  ],
+  "claudeDesktopMinimum": "1.0.0",
   "bundleNodeMinimum": "20.0.0",
   "keyringPlatforms": [
     "darwin-arm64",

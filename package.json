@@ -1,6 +1,7 @@
 {
   "name": "knowtarium",
   "version": "0.1.2",
+  "mcpName": "io.github.Knowtarium/knowtarium",
   "license": "MIT",
   "description": "Connect your AI agents to your Knowtarium workspace, end-to-end encrypted: the knowtarium CLI and MCP server, and the Knowtarium SDK.",
   "homepage": "https://knowtarium.com",
@@ -70,6 +71,8 @@
     "@anthropic-ai/mcpb": "2.1.2",
     "@eslint/js": "^10.0.1",
     "@types/node": "^24.0.0",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
     "eslint": "^10.11.0",
     "eslint-config-prettier": "^10.1.8",
     "fake-indexeddb": "^6.2.5",

@@ -4,3 +4,6 @@ npm-shrinkwrap.json
 
 # fixtures are byte-exact inputs for round-trip tests
 test/fixtures/
+
+# vendored verbatim from their publishers
+extras/schemas/

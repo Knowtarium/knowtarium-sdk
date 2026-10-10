@@ -29,9 +29,23 @@ it picks up the new server.
 To keep the command around, install it globally with `npm install -g knowtarium` and run
 `knowtarium connect`.
 
-**Claude Desktop** can also run the Knowtarium extension (a `.mcpb` file), which needs no terminal
-or Node.js. Install it, then ask Claude to connect Knowtarium. **Claude Code** can also use the
-Knowtarium plugin. Both run the same server as `npx knowtarium connect` sets up.
+**Claude Desktop** can also run the Knowtarium extension, which needs no terminal or Node.js:
+download
+[knowtarium.mcpb](https://github.com/Knowtarium/knowtarium-sdk/releases/latest/download/knowtarium.mcpb)
+(checksums in each [release](https://github.com/Knowtarium/knowtarium-sdk/releases)), open it,
+then ask Claude to connect Knowtarium. **Claude Code** and **Codex** can also use the Knowtarium
+plugin from [knowtarium-plugins](https://github.com/Knowtarium/knowtarium-plugins):
+
+```sh
+# Claude Code
+/plugin marketplace add Knowtarium/knowtarium-plugins
+/plugin install knowtarium@knowtarium
+# Codex
+codex plugin marketplace add Knowtarium/knowtarium-plugins
+codex plugin add knowtarium@knowtarium
+```
+
+All of them run the same server as `npx knowtarium connect` sets up.
 
 ## Commands
 

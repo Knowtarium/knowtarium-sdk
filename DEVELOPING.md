@@ -860,7 +860,7 @@ scope it read, and `flag_conflict` or edits to the other notes on a contradictio
 `src/cli/mcp/skill.test.ts` keeps it honest: its frontmatter, every tool and OKF field it names
 exists, its example note is valid and accepted by `create_note`, and its check, run step by step
 on the plain OKF fixture with a planted contradiction, finds it while reading two notes. The skill
-ships in the Claude Code plugin and as its own public repository, and the MCP server serves it to
+ships in the Claude Code and Codex plugins, and the MCP server serves it to
 every client: the `get_conventions` tool (the instructions say to call it first), the
 `knowtarium-conventions` prompt and the `knowtarium://conventions` resource.
 `src/cli/mcp/conventions.ts` holds a copy made by `node scripts/sync-conventions.js` (run it after
@@ -917,7 +917,8 @@ have no `user_config`.
 - **Any agent:** `npx knowtarium connect` in a terminal (Node.js 20 or later) opens the browser to
   approve this computer, then offers to add the server to Claude Code, Claude Desktop, Cursor,
   Codex and OpenCode (`knowtarium agents` does it later).
-- **Claude Desktop:** open `knowtarium-<version>.mcpb` (or drag it onto Settings, Extensions). The
+- **Claude Desktop:** open `knowtarium-<version>.mcpb` (or drag it onto Settings, Extensions);
+  people download it from the GitHub Release (`releases/latest/download/knowtarium.mcpb`). The
   bundle holds the built CLI and its production dependencies (the OS keychain module for macOS,
   Windows and Linux on x64 and arm64; elsewhere the key goes in a private file) and runs on Claude
   Desktop's own Node (`node server/index.js mcp`), so it needs neither a terminal nor a Node
@@ -926,23 +927,34 @@ have no `user_config`.
   bundle under given Node binaries: 20.0.0, 20.20, 22 and 24 pass; 18 fails to load libsodium's
   ES module build). The npm package's `engines` says Node 20 or later too (see "Node versions"
   below). Then ask Claude to connect Knowtarium: the server's `connect` tool opens the browser,
-  and once the person approves, the other tools work.
-- **Claude Code:** `/plugin marketplace add <path to dist-extras/claude-plugin>`, then
-  `/plugin install knowtarium@knowtarium`. The plugin holds `.claude-plugin/plugin.json`, the
-  `knowtarium-conventions` skill and `.mcp.json`, which runs `node
-${CLAUDE_PLUGIN_ROOT}/server/launch.mjs`; the launcher starts `npx -y knowtarium@<version> mcp`
-  (through `cmd /c` on Windows), passes signals on, returns the exit code and stops the whole
-  process tree on Windows. Connect with `npx knowtarium connect` first, or through the `connect`
-  tool.
+  and once the person approves, the other tools work. The manifest lists every tool the server
+  can offer, read from the real tool definitions (`src/cli/mcp/catalog.ts`, checked by
+  `catalog.test.ts`).
+- **Claude Code and Codex:** the plugins in the
+  [knowtarium-plugins](https://github.com/Knowtarium/knowtarium-plugins) marketplace:
+  `/plugin marketplace add Knowtarium/knowtarium-plugins`, then
+  `/plugin install knowtarium@knowtarium`; or `codex plugin marketplace add
+Knowtarium/knowtarium-plugins`, then `codex plugin add knowtarium@knowtarium`. To try a build,
+  add `dist-extras/marketplace` (a local path) instead. Each plugin holds the
+  `knowtarium-conventions` skill and an MCP server that runs `node server/launch.mjs` from the
+  plugin root (`${CLAUDE_PLUGIN_ROOT}` in the Claude Code plugin's `.mcp.json`, `${PLUGIN_ROOT}` in
+  the Codex plugin's `mcp.json`, which follows the portable Agent Plugins format); the launcher
+  starts `npx -y knowtarium@<version> mcp` (through `cmd /c` on Windows), passes signals on,
+  returns the exit code and stops the whole process tree on Windows. Connect with
+  `npx knowtarium connect` first, or through the `connect` tool.
 
-`pnpm build:extras` builds both into `dist-extras/` (see `RELEASING.md`): it refuses a release
-build until `knowtarium@<version>` is on npm (`--dev` makes a labeled development build), installs
-the bundle's dependencies from `npm-shrinkwrap.json` and checks each keychain binary against it,
-validates the manifest with the official `mcpb validate`, unpacks the packed bundle and starts its
-server to see it answer `tools/list` with `connect`, and checks the plugin and the marketplace with
-`claude plugin validate --strict` when Claude Code is installed (else it prints those commands).
-Everything runs in a throwaway environment. The published package ships `npm-shrinkwrap.json`
-(`pnpm shrinkwrap`), so `npx` installs the transitive versions tested here.
+`pnpm build:extras` builds them into `dist-extras/` (see `RELEASING.md`): it refuses a release
+build until `knowtarium@<version>` is on npm (`--dev` makes a labeled development build), checks
+`server.json` (the MCP Registry entry) against the package and the registry's schema, builds the
+tool catalog, installs the bundle's dependencies from `npm-shrinkwrap.json` and checks each
+keychain binary against it, validates the manifest with the official `mcpb validate`, unpacks the
+packed bundle and starts its server to see it answer `tools/list` with `connect` (and the same
+descriptions as the manifest), writes `knowtarium.mcpb` and `SHA256SUMS` beside it, and writes the
+plugins repository to `dist-extras/marketplace/`: it checks the Claude Code plugin and marketplace
+with `claude plugin validate --strict` when Claude Code is installed (else it prints those
+commands) and the Codex plugin against the Agent Plugins schemas. Everything runs in a throwaway
+environment. The published package ships `npm-shrinkwrap.json` (`pnpm shrinkwrap`), so `npx`
+installs the transitive versions tested here.
 
 ## Node versions
 
@@ -976,19 +988,19 @@ pnpm build
 
 ## Scripts
 
-| Script              | What it does                                                        |
-| ------------------- | ------------------------------------------------------------------- |
-| `pnpm build`        | Build every entry to `dist/` with tsdown (ESM and `.d.ts`)          |
-| `pnpm dev`          | The same build in watch mode, for working on the sibling repos      |
-| `pnpm lint`         | ESLint with type-aware `typescript-eslint` rules                    |
-| `pnpm format`       | Format everything with Prettier                                     |
-| `pnpm format:check` | Fail if anything isn't formatted                                    |
-| `pnpm typecheck`    | `tsc` for the config files, the library, the CLI and `test/`        |
-| `pnpm test`         | Vitest in Node, plus core, crypto and client again in happy-dom     |
-| `pnpm test:dist`    | After a build: check every subpath in `dist/` and run the binary    |
-| `pnpm build:extras` | The Claude Desktop bundle and Claude Code plugin, in `dist-extras/` |
-| `pnpm shrinkwrap`   | Regenerate `npm-shrinkwrap.json` for the published CLI              |
-| `pnpm check`        | Lint, format check, typecheck and tests, in the order CI runs them  |
+| Script              | What it does                                                            |
+| ------------------- | ----------------------------------------------------------------------- |
+| `pnpm build`        | Build every entry to `dist/` with tsdown (ESM and `.d.ts`)              |
+| `pnpm dev`          | The same build in watch mode, for working on the sibling repos          |
+| `pnpm lint`         | ESLint with type-aware `typescript-eslint` rules                        |
+| `pnpm format`       | Format everything with Prettier                                         |
+| `pnpm format:check` | Fail if anything isn't formatted                                        |
+| `pnpm typecheck`    | `tsc` for the config files, the library, the CLI and `test/`            |
+| `pnpm test`         | Vitest in Node, plus core, crypto and client again in happy-dom         |
+| `pnpm test:dist`    | After a build: check every subpath in `dist/` and run the binary        |
+| `pnpm build:extras` | The Claude Desktop bundle and the plugins repository, in `dist-extras/` |
+| `pnpm shrinkwrap`   | Regenerate `npm-shrinkwrap.json` for the published CLI                  |
+| `pnpm check`        | Lint, format check, typecheck and tests, in the order CI runs them      |
 
 ## `knowtarium/core`
 
@@ -1317,13 +1329,15 @@ test/
   fixtures/     the fixture workspace and the import test vaults (byte-exact, not formatted)
   *.ts          shared test helpers
 skills/
-  knowtarium-conventions/ the agent skill (shipped in the Claude Code plugin)
+  knowtarium-conventions/ the agent skill (shipped in the Claude Code and Codex plugins)
 scripts/
   check-dist.js the built-package check behind `pnpm test:dist`
-  build-extras.js the Claude Desktop bundle and Claude Code plugin behind `pnpm build:extras`
+  build-extras.js the Claude Desktop bundle and the plugins repository behind `pnpm build:extras`
   shrinkwrap.js  `npm-shrinkwrap.json` behind `pnpm shrinkwrap`
   check-node.js  runs the CLI and the bundle under other Node binaries
-extras/          the plugin's launcher, the manifests' settings (`extras.config.json`) and the bundle icon
+server.json      the MCP Registry entry (kept at the package.json version)
+extras/          the plugins' launcher, the manifests' settings (`extras.config.json`), the icon,
+                 the plugin README templates (`readme/`) and the schemas the build checks against
 ```
 
 ## Conventions
@@ -1344,7 +1358,9 @@ GitHub Actions runs `pnpm check`, `pnpm build` and `pnpm test:dist` on Linux, Wi
 every pull request and on pushes to `main` (`.github/workflows/ci.yml`). Its `node-versions` job
 builds, makes a development bundle (`pnpm build:extras --dev`) and runs `scripts/check-node.js`
 against Node 20.0.0, 22 and the development Node, all from `actions/setup-node`. Pushing a `v*` tag
-runs the publish workflow (`.github/workflows/publish.yml`, see `RELEASING.md`).
+runs the publish workflow (`.github/workflows/publish.yml`, see `RELEASING.md`); after it, and on
+every push to `main`, the release-assets workflow (`.github/workflows/release-assets.yml`) makes
+sure the GitHub Release of the current version has its Claude Desktop bundles.
 
 The timing tests (`src/core/perf.test.ts`, the large-workspace case in
 `src/core/workspace/incremental.test.ts`) take the median of several runs after warm-ups
