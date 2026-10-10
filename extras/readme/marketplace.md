@@ -60,7 +60,9 @@ Both plugins hold the same two things: a skill for working in a Knowtarium works
   only there. The API never sees note content or names: it sees IDs and how they nest, versions,
   sizes, timestamps, signatures and public keys, your account email, and which agent changed what
   (the full list: https://knowtarium.com/security). Connecting opens `app.knowtarium.com` in your
-  browser.
+  browser. Your IP address reaches the API with each request; the API doesn't record it.
+  Whatever your agent reads goes to its AI provider under that provider's terms, like anything
+  else you give it.
 - **They store** the connection, encrypted, with its key in the OS keychain (or, where there is
   none, in a file only you can read), and an encrypted local copy of your notes.
 

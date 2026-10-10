@@ -45,7 +45,9 @@ bring it up to date (older versions ran npx in the project folder), or remove
   only here (XChaCha20-Poly1305 with libsodium). The API never sees note content or names: it sees
   IDs and how they nest, versions, sizes, timestamps, signatures and public keys, your account
   email, and which agent changed what (the full list: https://knowtarium.com/security). Connecting
-  opens `app.knowtarium.com` in your browser so you can approve this computer.
+  opens `app.knowtarium.com` in your browser so you can approve this computer. Your IP address
+  reaches the API with each request; the API doesn't record it. Whatever Codex reads goes to its AI
+  provider under that provider's terms, like anything else you give it.
 - **It stores** the connection, encrypted, in your app data folder, with its key in the OS
   keychain (or, where there is none, in a file only you can read), and an encrypted local copy of
   your notes.
