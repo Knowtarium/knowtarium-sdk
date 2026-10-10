@@ -42,7 +42,7 @@ import type {
   AgentWriteResult,
   SetAgentPolicyResult,
 } from "./results.js";
-import { conflictResult, type NoteWrite } from "./writes.js";
+import { type ConflictHandling, conflictResult, type NoteWrite } from "./writes.js";
 
 /*
  * Protocol 2 on the engine: an agent writing directly (`writeAsAgent`), the owner reading and
@@ -240,6 +240,7 @@ export async function setAgentPolicy(
 export async function writeAsAgent(
   context: SyncContext,
   write: AgentNoteWrite,
+  handling: ConflictHandling = {},
 ): Promise<AgentWriteResult> {
   // an engine with no signing key of its own can only propose
   if (context.agent === undefined) return { status: "agent_key_required" };
@@ -350,7 +351,7 @@ export async function writeAsAgent(
         retryAfterSeconds: detail.code === "rate_limited" ? detail.retryAfterSeconds : null,
       };
     }
-    if (!isSyncApiError(error, "conflict")) throw error;
+    if (!isSyncApiError(error, "conflict") || handling.readConflict === false) throw error;
     const conflict = await conflictResult(context, write.noteId, {
       baseVersion: write.baseVersion,
       name: write.name,

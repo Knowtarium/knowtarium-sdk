@@ -1,5 +1,8 @@
 import { clipSignatureValid, readClipJson } from "../../clip/frame.js";
+import { clipNoteText } from "../../core/clips/index.js";
+import { removeField } from "../../core/frontmatter/index.js";
 import type { EventRecord } from "../../core/history/index.js";
+import { parseNote, serializeNote } from "../../core/note/index.js";
 import { fromBase64Url, toBase64Url } from "../../crypto/index.js";
 import { sodium } from "../../crypto/sodium.js";
 import { type ClipId, clipNoteId } from "../../protocol/index.js";
@@ -25,21 +28,26 @@ export function clippedRecord(
   };
 }
 
+/** A note's text without the filer's own stamps (`generated`, `verified`). */
+function withoutStamps(text: string): string {
+  return serializeNote(removeField(removeField(parseNote(text), "generated"), "verified"));
+}
+
 /**
  * Whether a note's `clipped` record holds, so a client may show "Saved from <extension>": its
  * payload is a clean clip in canonical form naming this record's clip and extension and this
  * workspace, the extension's signature over it verifies under `signPublicKey` (the extension's
  * key the owner vouched for, `fetchExtensions`), `clipNoteId(clipId)` is this note's ID and the
- * payload's `url` is the `url` of the note's first version. Otherwise show only the version's
- * signer.
+ * note's first version is exactly the note the payload makes (`clipNoteText`), the filer's
+ * `generated` and `verified` stamps aside. Otherwise show only the version's signer.
  */
 export function verifyClippedRecord(
   record: ClippedRecord,
   expected: {
     readonly workspaceId: string;
     readonly noteId: string;
-    /** The `url` frontmatter value of the note's version 1. */
-    readonly firstVersionUrl: string | null;
+    /** The text of the note's version 1 (null when it can't be read). */
+    readonly firstVersionText: string | null;
     /** The record's extension's owner-vouched Ed25519 public key. */
     readonly signPublicKey: Uint8Array;
   },
@@ -51,8 +59,8 @@ export function verifyClippedRecord(
       payload.extensionId !== record.extensionId ||
       payload.workspaceId !== expected.workspaceId ||
       clipNoteId(payload.clipId as ClipId) !== expected.noteId ||
-      expected.firstVersionUrl === null ||
-      payload.url !== expected.firstVersionUrl
+      expected.firstVersionText === null ||
+      withoutStamps(expected.firstVersionText) !== clipNoteText(payload)
     ) {
       return false;
     }

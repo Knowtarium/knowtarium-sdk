@@ -488,6 +488,25 @@ export class TrustState {
     });
   }
 
+  /** The highest `inbox_key` revision this device verified for a workspace (0 before any). */
+  async inboxKeyRevision(workspaceId: string): Promise<number> {
+    return (await this.read<number>(`workspace/${workspaceId}/inbox-key`)) ?? 0;
+  }
+
+  /**
+   * Accepts a verified `inbox_key` revision (the web clipper), refusing one below the highest this
+   * device verified (`rollback`): a server can't move its filers back to an older inbox folder or
+   * key generation. The same revision again is fine.
+   */
+  acceptInboxKeyRevision(workspaceId: string, revision: number): Promise<void> {
+    return this.exclusive(async () => {
+      const key = `workspace/${workspaceId}/inbox-key`;
+      const seen = (await this.read<number>(key)) ?? 0;
+      if (revision < seen) throw new VaultError("rollback", "an older inbox key than one seen");
+      if (revision > seen) await this.write(key, revision);
+    });
+  }
+
   /** The highest note version seen (0 before any). */
   async noteVersion(workspaceId: string, noteId: string): Promise<number> {
     return (await this.read<number>(`workspace/${workspaceId}/note/${noteId}`)) ?? 0;

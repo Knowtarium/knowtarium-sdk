@@ -478,6 +478,7 @@ export class SyncEngine {
           workspaceId: this.context.workspaceId,
           signer: requireIdentity(this.context, "putInboxKey"),
           keys: this.context.keys,
+          trust: this.context.trust,
         },
         options,
       ),

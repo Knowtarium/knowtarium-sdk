@@ -516,6 +516,7 @@ export class WorkspaceSession {
       inboxKey = await fetchInboxKey(this.api, {
         workspaceId: this.workspaceId,
         owner: { publicKey: this.ownerKey, accountId: this.connection.ownerId },
+        trust: this.deps.trust,
       });
     } catch {
       return { inboxKey: null, mayFile: false, filed: null };
@@ -528,7 +529,7 @@ export class WorkspaceSession {
       this.view.folders.has(inboxKey.envelope.folderId) &&
       this.inScope(inboxKey.envelope.folderId);
     if (!mayFile) return { inboxKey, mayFile, filed: null };
-    const folders = new Map<string, ClipFolder>(
+    const folders = new Map<FolderId, ClipFolder>(
       [...this.view.folders].map(([id, folder]) => [
         id,
         { name: folder.name, parentId: folder.parentId },

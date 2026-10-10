@@ -14,7 +14,7 @@ import {
   wrapAndSignWorkspaceKey,
 } from "../../crypto/index.js";
 import type { AccountId, FolderId, TokenId, WorkspaceId } from "../../protocol/index.js";
-import { type ApiClient, createApiClient } from "../api/index.js";
+import { type ApiClient, createApiClient, type RetryPolicy } from "../api/index.js";
 import type { EncryptedCache } from "../cache/index.js";
 import { newId } from "../platform/ids.js";
 import { SyncEngine } from "../sync/index.js";
@@ -36,6 +36,8 @@ export interface ClientOptions {
   readonly pageSize?: number;
   /** The CLI's token folders as it saved them at connect (default: the whole workspace). */
   readonly folderIds?: readonly string[];
+  /** The API client's retry policy (one attempt, say, so a 429 isn't waited out). */
+  readonly retry?: Partial<RetryPolicy>;
 }
 
 export interface Client {
@@ -159,6 +161,7 @@ export class World {
       baseUrl: "https://api.test",
       fetch: this.server.fetch,
       auth: { kind: "agent", token: this.agentToken },
+      ...(options.retry === undefined ? {} : { retry: options.retry }),
     });
     const trust = options.trust ?? new TrustState(new MemoryTrustStorage());
     const keys = createKeyProvider(api, {

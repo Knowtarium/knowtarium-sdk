@@ -5,6 +5,7 @@ import { isSyncApiError, VaultError } from "../errors/index.js";
 import { signInboxKey } from "../vault/envelopes.js";
 import type { Signer } from "../vault/signer.js";
 import type { KeyProvider } from "../vault/keys.js";
+import type { TrustState } from "../vault/trust.js";
 import { toSignedEnvelope, type TrustedSigner } from "../vault/verify.js";
 
 /*
@@ -14,29 +15,40 @@ import { toSignedEnvelope, type TrustedSigner } from "../vault/verify.js";
  * revision (`ensureInboxKey`) at the first pairing, right after a rotation was accepted, on open
  * when the latest is for an older generation (a rotation that stopped in between), and when the
  * inbox folder had to be made again (pass its ID). Every filer reads the latest one, verifies it
- * under the owner key it trusts and derives the key again (`fetchInboxKey`).
+ * under the owner key it trusts, refuses a revision below the highest this device verified, and
+ * derives the key again (`fetchInboxKey`).
  */
 
 /**
  * The workspace's latest inbox key, verified under the owner's key (from a source the server
  * can't swap); null when the workspace has no inbox. Throws `untrusted_signature` for one that
- * doesn't verify or names another workspace or signer.
+ * doesn't verify or names another workspace or signer, and `rollback` for a revision below the
+ * highest this device verified (or none after one), which it then remembers.
  */
 export async function fetchInboxKey(
   api: ApiClient,
-  details: { readonly workspaceId: WorkspaceId; readonly owner: TrustedSigner },
+  details: {
+    readonly workspaceId: WorkspaceId;
+    readonly owner: TrustedSigner & { readonly accountId: string };
+    readonly trust: TrustState;
+  },
 ): Promise<SignedInboxKey | null> {
-  const { data } = await api.call(routes.getInboxKey, {
-    params: { workspaceId: details.workspaceId },
-  });
+  const { workspaceId, owner, trust } = details;
+  const { data } = await api.call(routes.getInboxKey, { params: { workspaceId } });
   const signed = data.inboxKey;
-  if (signed === null) return null;
-  const ok = verifyEnvelopeFor(toSignedEnvelope(signed), details.owner.publicKey, {
+  if (signed === null) {
+    if ((await trust.inboxKeyRevision(workspaceId)) > 0) {
+      throw new VaultError("rollback", "the workspace's inbox key went missing");
+    }
+    return null;
+  }
+  const ok = verifyEnvelopeFor(toSignedEnvelope(signed), owner.publicKey, {
     type: "inbox_key",
-    workspaceId: details.workspaceId,
-    ...(details.owner.accountId === undefined ? {} : { accountId: details.owner.accountId }),
+    workspaceId,
+    accountId: owner.accountId,
   });
   if (!ok) throw new VaultError("untrusted_signature", "the inbox key isn't the owner's");
+  await trust.acceptInboxKeyRevision(workspaceId, signed.envelope.revision);
   return signed;
 }
 
@@ -46,6 +58,8 @@ export interface InboxKeyFlow {
   /** The workspace owner (session); the inbox key is signed with the account's key. */
   readonly signer: Signer;
   readonly keys: KeyProvider;
+  /** This device's marks: the highest inbox key revision it verified. */
+  readonly trust: TrustState;
 }
 
 /** What `ensureInboxKey` did. */
@@ -61,17 +75,18 @@ export interface EnsuredInboxKey {
  * workspace owner). Does nothing for a workspace without an inbox unless `folderId` names one.
  * Uses the key `forWriting` gives, so it never signs a generation that still holds a revoked
  * agent (`rotation_pending`). A revision signed meanwhile by another device (409 `conflict`) or a
- * newer generation (`stale_key_generation`) reads everything again once.
+ * newer generation (`stale_key_generation`) reads everything again once. A new one is returned as
+ * this device signed it, once the server's answer shows it stored exactly that.
  */
 export async function ensureInboxKey(
   api: ApiClient,
   flow: InboxKeyFlow,
   options: { readonly folderId?: string } = {},
 ): Promise<EnsuredInboxKey> {
-  const { workspaceId, signer } = flow;
+  const { workspaceId, signer, trust } = flow;
   const owner = { publicKey: signer.signing.publicKey, accountId: signer.accountId };
   for (let attempt = 0; ; attempt++) {
-    const latest = await fetchInboxKey(api, { workspaceId, owner });
+    const latest = await fetchInboxKey(api, { workspaceId, owner, trust });
     const folderId = options.folderId ?? latest?.envelope.folderId;
     if (folderId === undefined) return { status: "none", inboxKey: null };
     let keyring = await flow.keys.forWriting();
@@ -101,6 +116,10 @@ export async function ensureInboxKey(
       publicKey: derived.publicKey,
       folderId,
     });
+    const mine = {
+      envelope: action.signed.envelope,
+      signature: action.signature,
+    } as SignedInboxKey;
     try {
       const { data } = await api.call(routes.putInboxKey, {
         params: { workspaceId },
@@ -108,20 +127,24 @@ export async function ensureInboxKey(
           baseRevision,
           generation: derived.generation,
           publicKey,
-          folderId: folderId as SignedInboxKey["envelope"]["folderId"],
+          folderId: mine.envelope.folderId,
           signedAt: action.signedAt,
           signature: action.signature,
         },
       });
       const stored = data.inboxKey;
+      const same = (Object.keys(mine.envelope) as (keyof SignedInboxKey["envelope"])[]).every(
+        (key) => stored.envelope[key] === mine.envelope[key],
+      );
       if (
-        stored.signature !== action.signature ||
-        stored.envelope.revision !== baseRevision + 1 ||
-        stored.envelope.publicKey !== publicKey
+        !same ||
+        Object.keys(stored.envelope).length !== Object.keys(mine.envelope).length ||
+        stored.signature !== mine.signature
       ) {
         throw new VaultError("untrusted_signature", "the server stored another inbox key");
       }
-      return { status: "signed", inboxKey: stored };
+      await trust.acceptInboxKeyRevision(workspaceId, mine.envelope.revision);
+      return { status: "signed", inboxKey: mine };
     } catch (error) {
       const retry =
         isSyncApiError(error, "conflict") || isSyncApiError(error, "stale_key_generation");

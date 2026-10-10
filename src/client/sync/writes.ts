@@ -52,11 +52,24 @@ export async function conflictResult(
   return { status: "conflict", mine, theirs: await readCurrentNote(context, noteId) };
 }
 
+/** How a write answers a 409: both versions for the merge (`read`, the default), or the error. */
+export interface ConflictHandling {
+  /**
+   * False: rethrow the 409 instead of fetching, verifying and decrypting the current version (a
+   * clip's note created at base version 0, where a 409 only means it exists).
+   */
+  readonly readConflict?: boolean;
+}
+
 /**
  * Encrypts, signs (`edited`) and stores a new version if `baseVersion` is still current
  * (`If-Match`). On 409 it returns both versions for the merge UI instead of throwing.
  */
-export async function writeNote(context: SyncContext, write: NoteWrite): Promise<WriteResult> {
+export async function writeNote(
+  context: SyncContext,
+  write: NoteWrite,
+  handling: ConflictHandling = {},
+): Promise<WriteResult> {
   const identity = requireIdentity(context, "writeNote");
   const { workspaceId } = context;
   try {
@@ -102,7 +115,7 @@ export async function writeNote(context: SyncContext, write: NoteWrite): Promise
       return { status: "saved" as const, note, workspaceVersion: data.workspaceVersion };
     });
   } catch (error) {
-    if (!isSyncApiError(error, "conflict")) throw error;
+    if (!isSyncApiError(error, "conflict") || handling.readConflict === false) throw error;
     return conflictResult(context, write.noteId, {
       baseVersion: write.baseVersion,
       name: write.name,

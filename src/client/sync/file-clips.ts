@@ -14,6 +14,7 @@ import {
   CLIP_QUEUE_LIMITS,
   type ExtensionId,
   type FolderId,
+  type NoteId,
   type QueuedClip,
   routes,
   type SignedInboxKey,
@@ -22,11 +23,11 @@ import { clippedRecord } from "../clips/clipped.js";
 import { fetchExtensions, type VerifiedExtension } from "../clips/extensions.js";
 import { fetchInboxKey } from "../clips/inbox.js";
 import { type ClipRejection, clipSignedBy, type OpenedClip, openClip } from "../clips/open.js";
-import { isSyncApiError, isVaultError } from "../errors/index.js";
+import { isSyncApiError, RequestValidationError } from "../errors/index.js";
 import { newId } from "../platform/ids.js";
 import { encryptEvent, signingFields, signRecorded } from "../vault/index.js";
 import { type AgentNoteWrite, writeAsAgent } from "./agent-writes.js";
-import { requireIdentity, type SyncContext, withCurrentKey, withKeys } from "./context.js";
+import { requireIdentity, type SyncContext, withCurrentKey } from "./context.js";
 import { writeNote } from "./writes.js";
 
 /*
@@ -35,20 +36,22 @@ import { writeNote } from "./writes.js";
  * into existing folders where agents' changes apply directly, `agent_edited`, and releases the
  * rest). The steps, in order:
  *
- * 1. Read the latest `inbox_key`, verify it under the owner key this client trusts and derive the
- *    key again (stop on a mismatch); read the paired extensions, keeping those whose
- *    `extension_key` verifies.
+ * 1. Read the latest `inbox_key`, verify it under the owner key this client trusts (refusing a
+ *    revision below the highest this device verified) and derive the key again (stop on a
+ *    mismatch); read the paired extensions, keeping those whose `extension_key` verifies.
  * 2. Claim a batch (leased for 120 seconds).
- * 3. For each clip: derive its generation's inbox key (none here: release); open it (reject
- *    `unreadable`); the JSON canonical and clean (reject `invalid_clip`); the IDs those of the
- *    queue entry and this workspace (reject `mismatch`); the signature under the vouched key
- *    (reject `bad_signature`); not posted after its extension's revocation (reject `revoked`);
- *    find the folder (the inbox, or its direct subfolder named like the category, letter case
- *    ignored; the web app creates a missing one, the CLI releases); build the note
- *    (`clipNoteText`, named from the title, numbered when taken); create the note
- *    `clipNoteId(clipId)` at base version 0 (a 409: someone filed it, ack); append the `clipped`
- *    record; ack.
- * 4. Claim again while the last batch was full.
+ * 3. For each clip, until the deadline: derive its generation's inbox key (none here: release);
+ *    open it (reject `unreadable`); the JSON canonical and clean (reject `invalid_clip`); the IDs
+ *    those of the queue entry and this workspace (reject `mismatch`); an extension with a vouched
+ *    key (none, after reading the list again: release), whose signature it is (reject
+ *    `bad_signature`); not posted after its extension's revocation (reject `revoked`); find the
+ *    folder (the inbox, or its direct subfolder named like the category, letter case ignored;
+ *    the web app creates a missing one, the CLI releases); a note this client already knows under
+ *    `clipNoteId(clipId)`, deleted ones too, means it was filed: ack; build the note
+ *    (`clipNoteText`, named from the title, numbered when taken); create it at base version 0
+ *    (a 409: someone filed it, ack, without reading their note); append the `clipped` record; ack.
+ * 4. Claim again while the last batch was full. Clips released in this pass keep their lease until
+ *    the pass ends, so the next claim gets the clips behind them; then they are all released.
  *
  * Rejected clips are acked and counted; nothing about them is sent anywhere.
  */
@@ -63,10 +66,16 @@ export type ClipWaitReason =
   | "review"
   /** Today's limit of agents' direct changes was reached. */
   | "daily_cap"
+  /** Too many direct changes in the last minute: the next pass files it. */
+  | "rate_limited"
   /** The target folder is outside this connection's scope, or it can't write. */
   | "scope"
   /** The inbox folder no longer exists (the web app makes a new one). */
-  | "inbox_folder_missing";
+  | "inbox_folder_missing"
+  /** No owner-vouched key for its extension (paired since, or a server leaving it out). */
+  | "unknown_extension"
+  /** The pass reached its deadline before this clip. */
+  | "time_limit";
 
 /** A folder as the filer looks it up: its decrypted name and its parent. */
 export interface ClipFolder {
@@ -74,12 +83,15 @@ export interface ClipFolder {
   readonly parentId: FolderId | null;
 }
 
+/** How long a filing pass runs when the caller sets no deadline. */
+export const DEFAULT_FILING_MS = 30_000;
+
 /** What the caller tells the filer about its workspace and how it writes. */
 export interface FileClipsOptions {
   /** Clips per claim (1 to 50, default 20). */
   readonly max?: number;
   /** The live folders with their decrypted names (the synced view), by ID. */
-  readonly folders: ReadonlyMap<string, ClipFolder>;
+  readonly folders: ReadonlyMap<FolderId, ClipFolder>;
   /** The file names of the notes in a folder, for numbering a taken name. */
   readonly takenNames: (folderId: FolderId) => Iterable<string>;
   /**
@@ -96,7 +108,10 @@ export interface FileClipsOptions {
   readonly actor?: string;
   /** For an agent's writes: its policy floor and the folders it sees (see `AgentNoteWrite`). */
   readonly agentWrite?: Pick<AgentNoteWrite, "minPolicyRevision" | "visibleFolderIds">;
-  /** Milliseconds since the epoch after which no new batch is claimed. */
+  /**
+   * Milliseconds since the epoch after which no clip is filed: the rest are released
+   * (`time_limit`). Defaults to `DEFAULT_FILING_MS` from the start of the pass.
+   */
   readonly deadline?: number;
   /** The clock (tests). */
   readonly now?: () => number;
@@ -105,7 +120,7 @@ export interface FileClipsOptions {
 /** A clip filed as a note. */
 export interface FiledClip {
   readonly clipId: ClipId;
-  readonly noteId: string;
+  readonly noteId: NoteId;
   readonly folderId: FolderId;
   readonly name: string;
   /** Whether its `clipped` record was stored (best effort: the note stands either way). */
@@ -122,7 +137,7 @@ export interface FileClipsResult {
    */
   readonly status: "done" | "no_inbox" | "inbox_key_mismatch" | "inbox_folder_missing";
   readonly filed: readonly FiledClip[];
-  /** Clips someone filed already (the note existed): acked. */
+  /** Clips filed already (the note existed): acked. */
   readonly duplicates: readonly ClipId[];
   readonly rejected: readonly { readonly clipId: ClipId; readonly reason: ClipRejection }[];
   readonly released: readonly { readonly clipId: ClipId; readonly reason: ClipWaitReason }[];
@@ -141,11 +156,12 @@ const PER_MINUTE_RETRY_MAX_SECONDS = 60;
 interface Pass {
   readonly context: SyncContext;
   readonly options: FileClipsOptions;
+  readonly ownerAccountId: string;
   readonly inbox: SignedInboxKey["envelope"];
   extensions: Map<ExtensionId, VerifiedExtension>;
   extensionsFresh: boolean;
   /** Names given in this pass, per folder (the view may not have them yet). */
-  readonly given: Map<string, string[]>;
+  readonly given: Map<FolderId, string[]>;
   /** Category folders made in this pass, by folded name. */
   readonly made: Map<string, FolderId>;
 }
@@ -164,7 +180,7 @@ function targetFolder(pass: Pass, category: string): FolderId | undefined {
   const made = pass.made.get(wanted);
   if (made !== undefined) return made;
   for (const [id, folder] of pass.options.folders) {
-    if (folder.parentId === inboxId && foldName(folder.name) === wanted) return id as FolderId;
+    if (folder.parentId === inboxId && foldName(folder.name) === wanted) return id;
   }
   return undefined;
 }
@@ -183,7 +199,7 @@ function noteName(pass: Pass, folderId: FolderId, clip: OpenedClip): string {
 /** Appends the `clipped` record: signed (`recorded`) for a person, unsigned for an agent. */
 async function recordClipped(
   pass: Pass,
-  noteId: string,
+  noteId: NoteId,
   clip: OpenedClip,
   at: string,
 ): Promise<boolean> {
@@ -211,13 +227,7 @@ async function recordClipped(
           : {};
       await context.api.call(routes.addEvent, {
         params: { workspaceId },
-        body: {
-          id,
-          noteId: noteId as ReturnType<typeof clipNoteId>,
-          noteVersion: 1,
-          ciphertext: sealed.ciphertext,
-          ...signing,
-        },
+        body: { id, noteId, noteVersion: 1, ciphertext: sealed.ciphertext, ...signing },
         idempotent: true,
       });
     });
@@ -227,22 +237,27 @@ async function recordClipped(
   }
 }
 
-/** Creates the clip's note at base version 0 as this client writes. */
+/**
+ * Creates the clip's note at base version 0 as this client writes. A 409 means the note exists
+ * (someone filed the clip): answered `duplicate` at once, without fetching or decrypting the
+ * other note, which may be anything by now.
+ */
 async function createNote(
   pass: Pass,
-  write: { noteId: ReturnType<typeof clipNoteId>; folderId: FolderId; name: string; text: string },
+  write: { noteId: NoteId; folderId: FolderId; name: string; text: string },
 ): Promise<"saved" | "duplicate" | ClipWaitReason> {
   const { context, options } = pass;
+  const report = { readConflict: false } as const;
   try {
     if (context.api.auth.kind === "session") {
-      const result = await writeNote(context, { ...write, baseVersion: 0 });
-      return result.status === "saved" ? "saved" : "duplicate";
+      await writeNote(context, { ...write, baseVersion: 0 }, report);
+      return "saved";
     }
-    const result = await writeAsAgent(context, {
-      ...write,
-      baseVersion: 0,
-      ...options.agentWrite,
-    });
+    const result = await writeAsAgent(
+      context,
+      { ...write, baseVersion: 0, ...options.agentWrite },
+      report,
+    );
     switch (result.status) {
       case "saved":
         return "saved";
@@ -255,7 +270,7 @@ async function createNote(
       case "rate_limited":
         return (result.retryAfterSeconds ?? 0) > PER_MINUTE_RETRY_MAX_SECONDS
           ? "daily_cap"
-          : "review";
+          : "rate_limited";
     }
   } catch (error) {
     if (isSyncApiError(error, "already_exists") || isSyncApiError(error, "conflict")) {
@@ -293,11 +308,13 @@ async function fileOne(pass: Pass, queued: QueuedClip, keys: WorkspaceKeyring): 
   let extension = pass.extensions.get(queued.extensionId);
   if (extension === undefined && !pass.extensionsFresh) {
     // paired since this pass read the list
-    pass.extensions = await readExtensions(context);
+    pass.extensions = await readExtensions(pass);
     pass.extensionsFresh = true;
     extension = pass.extensions.get(queued.extensionId);
   }
-  if (extension === undefined || !clipSignedBy(clip, extension.signPublicKey)) {
+  // no vouched key to check it against: it waits rather than being thrown away
+  if (extension === undefined) return { kind: "released", reason: "unknown_extension" };
+  if (!clipSignedBy(clip, extension.signPublicKey)) {
     return { kind: "rejected", reason: "bad_signature" };
   }
   if (
@@ -306,13 +323,15 @@ async function fileOne(pass: Pass, queued: QueuedClip, keys: WorkspaceKeyring): 
   ) {
     return { kind: "rejected", reason: "revoked" };
   }
+  const noteId = clipNoteId(queued.clipId);
+  // filed before (a lost ack, or a clip posted again): this client knows the note, deleted or not
+  if (context.noteFolders.has(noteId)) return { kind: "duplicate" };
   let folderId = targetFolder(pass, payload.category);
   if (folderId === undefined) {
     if (options.createFolder === undefined) return { kind: "released", reason: "new_category" };
     folderId = await options.createFolder(payload.category, pass.inbox.folderId);
     pass.made.set(foldName(payload.category), folderId);
   }
-  const noteId = clipNoteId(payload.clipId);
   const text = clipNoteText(payload);
   const name = noteName(pass, folderId, clip);
   const created = await createNote(pass, {
@@ -328,32 +347,24 @@ async function fileOne(pass: Pass, queued: QueuedClip, keys: WorkspaceKeyring): 
   return { kind: "filed", filed: { clipId: queued.clipId, noteId, folderId, name, recorded } };
 }
 
-function readExtensions(context: SyncContext): Promise<Map<ExtensionId, VerifiedExtension>> {
-  const { owner } = context.verifier;
+function readExtensions(pass: Pick<Pass, "context" | "ownerAccountId">) {
+  const { context } = pass;
   return fetchExtensions(context.api, {
     workspaceId: context.workspaceId,
-    owner: { publicKey: owner.publicKey, accountId: owner.accountId ?? "" },
+    owner: { publicKey: context.verifier.owner.publicKey, accountId: pass.ownerAccountId },
   });
 }
 
-/** Sends the acks and releases of one batch (at most 50 IDs each, as one claim gives). */
-async function settle(
+/** Sends acks or releases, at most 50 IDs a request. */
+async function send(
   context: SyncContext,
-  acks: readonly ClipId[],
-  releases: readonly ClipId[],
+  route: typeof routes.ackClips | typeof routes.releaseClips,
+  clipIds: readonly ClipId[],
 ): Promise<void> {
-  const params = { workspaceId: context.workspaceId };
-  if (acks.length > 0) {
-    await context.api.call(routes.ackClips, {
-      params,
-      body: { clipIds: [...acks] },
-      idempotent: true,
-    });
-  }
-  if (releases.length > 0) {
-    await context.api.call(routes.releaseClips, {
-      params,
-      body: { clipIds: [...releases] },
+  for (let start = 0; start < clipIds.length; start += CLIP_QUEUE_LIMITS.claimMax) {
+    await context.api.call(route, {
+      params: { workspaceId: context.workspaceId },
+      body: { clipIds: clipIds.slice(start, start + CLIP_QUEUE_LIMITS.claimMax) },
       idempotent: true,
     });
   }
@@ -363,7 +374,8 @@ async function settle(
  * Files the workspace's waiting clips as notes (see the steps above), as this engine's caller
  * writes: a person's session as the person (`edited`, in every folder), an agent's token with its
  * own key (`agent_edited`, only where the folder's mode is `direct`). Returns what it filed,
- * found filed already, rejected and left waiting.
+ * found filed already, rejected and left waiting. Refuses (`RequestValidationError`) an engine
+ * that doesn't know the owner's account ID, since no extension's key could be checked.
  */
 export async function fileClips(
   context: SyncContext,
@@ -381,19 +393,21 @@ export async function fileClips(
     released,
   });
   const { owner } = context.verifier;
+  const ownerAccountId = owner.accountId;
+  if (ownerAccountId === undefined) throw new RequestValidationError("claimClips", "auth");
+  const now = options.now ?? Date.now;
+  const deadline = options.deadline ?? now() + DEFAULT_FILING_MS;
   const signed = await fetchInboxKey(context.api, {
     workspaceId: context.workspaceId,
-    owner,
+    owner: { publicKey: owner.publicKey, accountId: ownerAccountId },
+    trust: context.trust,
   });
   if (signed === null) return result("no_inbox");
   const inbox = signed.envelope;
   // the signed key must be the one this client derives for its generation
-  const own = await withKeys(context, (keys) => inboxKeyFor(keys, inbox.generation)).catch(
-    (error: unknown) => {
-      if (isVaultError(error, "missing_key")) return undefined;
-      throw error;
-    },
-  );
+  let keys = await context.keys.get();
+  if (keys.get(inbox.generation) === undefined) keys = await context.keys.refresh();
+  const own = inboxKeyFor(keys, inbox.generation);
   if (own !== undefined) {
     const matches = toBase64Url(own.publicKey) === inbox.publicKey;
     wipe(own.privateKey);
@@ -403,65 +417,71 @@ export async function fileClips(
   const pass: Pass = {
     context,
     options,
+    ownerAccountId,
     inbox,
-    extensions: await readExtensions(context),
+    extensions: await readExtensions({ context, ownerAccountId }),
     extensionsFresh: true,
     given: new Map(),
     made: new Map(),
   };
   const max = Math.min(Math.max(options.max ?? CLIP_QUEUE_LIMITS.claimDefault, 1), 50);
-  const now = options.now ?? Date.now;
-  // released clips come back at once with the next claim: each is handled once per pass
-  const waiting = new Set<ClipId>();
-  for (;;) {
-    if (options.deadline !== undefined && now() > options.deadline) break;
-    const { data } = await context.api.call(routes.claimClips, {
-      params: { workspaceId: context.workspaceId },
-      body: { max },
-    });
-    pass.extensionsFresh = false;
-    const acks: ClipId[] = [];
-    const releases: ClipId[] = [];
-    const fresh = data.clips.filter((clip) => !waiting.has(clip.clipId));
-    releases.push(...data.clips.filter((clip) => waiting.has(clip.clipId)).map((c) => c.clipId));
-    let keys = await withKeys(context, (ring) => ring);
-    const newest = Math.max(0, ...fresh.map((clip) => clip.generation));
-    if (newest > keys.current.generation) keys = await context.keys.refresh();
-    try {
-      for (const [index, queued] of fresh.entries()) {
-        let outcome: Outcome;
-        try {
-          outcome = await fileOne(pass, queued, keys);
-        } catch (error) {
-          // the rest wait for the next pass, at once rather than after the lease
-          releases.push(...fresh.slice(index).map((clip) => clip.clipId));
-          throw error;
+  // released clips keep their lease until the pass ends, so the next claim gets the ones behind
+  const held: ClipId[] = [];
+  const hold = (clipId: ClipId, reason: ClipWaitReason) => {
+    released.push({ clipId, reason });
+    held.push(clipId);
+  };
+  try {
+    for (;;) {
+      if (now() > deadline) break;
+      const { data } = await context.api.call(routes.claimClips, {
+        params: { workspaceId: context.workspaceId },
+        body: { max },
+      });
+      pass.extensionsFresh = false;
+      const acks: ClipId[] = [];
+      const newest = Math.max(0, ...data.clips.map((clip) => clip.generation));
+      if (newest > keys.current.generation) keys = await context.keys.refresh();
+      try {
+        for (const [index, queued] of data.clips.entries()) {
+          if (now() > deadline) {
+            for (const rest of data.clips.slice(index)) hold(rest.clipId, "time_limit");
+            break;
+          }
+          let outcome: Outcome;
+          try {
+            outcome = await fileOne(pass, queued, keys);
+          } catch (error) {
+            // the rest wait for the next pass, released at once rather than after the lease
+            held.push(...data.clips.slice(index).map((clip) => clip.clipId));
+            throw error;
+          }
+          switch (outcome.kind) {
+            case "filed":
+              filed.push(outcome.filed);
+              acks.push(queued.clipId);
+              break;
+            case "duplicate":
+              duplicates.push(queued.clipId);
+              acks.push(queued.clipId);
+              break;
+            case "rejected":
+              rejected.push({ clipId: queued.clipId, reason: outcome.reason });
+              acks.push(queued.clipId);
+              break;
+            case "released":
+              hold(queued.clipId, outcome.reason);
+              break;
+          }
         }
-        switch (outcome.kind) {
-          case "filed":
-            filed.push(outcome.filed);
-            acks.push(queued.clipId);
-            break;
-          case "duplicate":
-            duplicates.push(queued.clipId);
-            acks.push(queued.clipId);
-            break;
-          case "rejected":
-            rejected.push({ clipId: queued.clipId, reason: outcome.reason });
-            acks.push(queued.clipId);
-            break;
-          case "released":
-            released.push({ clipId: queued.clipId, reason: outcome.reason });
-            releases.push(queued.clipId);
-            waiting.add(queued.clipId);
-            break;
-        }
+      } finally {
+        await send(context, routes.ackClips, acks).catch(() => undefined);
       }
-    } finally {
-      await settle(context, acks, releases).catch(() => undefined);
+      // a short batch: nothing more waits unleased
+      if (data.clips.length < max) break;
     }
-    // a short batch: the queue is empty; nothing new in this one: the rest all wait
-    if (data.clips.length < max || fresh.length === 0) break;
+  } finally {
+    await send(context, routes.releaseClips, held).catch(() => undefined);
   }
   return result("done");
 }

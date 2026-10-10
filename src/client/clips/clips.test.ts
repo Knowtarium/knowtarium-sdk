@@ -2,19 +2,22 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { signClip } from "../../clip/frame.js";
 import {
+  createConnectSecret,
   createExtensionKeys,
   type ExtensionKeys,
   normalizeClip,
+  openExtensionPairing,
   ready as clipReady,
   signAndSealClip,
 } from "../../clip/index.js";
-import { clipNoteText, parseNote } from "../../core/index.js";
-import { concatBytes, fromHex, uint32BE } from "../../crypto/encoding.js";
+import { addVerified, clipNoteText, parseNote, setGenerated } from "../../core/index.js";
+import { concatBytes, fromHex, uint32BE, utf8Encode } from "../../crypto/encoding.js";
 import {
   boxKeyPairFromPrivateKey,
   deriveInboxKeyPair,
   fromBase64Url,
   ready,
+  sha256,
   toBase64Url,
 } from "../../crypto/index.js";
 import { sodium } from "../../crypto/sodium.js";
@@ -28,12 +31,19 @@ import {
   routes,
   type SignedInboxKey,
 } from "../../protocol/index.js";
-import { isVaultError } from "../errors/index.js";
+import { createApiClient } from "../api/index.js";
+import { isVaultError, RequestValidationError } from "../errors/index.js";
+import type { FetchLike } from "../platform/fetch.js";
+import { SyncEngine } from "../sync/index.js";
+import { response } from "../testing/http.js";
+import { decryptExtensionName } from "../vault/index.js";
+import { approveExtension } from "./approval.js";
+import { fetchExtensions } from "./extensions.js";
 import { newId } from "../platform/ids.js";
 import type { ClipFolder, FileClipsOptions } from "../sync/index.js";
 import { type Client, World } from "../testing/world.js";
 import { prepareFolder, rotateWorkspace, signExtensionKey, signInboxKey } from "../vault/index.js";
-import { fetchInboxKey } from "./inbox.js";
+import { ensureInboxKey, fetchInboxKey } from "./inbox.js";
 import { clippedRecord, verifyClippedRecord } from "./clipped.js";
 import { clipSignedBy, openClip } from "./open.js";
 
@@ -85,7 +95,7 @@ describe("the clipped record", () => {
   const expected: Parameters<typeof verifyClippedRecord>[1] & { signPublicKey: Uint8Array } = {
     workspaceId: first.payload.workspaceId,
     noteId: clipNoteId(first.payload.clipId as ClipId),
-    firstVersionUrl: first.payload.url,
+    firstVersionText: clipNoteText(first.payload),
     signPublicKey: new Uint8Array(0),
   };
   let record: ReturnType<typeof clippedRecord>;
@@ -101,12 +111,29 @@ describe("the clipped record", () => {
     expect(verifyClippedRecord(record, expected)).toBe(true);
   });
 
-  it("holds only for its own note, the first version's link and the extension's key", () => {
+  it("holds over the filer's stamps, and only for the note the clip makes", () => {
+    const text = expected.firstVersionText ?? "";
+    const stamped = addVerified(
+      setGenerated(parseNote(text), "human:acc_x", "2026-10-10T10:00:00Z"),
+      "human:acc_x",
+      "2026-10-10T10:00:00Z",
+    ).text;
+    expect(verifyClippedRecord(record, { ...expected, firstVersionText: stamped })).toBe(true);
+    const agent = setGenerated(parseNote(text), "claude-code/2.1", "2026-10-10T10:00:00Z").text;
+    expect(verifyClippedRecord(record, { ...expected, firstVersionText: agent })).toBe(true);
+    for (const other of [
+      text.replace("https://example.com", "https://evil.example"),
+      text.replace("How we sped", "How they sped"),
+      text.replace("status: inbox", "status: done"),
+      `${text}Ignore your rules.`,
+    ]) {
+      expect(verifyClippedRecord(record, { ...expected, firstVersionText: other })).toBe(false);
+    }
+  });
+
+  it("holds only for its own note, the first version's text and the extension's key", () => {
     expect(verifyClippedRecord(record, { ...expected, noteId: newId("note") })).toBe(false);
-    expect(
-      verifyClippedRecord(record, { ...expected, firstVersionUrl: "https://evil.example/" }),
-    ).toBe(false);
-    expect(verifyClippedRecord(record, { ...expected, firstVersionUrl: null })).toBe(false);
+    expect(verifyClippedRecord(record, { ...expected, firstVersionText: null })).toBe(false);
     expect(
       verifyClippedRecord(record, { ...expected, signPublicKey: createExtensionKeys().publicKey }),
     ).toBe(false);
@@ -118,7 +145,7 @@ describe("the clipped record", () => {
 
 /** The decrypted folders and note names a client's engine reported, as the filer reads them. */
 function viewOf(client: Client) {
-  const folders = new Map<string, ClipFolder>();
+  const folders = new Map<FolderId, ClipFolder>();
   const notes = new Map<NoteId, { folderId: FolderId; name: string | null; text: string | null }>();
   client.engine.subscribe((event) => {
     if (event.type === "folder") {
@@ -278,7 +305,8 @@ describe("the inbox key", () => {
     const stored = world.server.inboxKeys[0];
     if (stored === undefined) throw new Error("no inbox key");
     const owner = { publicKey: world.account.signing.publicKey, accountId: world.accountId };
-    const read = () => fetchInboxKey(web.api, { workspaceId: world.workspaceId, owner });
+    const read = () =>
+      fetchInboxKey(web.api, { workspaceId: world.workspaceId, owner, trust: web.trust });
     await expect(read()).resolves.toEqual(stored);
     const swapped = {
       ...stored,
@@ -330,7 +358,7 @@ describe("filing clips in the web app", () => {
       verifyClippedRecord(record, {
         workspaceId: world.workspaceId,
         noteId,
-        firstVersionUrl: "https://example.com/blog/faster-builds",
+        firstVersionText: note.text,
         signPublicKey: paired.keys.publicKey,
       }),
     ).toBe(true);
@@ -479,13 +507,15 @@ describe("filing clips in the web app", () => {
     );
     expect(reasons).toEqual({
       [forged]: "bad_signature",
-      [unknown]: "bad_signature",
       [after]: "revoked",
       [tooLongId]: "invalid_clip",
       [swappedId]: "mismatch",
     });
     expect(result.filed.map((entry) => entry.clipId)).toContain(before);
-    expect(world.server.clipQueue.size).toBe(0);
+    // no vouched key to check it against: it waits, released, instead of being thrown away
+    expect(result.released).toEqual([{ clipId: unknown, reason: "unknown_extension" }]);
+    expect([...world.server.clipQueue.keys()]).toEqual([unknown]);
+    expect(world.server.clipQueue.get(unknown)?.leaseUntil).toBe(0);
   });
 
   it("writes a title with bidi controls and YAML-breaking characters only as the title", async () => {
@@ -609,32 +639,33 @@ describe("filing clips from the CLI", () => {
     expect(rest.filed.map((entry) => entry.clipId).sort()).toEqual([asks, missing].sort());
   });
 
-  it("releases a clip of a generation it has no copy of", async () => {
-    const { world, inboxKey } = await withInbox();
+  it("releases a clip of an older generation it has no copy of", async () => {
+    const { world, web, view: webView, inboxKey } = await withInbox();
     const paired = pair(world);
-    // a clip sealed to generation 2's inbox key, which the agent wasn't given
-    const clipId = newId("clip");
-    const key2 = deriveInboxKeyPair({ generation: 2, key: new Uint8Array(32).fill(5) });
-    const blob = signAndSealClip(
-      {
-        clipId,
-        workspaceId: world.workspaceId,
-        extensionId: paired.extensionId,
-        url: "https://example.com/",
-        savedAt: "2026-10-10T09:41:07.512Z",
-      },
-      {
-        signingSecretKey: paired.keys.privateKey,
-        inboxKey: { generation: 2, publicKey: key2.publicKey },
-      },
-    );
-    world.server.queueClip({ clipId, extensionId: paired.extensionId, blob });
-    expect(inboxKey.envelope.generation).toBe(1);
+    await rotateWorkspace(web.api, {
+      workspaceId: world.workspaceId,
+      signer: world.signer,
+      ownerBoxPublicKey: world.account.encryption.publicKey,
+      keys: web.keys,
+      trust: web.trust,
+    });
+    expect(world.server.inboxKey?.envelope.generation).toBe(2);
+    // an agent connected after the rotation holds generation 2 only
+    world.server.agentKeys = world.server.agentKeys.filter((record) => record.keyGeneration === 2);
+    // the extension still sealed this one to generation 1
+    const old = save(world, paired, inboxKey);
+    const current = save(world, paired, world.server.inboxKey ?? inboxKey);
     const cli = world.cli();
     const view = viewOf(cli);
     await cli.engine.pull();
-    const result = await cli.engine.fileClips(view.options());
-    expect(result.released).toEqual([{ clipId, reason: "old_generation" }]);
+    // the folder names are generation 1's: the web app's view knows them
+    const result = await cli.engine.fileClips(view.options({ folders: webView.folders }));
+    expect(result.status).toBe("done");
+    const reasons = new Map(result.released.map((entry) => [entry.clipId, entry.reason]));
+    expect(reasons.get(old)).toBe("old_generation");
+    // the clip sealed to generation 2 opens (its folder isn't one this agent's feed could read)
+    expect(reasons.get(current)).not.toBe("old_generation");
+    expect(result.rejected).toEqual([]);
   });
 
   it("builds an empty clip's note with no body", () => {
@@ -644,3 +675,257 @@ describe("filing clips from the CLI", () => {
     );
   });
 });
+
+describe("filing passes", () => {
+  it("files the clips behind more unfilable ones than one claim takes", async () => {
+    const { world, inboxKey } = await withInbox();
+    const paired = pair(world);
+    // three clips for a category agents can't create, then one they can file
+    const stuck = [1, 2, 3].map((second) =>
+      save(
+        world,
+        paired,
+        inboxKey,
+        { category: "Missing" },
+        `2026-10-10T09:00:0${String(second)}.000Z`,
+      ),
+    );
+    const filable = save(world, paired, inboxKey, {}, "2026-10-10T09:00:09.000Z");
+    const cli = world.cli();
+    const view = viewOf(cli);
+    await cli.engine.pull();
+    const result = await cli.engine.fileClips(view.options({ max: 2 }));
+    expect(result.filed.map((entry) => entry.clipId)).toEqual([filable]);
+    expect(result.released.map((entry) => entry.clipId).sort()).toEqual([...stuck].sort());
+    // held until the pass ended, then released together, free for the web app
+    expect([...world.server.releasedClips].sort()).toEqual([...stuck].sort());
+    for (const clipId of stuck) expect(world.server.clipQueue.get(clipId)?.leaseUntil).toBe(0);
+  });
+
+  it("treats a 409 on the create as filed, without reading the other note", async () => {
+    const { world, web, view, inboxKey } = await withInbox();
+    const paired = pair(world);
+    const clipId = save(world, paired, inboxKey);
+    await web.engine.fileClips(view.options());
+    const blob = fromBase64Url(world.server.clipQueue.get(clipId)?.blob ?? "");
+    expect(blob).toHaveLength(0);
+    // posted again (a lost ack, say) to a client that hasn't synced the note
+    requeue(world, clipId, paired, inboxKey);
+    const fresh = world.web();
+    const reads = () =>
+      world.server.requests.filter(
+        (call) => call.init.method === "GET" && call.url.includes(clipNoteId(clipId)),
+      ).length;
+    const before = reads();
+    const result = await fresh.engine.fileClips(view.options());
+    expect(result).toMatchObject({ filed: [], duplicates: [clipId] });
+    expect(reads()).toBe(before);
+  });
+
+  it("acks a clip whose note this client knows, deleted too, without writing", async () => {
+    const { world, web, view, inboxKey } = await withInbox();
+    const paired = pair(world);
+    const clipId = save(world, paired, inboxKey);
+    await web.engine.fileClips(view.options());
+    const noteId = clipNoteId(clipId);
+    const note = await web.engine.readNote(noteId);
+    await web.engine.deleteNote({ noteId, baseVersion: note.version });
+    requeue(world, clipId, paired, inboxKey);
+    const writes = () =>
+      world.server.requests.filter(
+        (call) => call.init.method === "PUT" && call.url.includes(noteId),
+      ).length;
+    const before = writes();
+    const result = await web.engine.fileClips(view.options());
+    expect(result).toMatchObject({ filed: [], duplicates: [clipId] });
+    expect(writes()).toBe(before);
+    expect(world.server.clipQueue.size).toBe(0);
+  });
+
+  it("stops at its deadline, releasing the clips it didn't get to", async () => {
+    const { world, web, view, inboxKey } = await withInbox();
+    const paired = pair(world);
+    const ids = [1, 2, 3].map((second) =>
+      save(world, paired, inboxKey, {}, `2026-10-10T09:00:0${String(second)}.000Z`),
+    );
+    let clock = 1_000;
+    const result = await web.engine.fileClips(
+      view.options({ deadline: 1_250, now: () => (clock += 100) }),
+    );
+    expect(result.filed.map((entry) => entry.clipId)).toEqual([ids[0]]);
+    expect(result.released).toEqual([
+      { clipId: ids[1], reason: "time_limit" },
+      { clipId: ids[2], reason: "time_limit" },
+    ]);
+    const [, second] = ids;
+    if (second === undefined) throw new Error("no clip");
+    expect(world.server.clipQueue.get(second)?.leaseUntil).toBe(0);
+  });
+
+  it("tells the per-minute limit from the daily cap", async () => {
+    const { world, inboxKey } = await withInbox();
+    const paired = pair(world);
+    const clipId = save(world, paired, inboxKey);
+    world.server.agentWriteDailyCap = 0;
+    world.server.agentWriteRetryAfterSeconds = 30;
+    const cli = world.cli({ retry: { maxAttempts: 1 } });
+    const view = viewOf(cli);
+    await cli.engine.pull();
+    expect((await cli.engine.fileClips(view.options())).released).toEqual([
+      { clipId, reason: "rate_limited" },
+    ]);
+    world.server.agentWriteRetryAfterSeconds = 3600;
+    expect((await cli.engine.fileClips(view.options())).released).toEqual([
+      { clipId, reason: "daily_cap" },
+    ]);
+  });
+
+  it("refuses to claim without the owner's account ID", async () => {
+    const { world, inboxKey } = await withInbox();
+    save(world, pair(world), inboxKey);
+    const cli = world.cli();
+    const engine = new SyncEngine({
+      api: cli.api,
+      workspaceId: world.workspaceId,
+      keys: cli.keys,
+      trust: cli.trust,
+      verifier: { publicKey: world.account.signing.publicKey },
+    });
+    const error = await engine.fileClips(viewOf(cli).options()).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(RequestValidationError);
+    expect(world.server.claims).toBe(0);
+  });
+});
+
+describe("the inbox key's rollback marks and echo", () => {
+  it("refuses an older inbox key revision, or none, once it verified a newer one", async () => {
+    const { world, web } = await withInbox();
+    const again = await createFolder(world, web, "Inbox 2");
+    await web.engine.ensureInboxKey({ folderId: again });
+    const owner = { publicKey: world.account.signing.publicKey, accountId: world.accountId };
+    const read = () =>
+      fetchInboxKey(web.api, { workspaceId: world.workspaceId, owner, trust: web.trust });
+    expect((await read())?.envelope.revision).toBe(2);
+    const newer = world.server.inboxKeys.pop();
+    const older = await read().catch((caught: unknown) => caught);
+    expect(isVaultError(older, "rollback")).toBe(true);
+    world.server.inboxKeys.length = 0;
+    const none = await read().catch((caught: unknown) => caught);
+    expect(isVaultError(none, "rollback")).toBe(true);
+    if (newer !== undefined) world.server.inboxKeys.push(newer);
+  });
+
+  it("returns the inbox key it signed, and refuses a server that stored another", async () => {
+    const world = new World();
+    const web = world.web();
+    const inboxId = await createFolder(world, web, "Inbox");
+    const other = await createFolder(world, web, "Elsewhere");
+    let tamper = false;
+    const fetch: FetchLike = async (url, init) => {
+      const answer = await world.server.fetch(url, init);
+      const stored = world.server.inboxKey;
+      if (!tamper || init.method !== "PUT" || stored === null) return answer;
+      return response(200, {
+        inboxKey: { ...stored, envelope: { ...stored.envelope, folderId: inboxId } },
+      });
+    };
+    const api = createApiClient({ baseUrl: "https://api.test", fetch, auth: { kind: "session" } });
+    const flow = {
+      workspaceId: world.workspaceId,
+      signer: world.signer,
+      keys: web.keys,
+      trust: web.trust,
+    };
+    const signed = await ensureInboxKey(api, flow, { folderId: inboxId });
+    expect(signed.status).toBe("signed");
+    expect(signed.inboxKey?.envelope.folderId).toBe(inboxId);
+    expect(signed.inboxKey?.signature).toBe(world.server.inboxKey?.signature);
+    tamper = true;
+    const refused = await ensureInboxKey(api, flow, { folderId: other }).catch(
+      (caught: unknown) => caught,
+    );
+    expect(isVaultError(refused, "untrusted_signature")).toBe(true);
+  });
+});
+
+describe("approving an extension", () => {
+  it("registers it with the owner's key and relays a payload only it opens", async () => {
+    const { world, web, inboxKey } = await withInbox();
+    const { data: started } = await web.api.call(routes.startConnect, {
+      body: { client: "extension", extensionVersion: "0.1.0" },
+    });
+    const keys = createExtensionKeys();
+    const secret = createConnectSecret();
+    const { extension } = await approveExtension(
+      web.api,
+      { signer: world.signer, keys: web.keys },
+      {
+        requestId: started.requestId,
+        workspaceId: world.workspaceId,
+        signPublicKey: keys.publicKey,
+        secret,
+        name: "Chrome on macOS",
+        workspaceName: "Clients",
+        inboxKey,
+        categories: ["Reading"],
+      },
+    );
+    expect(extension.signPublicKey).toBe(toBase64Url(keys.publicKey));
+    const keyring = await web.keys.get();
+    expect(
+      decryptExtensionName(
+        keyring,
+        { workspaceId: world.workspaceId, extensionId: extension.extensionId },
+        extension.encName,
+      ),
+    ).toBe("Chrome on macOS");
+    const { data: polled } = await web.api.call(routes.pollConnect, {
+      params: { requestId: started.requestId },
+      body: { pollSecret: started.pollSecret },
+    });
+    if (polled.status !== "relayed") throw new Error(polled.status);
+    const pairing = openExtensionPairing(fromBase64Url(polled.encRelayPayload), {
+      secret,
+      signPublicKey: keys.publicKey,
+    });
+    expect(pairing).toMatchObject({
+      extensionId: extension.extensionId,
+      accountId: world.accountId,
+      workspaceName: "Clients",
+      categories: ["Reading"],
+    });
+    expect(world.server.extensionTokenHashes.get(extension.extensionId)).toBe(
+      toBase64Url(sha256(utf8Encode(pairing.token))),
+    );
+    // the filer trusts the key the approval vouched for
+    const verified = await fetchExtensions(web.api, {
+      workspaceId: world.workspaceId,
+      owner: { publicKey: world.account.signing.publicKey, accountId: world.accountId },
+    });
+    expect(verified.has(extension.extensionId)).toBe(true);
+  });
+});
+
+/** Puts a filed clip back in the queue, as a repeated post or a lost ack would. */
+function requeue(world: World, clipId: ClipId, paired: Paired, inboxKey: SignedInboxKey): void {
+  const blob = signAndSealClip(
+    {
+      clipId,
+      workspaceId: world.workspaceId,
+      extensionId: paired.extensionId,
+      url: "https://example.com/blog/faster-builds",
+      title: "How we sped up our build",
+      note: "Read before the CI meeting.",
+      savedAt: "2026-10-10T09:41:07.512Z",
+    },
+    { signingSecretKey: paired.keys.privateKey, inboxKey: inboxKey.envelope },
+  );
+  world.server.clipQueue.set(clipId, {
+    clipId,
+    extensionId: paired.extensionId,
+    generation: inboxKey.envelope.generation,
+    blob: toBase64Url(blob),
+    postedAt: new Date().toISOString(),
+    leaseUntil: 0,
+  });
+}

@@ -238,6 +238,8 @@ export class FakeServer {
   readonly deletedFolders = new Set<FolderId>();
   /** The most direct writes an agent may make a day (the sync API's cap); then 429. */
   agentWriteDailyCap = Number.POSITIVE_INFINITY;
+  /** The `Retry-After` of the cap's 429 (over 60 seconds: the daily cap; less: per minute). */
+  agentWriteRetryAfterSeconds = 3600;
   /** How many direct writes the agent made (the fake's day never ends). */
   agentWrites = 0;
   /** Agent-write signatures already used: a replay is refused. */
@@ -283,6 +285,8 @@ export class FakeServer {
   /** The clip IDs acked and released, in order, and how many claims came in. */
   readonly acked: ClipId[] = [];
   readonly releasedClips: ClipId[] = [];
+  /** The SHA-256 (base64url) of each approved extension's token, as `approveExtensionConnect` got it. */
+  readonly extensionTokenHashes = new Map<ExtensionId, string>();
   claims = 0;
   private counter = 0;
 
@@ -1187,7 +1191,12 @@ export class FakeServer {
     const signKey = this.agentSignPublicKey;
     if (signKey === null) throw new HttpError("agent_key_required");
     if (this.agentWrites >= this.agentWriteDailyCap) {
-      throw new HttpError("rate_limited", { retryAfterSeconds: 3600 }, { "Retry-After": "3600" });
+      const wait = this.agentWriteRetryAfterSeconds;
+      throw new HttpError(
+        "rate_limited",
+        { retryAfterSeconds: wait },
+        { "Retry-After": String(wait) },
+      );
     }
     const policy = this.agentPolicy;
     const header = headers.get("knowtarium-agent-policy-revision");
@@ -1893,10 +1902,55 @@ export class FakeServer {
         extension.revokedAt ??= new Date().toISOString();
         return response(200, { ok: true });
       }
+      case "approveExtensionConnect": {
+        const entry = this.connectRequests.get(request.params["requestId"] ?? "");
+        if (entry === undefined) throw new HttpError("not_found");
+        if (entry.status !== "pending") throw new HttpError("already_exists");
+        if (this.inboxKey === null) throw new HttpError("inbox_not_set");
+        const body = this.json(request) as {
+          extensionId: ExtensionId;
+          tokenSecretSha256: string;
+          encName: string;
+          signPublicKey: string;
+          keySignedAt: string;
+          keySignature: string;
+        };
+        this.verify(
+          {
+            type: "extension_key",
+            accountId: this.options.ownerId,
+            workspaceId,
+            extensionId: body.extensionId,
+            signPublicKey: body.signPublicKey,
+            createdAt: body.keySignedAt,
+          },
+          body.keySignature,
+        );
+        const extension = {
+          extensionId: body.extensionId,
+          signPublicKey: body.signPublicKey,
+          keySignedAt: body.keySignedAt,
+          keySignature: body.keySignature,
+          encName: body.encName,
+          createdAt: new Date().toISOString(),
+          lastUsedAt: null,
+          lastClipAt: null,
+          revokedAt: null,
+        };
+        this.extensions.push(extension);
+        this.extensionTokenHashes.set(body.extensionId, body.tokenSecretSha256);
+        entry.status = "approved";
+        return response(200, { extension });
+      }
+      case "relayConnect": {
+        const entry = this.connectRequests.get(request.params["requestId"] ?? "");
+        if (entry?.status !== "approved") throw new HttpError("not_found");
+        entry.relay = (this.json(request) as { encRelayPayload: string }).encRelayPayload;
+        return response(200, { ok: true });
+      }
       case "postClip":
       case "getExtensionInboxKey":
       case "revokeCurrentExtension":
-      case "approveExtensionConnect":
         throw new HttpError("not_found");
       default:
         return undefined;
