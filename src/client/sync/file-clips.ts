@@ -164,7 +164,12 @@ interface Pass {
   readonly given: Map<FolderId, string[]>;
   /** Category folders made in this pass, by folded name. */
   readonly made: Map<string, FolderId>;
+  /** Runs a task in the engine's queue (or at once, outside an engine). */
+  readonly queue: Queue;
 }
+
+/** Runs a task in turn with the engine's other pulls and writes. */
+export type Queue = <T>(task: () => Promise<T>) => Promise<T>;
 
 /** The inbox key pair of `generation`, if this client holds that generation. */
 function inboxKeyFor(keys: WorkspaceKeyring, generation: number): InboxKeyPair | undefined {
@@ -334,17 +339,26 @@ async function fileOne(pass: Pass, queued: QueuedClip, keys: WorkspaceKeyring): 
   }
   const text = clipNoteText(payload);
   const name = noteName(pass, folderId, clip);
-  const created = await createNote(pass, {
-    noteId,
-    folderId,
-    name,
-    text: options.stamp?.(text, folderId) ?? text,
+  const target = folderId;
+  // the write and its record take their turn in the engine's queue, one clip at a time, so the
+  // person's or the agent's own writes never wait on a whole pass
+  return pass.queue(async (): Promise<Outcome> => {
+    if (context.noteFolders.has(noteId)) return { kind: "duplicate" };
+    const created = await createNote(pass, {
+      noteId,
+      folderId: target,
+      name,
+      text: options.stamp?.(text, target) ?? text,
+    });
+    if (created === "duplicate") return { kind: "duplicate" };
+    if (created !== "saved") return { kind: "released", reason: created };
+    const at = new Date((options.now ?? Date.now)()).toISOString();
+    const recorded = await recordClipped(pass, noteId, clip, at);
+    return {
+      kind: "filed",
+      filed: { clipId: queued.clipId, noteId, folderId: target, name, recorded },
+    };
   });
-  if (created === "duplicate") return { kind: "duplicate" };
-  if (created !== "saved") return { kind: "released", reason: created };
-  const at = new Date((options.now ?? Date.now)()).toISOString();
-  const recorded = await recordClipped(pass, noteId, clip, at);
-  return { kind: "filed", filed: { clipId: queued.clipId, noteId, folderId, name, recorded } };
 }
 
 function readExtensions(pass: Pick<Pass, "context" | "ownerAccountId">) {
@@ -380,6 +394,7 @@ async function send(
 export async function fileClips(
   context: SyncContext,
   options: FileClipsOptions,
+  queue: Queue = (task) => task(),
 ): Promise<FileClipsResult> {
   const filed: FiledClip[] = [];
   const duplicates: ClipId[] = [];
@@ -423,6 +438,7 @@ export async function fileClips(
     extensionsFresh: true,
     given: new Map(),
     made: new Map(),
+    queue,
   };
   const max = Math.min(Math.max(options.max ?? CLIP_QUEUE_LIMITS.claimDefault, 1), 50);
   // released clips keep their lease until the pass ends, so the next claim gets the ones behind
@@ -434,10 +450,12 @@ export async function fileClips(
   try {
     for (;;) {
       if (now() > deadline) break;
-      const { data } = await context.api.call(routes.claimClips, {
-        params: { workspaceId: context.workspaceId },
-        body: { max },
-      });
+      const { data } = await queue(() =>
+        context.api.call(routes.claimClips, {
+          params: { workspaceId: context.workspaceId },
+          body: { max },
+        }),
+      );
       pass.extensionsFresh = false;
       const acks: ClipId[] = [];
       const newest = Math.max(0, ...data.clips.map((clip) => clip.generation));

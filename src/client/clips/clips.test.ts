@@ -780,6 +780,28 @@ describe("filing passes", () => {
     ]);
   });
 
+  it("lets the person's writes through while a pass is under way", async () => {
+    const { world, web, view, inboxKey } = await withInbox();
+    save(world, pair(world), inboxKey);
+    let open = (): void => undefined;
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    world.server.tamper.hold = (route) => (route === "listExtensions" ? gate : undefined);
+    const pass = web.engine.fileClips(view.options());
+    const written = await web.engine.writeNote({
+      noteId: newId("note"),
+      folderId: world.folderId,
+      baseVersion: 0,
+      name: "During.md",
+      text: "---\ntype: Note\ntitle: During\n---\n",
+    });
+    expect(written.status).toBe("saved");
+    delete world.server.tamper.hold;
+    open();
+    expect((await pass).filed).toHaveLength(1);
+  });
+
   it("refuses to claim without the owner's account ID", async () => {
     const { world, inboxKey } = await withInbox();
     save(world, pair(world), inboxKey);

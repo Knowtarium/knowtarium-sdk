@@ -461,7 +461,9 @@ export class SyncEngine {
    * the web app, before revoking an extension.
    */
   fileClips(options: FileClipsOptions): Promise<FileClipsResult> {
-    return this.run(() => fileClips(this.context, options));
+    if (this.stopped !== undefined) return Promise.reject(this.stopped);
+    // each claim and each clip's write takes its turn in the queue, not the whole pass
+    return fileClips(this.context, options, (task) => this.run(task));
   }
 
   /**
