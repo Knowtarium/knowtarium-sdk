@@ -257,6 +257,46 @@ describe("configuring agents", () => {
     );
   });
 
+  it("follows CLAUDE_CONFIG_DIR and CODEX_HOME", async () => {
+    const { home } = await userHome();
+    const claude = join(home, "claude-config");
+    const codex = join(home, "codex-home");
+    const targets = agentTargets(
+      cliEnvironment({ CLAUDE_CONFIG_DIR: claude, CODEX_HOME: codex }, "linux", home),
+    );
+    const byId = (id: string) => targets.find((target) => target.id === id);
+    expect(byId("claude-code")?.configPath).toBe(join(claude, ".claude.json"));
+    expect(byId("codex")?.configPath).toBe(join(codex, "config.toml"));
+    // the default folders don't count as installed agents when the variables point elsewhere
+    await mkdir(join(home, ".claude"));
+    await mkdir(join(home, ".codex"));
+    expect(await detectAgents(targets)).toEqual([]);
+    await mkdir(claude);
+    await mkdir(codex);
+    expect((await detectAgents(targets)).map((target) => target.id)).toEqual([
+      "claude-code",
+      "codex",
+    ]);
+    const results = await configureAgents(
+      targets.filter((target) => ["claude-code", "codex"].includes(target.id)),
+      server,
+    );
+    expect(results.map((result) => [result.status, result.path])).toEqual([
+      ["added", join(claude, ".claude.json")],
+      ["added", join(codex, "config.toml")],
+    ]);
+    // an empty variable counts as unset
+    const unset = agentTargets(
+      cliEnvironment({ CLAUDE_CONFIG_DIR: "", CODEX_HOME: "" }, "linux", home),
+    );
+    expect(unset.find((target) => target.id === "claude-code")?.configPath).toBe(
+      join(home, ".claude.json"),
+    );
+    expect(unset.find((target) => target.id === "codex")?.configPath).toBe(
+      join(home, ".codex", "config.toml"),
+    );
+  });
+
   it("finds the Microsoft Store build of Claude Desktop", async () => {
     const { home } = await userHome();
     const local = join(home, "local");

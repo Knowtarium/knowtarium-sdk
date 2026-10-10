@@ -321,6 +321,91 @@ describe("the advisory lock on Windows", () => {
   });
 });
 
+describe("the lock's own files", () => {
+  it("never let a release that fails replace the result or error, and say so once", async () => {
+    const home = await folder();
+    const path = join(home, "file");
+    const warnings = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    // still busy at the release's bound (one second, with a six-second stale time)
+    const release = () => failAlways("rm", /file\.lock$/, "EPERM");
+    const result = withFileLock(
+      path,
+      () => {
+        release();
+        return Promise.resolve(7);
+      },
+      { staleMs: 6_000 },
+    );
+    expect(await result).toBe(7);
+    await actual.rm(`${path}.lock`, { force: true });
+    const failure = withFileLock(
+      path,
+      () => {
+        release();
+        return Promise.reject(new Error("the run's own error"));
+      },
+      { staleMs: 6_000 },
+    );
+    await expect(failure).rejects.toThrow("the run's own error");
+    // elsewhere a real permission error on release is kept quiet the same way
+    pretend("linux");
+    await actual.rm(`${path}.lock`, { force: true });
+    expect(
+      await withFileLock(path, () => {
+        failAlways("rm", /file\.lock$/, "EACCES");
+        return Promise.resolve(8);
+      }),
+    ).toBe(8);
+    const said = warnings.mock.calls.map(([text]) => String(text));
+    expect(said).toHaveLength(1);
+    expect(said[0]).toMatch(/couldn't remove .*file\.lock \(EPERM\); it counts as free once/);
+  });
+
+  it("never remove a break guard another breaker has taken since", async () => {
+    const home = await folder();
+    const path = join(home, "file");
+    const lock = `${path}.lock`;
+    const guard = `${lock}.break`;
+    await writeFile(lock, "999999:dead");
+    // while this breaker removes the dead lock, another takes its guard as stale and writes its own
+    const rm = actual.rm as (...args: unknown[]) => Promise<void>;
+    vi.mocked(fs.rm).mockImplementation(async (...args: unknown[]) => {
+      if (args[0] === lock && (await actual.readFile(guard, "utf8")) !== "2:other") {
+        await actual.writeFile(guard, "2:other");
+        throw busy("EPERM");
+      }
+      return rm(...args);
+    });
+    expect(await withFileLock(path, () => Promise.resolve(1), { timeoutMs: 5_000 })).toBe(1);
+    expect(await readFile(guard, "utf8")).toBe("2:other");
+    expect(await readdir(home)).toEqual(["file.lock.break"]);
+  });
+
+  it("never remove a stale break guard that was replaced while it was judged", async () => {
+    const home = await folder();
+    const path = join(home, "file");
+    const guard = `${path}.lock.break`;
+    await writeFile(`${path}.lock`, "999999:dead");
+    await writeFile(guard, "1:stale");
+    const old = new Date(Date.now() - 10_000);
+    await utimes(guard, old, old);
+    // between its stat and its removal, another breaker removed it and took a fresh one
+    let reads = 0;
+    const read = actual.readFile as (...args: unknown[]) => Promise<unknown>;
+    vi.mocked(fs.readFile).mockImplementation((async (...args: unknown[]) => {
+      if (args[0] === guard && ++reads === 2) await actual.writeFile(guard, "2:fresh");
+      return read(...args);
+    }) as never);
+    const removals = failNext("rm", "never", []);
+    pretend("linux");
+    await expect(withFileLock(path, () => Promise.resolve(1), { timeoutMs: 300 })).rejects.toThrow(
+      /Another knowtarium process/,
+    );
+    expect(removals.calls).not.toContain(guard);
+    expect(await readFile(guard, "utf8")).toBe("2:fresh");
+  });
+});
+
 describe("the lock elsewhere", () => {
   it("reports EPERM at once: there it is a real permission error", async () => {
     pretend("linux");
@@ -403,6 +488,30 @@ describe("file writes and reads on Windows", () => {
     // one per run, none pruned
     expect(backups).toHaveLength(5);
     expect(await readFile(join(home, ".cursor", "mcp.json"), "utf8")).toContain("knowtarium@1.0.5");
+  });
+
+  it("skip an agent whose config is in use, and still configure the others", async () => {
+    const home = await folder();
+    const targets = agentTargets(cliEnvironment({}, "linux", home)).filter((target) =>
+      ["cursor", "codex"].includes(target.id),
+    );
+    await actual.mkdir(join(home, ".cursor"));
+    await actual.mkdir(join(home, ".codex"));
+    await writeFile(join(home, ".cursor", "mcp.json"), "{}");
+    failAlways("rename", join(".cursor", "mcp.json"), "EPERM");
+    const results = await configureAgents(targets, serverCommand("1.0.0", "linux"));
+    expect(results.map((result) => [result.agent, result.status])).toEqual([
+      ["cursor", "skipped"],
+      ["codex", "added"],
+    ]);
+    expect(results[0]?.reason).toBe(
+      `couldn't write ${results[0]?.path ?? ""} (in use); run \`npx knowtarium agents\` again.`,
+    );
+    expect(results[0]?.path.endsWith(join(".cursor", "mcp.json"))).toBe(true);
+    expect(await readFile(join(home, ".cursor", "mcp.json"), "utf8")).toBe("{}");
+    expect(await readFile(join(home, ".codex", "config.toml"), "utf8")).toContain(
+      "knowtarium@1.0.0",
+    );
   });
 
   it("read a file being deleted as missing once it is gone", async () => {

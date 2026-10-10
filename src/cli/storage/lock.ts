@@ -53,7 +53,10 @@ const GUARD_STALE_MS = 2_000;
  * of a check and a removal), and under it the lock is removed only if it still holds exactly the
  * content judged dead. Only breakers remove a dead holder's lock, so it can't have been replaced
  * between that check and the removal. A guard left by a breaker that died mid-way is taken after
- * two seconds.
+ * two seconds. Each guard holds a token of its own (`<pid>:<uuid>`): a breaker removes a stale
+ * guard only if it still holds the token it judged stale, and its own guard only if it still holds
+ * its token, so a guard another breaker has taken since stays (short of the moment between that
+ * last read and the removal).
  *
  * On Windows a guard or lock another process has just removed can't be created or removed for a
  * moment (EPERM, EACCES or EBUSY). Creating the guard or removing a stale one that way counts as
@@ -66,15 +69,22 @@ const GUARD_STALE_MS = 2_000;
 async function breakLock(lock: string, dead: string): Promise<boolean> {
   const guard = `${lock}.break`;
   const guardTakenAt = Date.now();
+  const ours = `${String(process.pid)}:${randomUUID()}`;
   try {
     const handle = await open(guard, "wx", 0o600);
-    await handle.writeFile(String(process.pid));
+    await handle.writeFile(ours);
     await handle.close();
   } catch (error) {
     if (isWindowsBusy(error)) return false;
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    const info = await stat(guard).catch(() => null);
-    if (info !== null && Date.now() - info.mtimeMs > GUARD_STALE_MS) {
+    // the same token before and after the stat: the guard judged stale is the one read
+    const held = await readLock(guard);
+    const info = held === null ? null : await stat(guard).catch(() => null);
+    if (
+      info !== null &&
+      Date.now() - info.mtimeMs > GUARD_STALE_MS &&
+      (await readLock(guard)) === held
+    ) {
       // not retried: busy means another breaker is removing it already
       await rm(guard, { force: true }).catch((removal: unknown) => {
         if (!isWindowsBusy(removal)) throw removal;
@@ -92,9 +102,13 @@ async function breakLock(lock: string, dead: string): Promise<boolean> {
     if ((await readLock(lock)) !== dead) return true;
     return await removeFile(lock, until).then(() => true, unlessBusy);
   } finally {
-    await removeFile(guard, until).catch(unlessBusy);
+    // only our own guard: one taken from us as stale (we were too slow) is another breaker's now
+    if ((await readLock(guard, until)) === ours) await removeFile(guard, until).catch(unlessBusy);
   }
 }
+
+/** Whether a lock this process couldn't release was reported already (once is enough). */
+let releaseReported = false;
 
 /**
  * Runs `run` while holding an advisory lock on `path` (a `<path>.lock` file created exclusively,
@@ -161,8 +175,20 @@ export async function withFileLock<T>(
   } finally {
     // only our own lock: a lock broken meanwhile (we were too slow) belongs to someone else now.
     // A busy read or removal (Windows) is retried, but stops well before the lock could count as
-    // stale (30 s): after that a breaker may have replaced it with another holder's lock.
+    // stale (30 s): after that a breaker may have replaced it with another holder's lock. A lock
+    // still there then never replaces `run`'s result or error: the next process breaks it once
+    // this one has exited, or once it is stale.
     const until = Math.min(Date.now() + BUSY_RETRY_MS, takenAt + staleMs - BUSY_RETRY_MS);
-    if ((await readLock(lock, until)) === mine) await removeFile(lock, until);
+    try {
+      if ((await readLock(lock, until)) === mine) await removeFile(lock, until);
+    } catch (error) {
+      if (!releaseReported) {
+        releaseReported = true;
+        const code = (error as NodeJS.ErrnoException).code ?? String(error);
+        process.stderr.write(
+          `knowtarium: couldn't remove ${lock} (${code}); it counts as free once this process exits, or after ${String(Math.round(staleMs / 1000))} seconds.\n`,
+        );
+      }
+    }
   }
 }

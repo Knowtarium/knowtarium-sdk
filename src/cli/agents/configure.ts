@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 import { access, readdir, realpath, rm, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
-import { readIfExists, replaceFile, writePrivateFile } from "../storage/files.js";
+import { isWindowsBusy, readIfExists, replaceFile, writePrivateFile } from "../storage/files.js";
 import { type ConfigEdit, upsertJsonServer } from "./json-config.js";
 import type { ServerCommand } from "./server-entry.js";
 import type { AgentTarget } from "./targets.js";
@@ -91,7 +91,8 @@ async function pruneBackups(path: string): Promise<void> {
  * can't be read safely is skipped, never overwritten. The file is read again right before the
  * write and the change applied to what is there then (an agent may have just saved it); the
  * previous file is copied next to it (`<name>.knowtarium-backup-<time>`, the last three kept).
- * With `dryRun`, nothing is written.
+ * A file that can't be read or written (on Windows, one the agent has open) is skipped with the
+ * reason, and the other agents are still configured. With `dryRun`, nothing is written.
  */
 export async function configureAgents(
   targets: readonly AgentTarget[],
@@ -102,34 +103,52 @@ export async function configureAgents(
   for (const target of targets) {
     const path = await configFile(target);
     const base = { agent: target.id, name: target.name, path };
-    const bytes = await readIfExists(path);
-    let edit = editOf(target, decode(bytes), server);
-    if (edit.status === "added" || edit.status === "updated") {
-      if (options.dryRun === true) {
-        results.push({ ...base, status: edit.status, reason: "dry run: nothing written" });
-        continue;
-      }
-      const fresh = await readIfExists(path);
-      if (!same(fresh, bytes)) edit = editOf(target, decode(fresh), server);
-      if (edit.status === "added" || edit.status === "updated") {
-        let backup: string | undefined;
-        if (fresh !== null) {
-          const stamp = (options.now?.() ?? new Date()).toISOString().replace(/[:.]/g, "-");
-          backup = `${path}${BACKUP_INFIX}${stamp}`;
-          const mode = (await stat(path)).mode & 0o777;
-          await writePrivateFile(backup, fresh, mode);
-          await pruneBackups(path);
-        }
-        await replaceFile(path, edit.text);
-        results.push({ ...base, status: edit.status, ...(backup === undefined ? {} : { backup }) });
-        continue;
-      }
+    try {
+      results.push(await configureOne(target, path, server, options));
+    } catch (error) {
+      // one agent's file failing (on Windows, the agent saving it right then) never stops the rest
+      const code = (error as NodeJS.ErrnoException).code;
+      const why = isWindowsBusy(error) ? "in use" : (code ?? (error as Error).message);
+      results.push({
+        ...base,
+        status: "skipped",
+        reason: `couldn't write ${path} (${why}); run \`npx knowtarium agents\` again.`,
+      });
     }
-    results.push(
-      edit.status === "invalid"
-        ? { ...base, status: "skipped", reason: edit.reason }
-        : { ...base, status: "unchanged" },
-    );
   }
   return results;
+}
+
+/** Configures one agent whose config file is `path` (see `configureAgents`). */
+async function configureOne(
+  target: AgentTarget,
+  path: string,
+  server: ServerCommand,
+  options: { readonly dryRun?: boolean; readonly now?: () => Date },
+): Promise<AgentResult> {
+  const base = { agent: target.id, name: target.name, path };
+  const bytes = await readIfExists(path);
+  let edit = editOf(target, decode(bytes), server);
+  if (edit.status === "added" || edit.status === "updated") {
+    if (options.dryRun === true) {
+      return { ...base, status: edit.status, reason: "dry run: nothing written" };
+    }
+    const fresh = await readIfExists(path);
+    if (!same(fresh, bytes)) edit = editOf(target, decode(fresh), server);
+    if (edit.status === "added" || edit.status === "updated") {
+      let backup: string | undefined;
+      if (fresh !== null) {
+        const stamp = (options.now?.() ?? new Date()).toISOString().replace(/[:.]/g, "-");
+        backup = `${path}${BACKUP_INFIX}${stamp}`;
+        const mode = (await stat(path)).mode & 0o777;
+        await writePrivateFile(backup, fresh, mode);
+        await pruneBackups(path);
+      }
+      await replaceFile(path, edit.text);
+      return { ...base, status: edit.status, ...(backup === undefined ? {} : { backup }) };
+    }
+  }
+  return edit.status === "invalid"
+    ? { ...base, status: "skipped", reason: edit.reason }
+    : { ...base, status: "unchanged" };
 }

@@ -13,5 +13,7 @@ describe("test isolation", () => {
       expect(path.startsWith(tmpdir())).toBe(true);
     }
     expect((await openSecretStore(env.home)).kind).toBe("file");
+    expect(env.claudeConfigDir).toBeUndefined();
+    expect(env.codexHome).toBeUndefined();
   });
 });

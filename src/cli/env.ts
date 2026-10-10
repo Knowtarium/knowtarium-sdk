@@ -24,6 +24,10 @@ export interface CliEnvironment {
   /** Windows: `%ComSpec%` and `%SystemRoot%`, to name `cmd.exe` by its full path. */
   readonly comSpec?: string;
   readonly systemRoot?: string;
+  /** `CLAUDE_CONFIG_DIR`: Claude Code's folder, where its `.claude.json` then lives. */
+  readonly claudeConfigDir?: string;
+  /** `CODEX_HOME`: Codex's folder, with its `config.toml` (default `~/.codex`). */
+  readonly codexHome?: string;
   readonly platform: NodeJS.Platform;
 }
 
@@ -103,6 +107,8 @@ export function cliEnvironment(
     cache: env["KNOWTARIUM_CACHE"] ?? cacheFolder(env, folders),
     ...setting("comSpec", env["ComSpec"]),
     ...setting("systemRoot", env["SystemRoot"]),
+    ...setting("claudeConfigDir", env["CLAUDE_CONFIG_DIR"]),
+    ...setting("codexHome", env["CODEX_HOME"]),
     ...folders,
   };
 }

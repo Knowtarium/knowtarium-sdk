@@ -44,22 +44,25 @@ function claudeDesktopFolders(env: CliEnvironment): string[] {
 
 /**
  * The agents `connect` configures and where each keeps its MCP servers (user scope, so the server
- * works in every project): Claude Code's `~/.claude.json`, Claude Desktop's
- * `claude_desktop_config.json`, Cursor's `~/.cursor/mcp.json`, Codex's `~/.codex/config.toml` and
- * OpenCode's `~/.config/opencode/opencode.json` (or `opencode.jsonc`).
+ * works in every project): Claude Code's `~/.claude.json` (`$CLAUDE_CONFIG_DIR/.claude.json` when
+ * that is set), Claude Desktop's `claude_desktop_config.json`, Cursor's `~/.cursor/mcp.json`,
+ * Codex's `~/.codex/config.toml` (`$CODEX_HOME/config.toml`) and OpenCode's
+ * `~/.config/opencode/opencode.json` (or `opencode.jsonc`).
  */
 export function agentTargets(env: CliEnvironment): AgentTarget[] {
   const home = env.userHome;
   const [desktop = "", ...otherDesktops] = claudeDesktopFolders(env);
   const desktopConfig = (folder: string) => join(folder, "claude_desktop_config.json");
   const opencode = join(home, ".config", "opencode");
+  const claudeCode = env.claudeConfigDir;
+  const codex = env.codexHome ?? join(home, ".codex");
   return [
     {
       id: "claude-code",
       name: "Claude Code",
-      configPath: join(home, ".claude.json"),
+      configPath: join(claudeCode ?? home, ".claude.json"),
       otherConfigPaths: [],
-      markers: [join(home, ".claude.json"), join(home, ".claude")],
+      markers: [join(claudeCode ?? home, ".claude.json"), claudeCode ?? join(home, ".claude")],
       format: "mcpServers",
     },
     {
@@ -81,9 +84,9 @@ export function agentTargets(env: CliEnvironment): AgentTarget[] {
     {
       id: "codex",
       name: "Codex",
-      configPath: join(home, ".codex", "config.toml"),
+      configPath: join(codex, "config.toml"),
       otherConfigPaths: [],
-      markers: [join(home, ".codex")],
+      markers: [codex],
       format: "codex-toml",
     },
     {

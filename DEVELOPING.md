@@ -700,11 +700,11 @@ web app (default production); they must be `https://`, or plain `http://` only t
 `127.0.0.1` (development), so a stray setting can't send the token and the notes over plain HTTP.
 
 **Agents.** Knowtarium's server, pinned to the CLI's own version (`npx -y knowtarium@<version>
-mcp`), is added to Claude Code (`~/.claude.json`), Claude Desktop (`claude_desktop_config.json`
-in Application Support, `%APPDATA%\Claude` or the Microsoft Store build's
-`%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude`, or `~/.config/Claude`), Cursor
-(`~/.cursor/mcp.json`), Codex (`~/.codex/config.toml`) and OpenCode
-(`~/.config/opencode/opencode.json` or `opencode.jsonc`).
+mcp`), is added to Claude Code (`~/.claude.json`, or `$CLAUDE_CONFIG_DIR/.claude.json`), Claude
+Desktop (`claude_desktop_config.json` in Application Support, `%APPDATA%\Claude` or the Microsoft
+Store build's `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude`, or
+`~/.config/Claude`), Cursor (`~/.cursor/mcp.json`), Codex (`~/.codex/config.toml`, or
+`$CODEX_HOME/config.toml`) and OpenCode (`~/.config/opencode/opencode.json` or `opencode.jsonc`).
 Only Knowtarium's own `command` and `args` are set; other servers, settings and the entry's own
 extra keys (such as `env`) stay. Codex's TOML is parsed with a real parser (an entry is found as
 its own table, with quoted keys, or inline under `[mcp_servers]`) and the result must parse back to
@@ -762,9 +762,13 @@ around `trust.json` and the credentials hold the writer's PID: a lock left by a 
 gone (an agent that killed its MCP server) is broken at once instead of after 30 seconds, which
 is what kept a restarted server "still loading" for half a minute. Breakers take turns through a
 guard file and remove a lock only if it still holds exactly what they judged dead, so of several
-processes breaking it at once one takes it; a holder releases only its own lock. A breaker that
-loses the race for the guard waits a little and checks its deadline before it looks again, on
-every OS (it used to try again at once). On Windows a file another process has just deleted stays
+processes breaking it at once one takes it; a holder releases only its own lock. Each guard holds
+a token of its own: a breaker removes its own guard only while it still holds that token (one
+taken from it as stale is another breaker's now), and a stale guard only if it still holds the
+token it judged stale. A release that still fails at its bound never replaces the command's result
+or error: it says so once on stderr, and the lock left behind is broken once its holder exits, or
+once it is stale. A breaker that loses the race for the guard waits a little and checks its
+deadline before it looks again, on every OS (it used to try again at once). On Windows a file another process has just deleted stays
 "delete pending" until its last handle closes, and creating, opening or renaming over it meanwhile
 fails with EPERM, EACCES or EBUSY. The storage code retries those (`retryWhileBusy` in
 `src/cli/storage/files.ts`, on Windows only), always within a bound, then reports the error as it
@@ -773,8 +777,9 @@ it; a breaker's removals under the guard for the first second of the guard's two
 breaker can take the guard as stale meanwhile), then it looks again; a holder's release for up to
 five seconds, stopping five seconds before its lock could count as stale; the CLI's own atomic
 writes, reads and removals for five seconds. An agent's config (`replaceFile`) is never renamed
-over again after a refusal, since the agent may be saving it right then; old config backups that
-can't be removed stay until a later run.
+over again after a refusal, since the agent may be saving it right then; that agent is skipped
+(`couldn't write <path> (in use); run npx knowtarium agents again`) and the others are still
+configured. Old config backups that can't be removed stay until a later run.
 
 **The MCP server.** `knowtarium mcp` (the official MCP TypeScript SDK over stdio) serves every
 connected workspace. It answers at once and opens each workspace in the background: the

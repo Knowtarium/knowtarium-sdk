@@ -24,6 +24,10 @@ Object.assign(process.env, {
   KNOWTARIUM_API_URL: "https://api.test",
   KNOWTARIUM_APP_URL: "https://app.test",
 });
+// agents' own folder settings would lead the CLI to the real configs: their defaults under the
+// temporary HOME apply instead
+delete process.env["CLAUDE_CONFIG_DIR"];
+delete process.env["CODEX_HOME"];
 
 afterAll(() => {
   rmSync(root, { recursive: true, force: true });
