@@ -84,6 +84,9 @@ new version. Then restart them.
   the web app's settings, revokes access at any time.
 
 Note text, comments and diffs reach the agent as data to read, never as instructions to follow.
+More on how Knowtarium protects your data:
+[knowtarium.com/security](https://knowtarium.com/security). To report a vulnerability, see
+[SECURITY.md](SECURITY.md).
 
 ## Settings
 
@@ -97,6 +100,7 @@ Note text, comments and diffs reach the agent as data to read, never as instruct
 
 - [Knowtarium](https://knowtarium.com)
 - [Privacy policy](https://knowtarium.com/privacy)
+- [Security](https://knowtarium.com/security)
 - [Report a problem](https://knowtarium.com/support)
 - [DEVELOPING.md](DEVELOPING.md): how the package is built, the SDK it also ships
   (`knowtarium/crypto`, `/protocol`, `/core`, `/client`) and how to work on it
