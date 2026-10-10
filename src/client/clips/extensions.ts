@@ -1,5 +1,6 @@
 import { fromBase64Url, type SignedEnvelope, verifyEnvelope } from "../../crypto/index.js";
 import {
+  type ClipSummaryResponse,
   type ExtensionId,
   type ExtensionInfo,
   routes,
@@ -41,10 +42,54 @@ export function extensionKeyEnvelope(
   };
 }
 
+/** The paired extensions, split by whether the owner's `extension_key` over each verifies. */
+export interface ExtensionRows {
+  /** Those whose key the owner vouched for, by ID: their clips are checked against that key. */
+  readonly verified: Map<ExtensionId, VerifiedExtension>;
+  /** Those listed whose `extension_key` doesn't verify: a filer rejects their clips. */
+  readonly unvouched: ReadonlySet<ExtensionId>;
+}
+
 /**
- * The workspace's paired extensions whose `extension_key` verifies under the owner's key (from a
- * source the server can't swap), by ID. A row whose signature doesn't verify is left out, so its
- * clips are refused (`bad_signature`).
+ * The workspace's paired extensions, each checked: its `extension_key` must verify under the
+ * owner's key (from a source the server can't swap). A filer rejects (`bad_signature`) the clips
+ * of a listed extension whose key doesn't verify, and leaves waiting the clips of one not listed
+ * at all (paired since the list was read).
+ */
+export async function fetchExtensionRows(
+  api: ApiClient,
+  details: {
+    readonly workspaceId: WorkspaceId;
+    readonly owner: TrustedSigner & { readonly accountId: string };
+  },
+): Promise<ExtensionRows> {
+  const { data } = await api.call(routes.listExtensions, {
+    params: { workspaceId: details.workspaceId },
+  });
+  const verified = new Map<ExtensionId, VerifiedExtension>();
+  const unvouched = new Set<ExtensionId>();
+  for (const info of data.extensions) {
+    const signed = extensionKeyEnvelope(info, {
+      workspaceId: details.workspaceId,
+      ownerAccountId: details.owner.accountId,
+    });
+    if (!verifyEnvelope(signed, details.owner.publicKey)) {
+      unvouched.add(info.extensionId);
+      continue;
+    }
+    verified.set(info.extensionId, {
+      extensionId: info.extensionId,
+      signPublicKey: fromBase64Url(info.signPublicKey),
+      revokedAt: info.revokedAt,
+      info,
+    });
+  }
+  return { verified, unvouched };
+}
+
+/**
+ * The workspace's paired extensions whose `extension_key` verifies under the owner's key, by ID
+ * (`fetchExtensionRows` without the ones that don't verify, whose clips a filer rejects).
  */
 export async function fetchExtensions(
   api: ApiClient,
@@ -53,22 +98,14 @@ export async function fetchExtensions(
     readonly owner: TrustedSigner & { readonly accountId: string };
   },
 ): Promise<Map<ExtensionId, VerifiedExtension>> {
-  const { data } = await api.call(routes.listExtensions, {
-    params: { workspaceId: details.workspaceId },
-  });
-  const verified = new Map<ExtensionId, VerifiedExtension>();
-  for (const info of data.extensions) {
-    const signed = extensionKeyEnvelope(info, {
-      workspaceId: details.workspaceId,
-      ownerAccountId: details.owner.accountId,
-    });
-    if (!verifyEnvelope(signed, details.owner.publicKey)) continue;
-    verified.set(info.extensionId, {
-      extensionId: info.extensionId,
-      signPublicKey: fromBase64Url(info.signPublicKey),
-      revokedAt: info.revokedAt,
-      info,
-    });
-  }
-  return verified;
+  return (await fetchExtensionRows(api, details)).verified;
+}
+
+/** The workspace's clip queue: how many clips wait, how many are leased, the oldest's time. */
+export async function fetchClipSummary(
+  api: ApiClient,
+  workspaceId: WorkspaceId,
+): Promise<ClipSummaryResponse> {
+  const { data } = await api.call(routes.clipSummary, { params: { workspaceId } });
+  return data;
 }

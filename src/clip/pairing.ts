@@ -20,7 +20,7 @@ import { normalizeCategory } from "./payload.js";
 // `<app>/connect/extension?request=<id>#signPublicKey=<base64url>&secret=<base64url>`; the fragment
 // never reaches a server. After the person matched the code and allowed, the web app relays
 //
-//   0x01 || nonce (24) || XChaCha20-Poly1305(JSON)
+//   0x01 || nonce (24) || XChaCha20-Poly1305(JSON, padded with spaces to 4 KiB steps)
 //   key: crypto_kdf_derive_from_key(32, 1, "ktextpar", secret)
 //   associated data: "knowtarium-extension-pairing-v1\n" || the extension's signing public key
 //
@@ -32,6 +32,8 @@ import { normalizeCategory } from "./payload.js";
 export const EXTENSION_PAIRING_VERSION = 1;
 /** Bytes of the one-time pairing secret. */
 export const PAIRING_SECRET_BYTES = 32;
+/** The pairing payload's JSON is padded to a multiple of this before it is sealed. */
+const PAIRING_PAD_BYTES = 4096;
 /** The most category names a pairing carries. */
 export const PAIRING_MAX_CATEGORIES = 200;
 
@@ -86,7 +88,21 @@ function associatedData(signPublicKey: Uint8Array): Uint8Array {
   return concatBytes(utf8Encode(AD_PREFIX), signPublicKey);
 }
 
-/** The pairing payload's JSON text (web app side). */
+/**
+ * The pairing payload's JSON, as UTF-8, padded with spaces (which JSON allows after the value) to
+ * a multiple of 4 KiB, so its sealed size says nothing about the length of the workspace's or the
+ * categories' names (web app side).
+ */
+function pairingBytes(pairing: ExtensionPairing): Uint8Array {
+  const json = utf8Encode(pairingJson(pairing));
+  const padded = new Uint8Array(
+    Math.ceil(Math.max(json.length, 1) / PAIRING_PAD_BYTES) * PAIRING_PAD_BYTES,
+  ).fill(0x20);
+  padded.set(json);
+  return padded;
+}
+
+/** The pairing payload's JSON text. */
 function pairingJson(pairing: ExtensionPairing): string {
   const { envelope: inbox, signature: inboxSignature } = pairing.inboxKey;
   return JSON.stringify({
@@ -127,7 +143,7 @@ export function sealExtensionPairingWith(
   const key = pairingKey(lib, link.secret);
   try {
     const ciphertext = lib.crypto_aead_xchacha20poly1305_ietf_encrypt(
-      utf8Encode(pairingJson(pairing)),
+      pairingBytes(pairing),
       associatedData(link.signPublicKey),
       null,
       nonce,

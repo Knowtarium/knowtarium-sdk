@@ -4,6 +4,7 @@ import {
   type AgentPolicyFolderLookup,
   type AgentWriteMode,
   CHANGES_PAGE_MAX,
+  type ClipSummaryResponse,
   type NoteId,
   type PendingChange,
   type PendingId,
@@ -80,6 +81,7 @@ import type {
   WriteResult,
 } from "./results.js";
 import { Confirmations } from "./confirmations.js";
+import { fetchClipSummary } from "../clips/extensions.js";
 import { type EnsuredInboxKey, ensureInboxKey } from "../clips/inbox.js";
 import { fileClips, type FileClipsOptions, type FileClipsResult } from "./file-clips.js";
 import { approvePending, readPending, rejectPending, submitPending } from "./review.js";
@@ -464,6 +466,15 @@ export class SyncEngine {
     if (this.stopped !== undefined) return Promise.reject(this.stopped);
     // each claim and each clip's write takes its turn in the queue, not the whole pass
     return fileClips(this.context, options, (task) => this.run(task));
+  }
+
+  /**
+   * The workspace's clip queue (one request, nothing decrypted): `pending` clips wait, `leased`
+   * of them under another filer's live lease. A caller may skip `fileClips` while
+   * `pending <= leased`, nothing being free to claim.
+   */
+  clipSummary(): Promise<ClipSummaryResponse> {
+    return fetchClipSummary(this.context.api, this.context.workspaceId);
   }
 
   /**

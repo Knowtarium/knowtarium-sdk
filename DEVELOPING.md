@@ -282,8 +282,12 @@ title, note, category, savedAt }`: `http:` and `https:` links only, as `new URL(
   caller sets one); clips it can't file keep their lease until the pass ends (so the clips behind
   them get claimed), then are released with a reason (`old_generation`, `new_category`, `review`,
   `daily_cap`, `rate_limited`, `scope`, `inbox_folder_missing`, `unknown_extension`,
-  `time_limit`). A clip whose extension has no owner-vouched key waits; one whose signature fails
-  under a vouched key is rejected. A note the engine already knows under `clipNoteId`, deleted
+  `time_limit`). A clip whose extension isn't listed waits; one from a listed extension whose
+  `extension_key` doesn't verify, or whose signature fails under the vouched key, is rejected.
+  Folders (`folders` may be a loader) and extensions are read only once a claim returns clips;
+  `SyncEngine.clipSummary()` (`fetchClipSummary`) tells a caller whether a pass is worth running
+  (`pending > leased`). A clip found filed already gets its missing `clipped` record before the
+  ack. A note the engine already knows under `clipNoteId`, deleted
   ones too, and a 409 on the create (answered without reading the other note) count as filed.
   `fetchInboxKey` remembers the highest `inbox_key` revision on the device
   (`TrustState.acceptInboxKeyRevision`) and refuses a lower one (`rollback`).

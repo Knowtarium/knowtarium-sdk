@@ -20,12 +20,19 @@ import {
   type SignedInboxKey,
 } from "../../protocol/index.js";
 import { clippedRecord } from "../clips/clipped.js";
-import { fetchExtensions, type VerifiedExtension } from "../clips/extensions.js";
+import { type ExtensionRows, fetchExtensionRows } from "../clips/extensions.js";
 import { fetchInboxKey } from "../clips/inbox.js";
 import { type ClipRejection, clipSignedBy, type OpenedClip, openClip } from "../clips/open.js";
 import { isSyncApiError, RequestValidationError, SyncStoppedError } from "../errors/index.js";
 import { newId } from "../platform/ids.js";
-import { encryptEvent, signedAtNow, signingFields, signRecorded } from "../vault/index.js";
+import {
+  decryptEvent,
+  encryptEvent,
+  signedAtNow,
+  signingFields,
+  signRecorded,
+} from "../vault/index.js";
+import { fetchEvents } from "./notes.js";
 import { type AgentNoteWrite, writeAsAgent } from "./agent-writes.js";
 import { requireIdentity, type SyncContext, withCurrentKey } from "./context.js";
 import { writeNote } from "./writes.js";
@@ -97,8 +104,14 @@ export const DEFAULT_FILING_MS = 30_000;
 export interface FileClipsOptions {
   /** Clips per claim (1 to 50, default 20). */
   readonly max?: number;
-  /** The live folders with their decrypted names (the synced view), by ID. */
-  readonly folders: ReadonlyMap<FolderId, ClipFolder>;
+  /**
+   * The live folders with their decrypted names (the synced view), by ID, or a function that
+   * loads them: it is called only when a claim returns clips, so a pass over an empty queue
+   * costs no folder names.
+   */
+  readonly folders:
+    | ReadonlyMap<FolderId, ClipFolder>
+    | (() => ReadonlyMap<FolderId, ClipFolder> | Promise<ReadonlyMap<FolderId, ClipFolder>>);
   /** The file names of the notes in a folder, for numbering a taken name. */
   readonly takenNames: (folderId: FolderId) => Iterable<string>;
   /**
@@ -144,8 +157,8 @@ export interface FileClipsResult {
   /**
    * `done`: the queue was worked through (or the deadline came); `no_inbox`: the workspace has no
    * inbox key; `inbox_key_mismatch`: the signed inbox key isn't the one this client derives for
-   * its generation (nothing filed); `inbox_folder_missing`: the inbox folder is gone (nothing
-   * claimed: the web app makes a new one and signs a new revision).
+   * its generation (nothing filed); `inbox_folder_missing`: the inbox folder is gone (the clips
+   * claimed are released: the web app makes a new one and signs a new revision).
    */
   readonly status: "done" | "no_inbox" | "inbox_key_mismatch" | "inbox_folder_missing";
   readonly filed: readonly FiledClip[];
@@ -173,7 +186,10 @@ interface Pass {
   readonly options: FileClipsOptions;
   readonly ownerAccountId: string;
   readonly inbox: SignedInboxKey["envelope"];
-  extensions: Map<ExtensionId, VerifiedExtension>;
+  /** The folders, loaded once a claim returned clips. */
+  folders: ReadonlyMap<FolderId, ClipFolder>;
+  /** The paired extensions with a vouched key, and those listed whose key didn't verify. */
+  extensions: ExtensionRows;
   extensionsFresh: boolean;
   /** Names given in this pass, per folder (the view may not have them yet). */
   readonly given: Map<FolderId, string[]>;
@@ -193,13 +209,16 @@ function inboxKeyFor(keys: WorkspaceKeyring, generation: number): InboxKeyPair |
 }
 
 /** The folder a clip goes to: the inbox, or the inbox's direct subfolder named like the category. */
-function targetFolder(pass: Pass, category: string): FolderId | undefined {
+function targetFolder(
+  pass: Pick<Pass, "inbox" | "made" | "folders">,
+  category: string,
+): FolderId | undefined {
   const inboxId = pass.inbox.folderId;
   if (category === "") return inboxId;
   const wanted = foldName(category);
   const made = pass.made.get(wanted);
   if (made !== undefined) return made;
-  for (const [id, folder] of pass.options.folders) {
+  for (const [id, folder] of pass.folders) {
     if (folder.parentId === inboxId && foldName(folder.name) === wanted) return id;
   }
   return undefined;
@@ -325,14 +344,19 @@ async function fileOne(pass: Pass, queued: QueuedClip, keys: WorkspaceKeyring): 
   ) {
     return { kind: "rejected", reason: "mismatch" };
   }
-  let extension = pass.extensions.get(queued.extensionId);
-  if (extension === undefined && !pass.extensionsFresh) {
+  const listed = (id: ExtensionId) =>
+    pass.extensions.verified.has(id) || pass.extensions.unvouched.has(id);
+  if (!listed(queued.extensionId) && !pass.extensionsFresh) {
     // paired since this pass read the list
     pass.extensions = await readExtensions(pass);
     pass.extensionsFresh = true;
-    extension = pass.extensions.get(queued.extensionId);
   }
-  // no vouched key to check it against: it waits rather than being thrown away
+  // listed, but its key isn't one the owner vouched for: nothing it posts can be trusted
+  if (pass.extensions.unvouched.has(queued.extensionId)) {
+    return { kind: "rejected", reason: "bad_signature" };
+  }
+  const extension = pass.extensions.verified.get(queued.extensionId);
+  // not listed at all (paired after the list was read, or a server leaving it out): it waits
   if (extension === undefined) return { kind: "released", reason: "unknown_extension" };
   if (!clipSignedBy(clip, extension.signPublicKey)) {
     return { kind: "rejected", reason: "bad_signature" };
@@ -348,7 +372,9 @@ async function fileOne(pass: Pass, queued: QueuedClip, keys: WorkspaceKeyring): 
   if (!opened.ok) return { kind: "released", reason: "unclean_clip" };
   const noteId = clipNoteId(queued.clipId);
   // filed before (a lost ack, or a clip posted again): this client knows the note, deleted or not
-  if (context.noteFolders.has(noteId)) return { kind: "duplicate" };
+  if (context.noteFolders.has(noteId)) {
+    return pass.queue(() => filedBefore(pass, noteId, clip));
+  }
   // a missing category folder is made first, outside the queue (the web app makes it its way)
   if (targetFolder(pass, payload.category) === undefined) {
     if (options.createFolder === undefined) return { kind: "released", reason: "new_category" };
@@ -359,7 +385,7 @@ async function fileOne(pass: Pass, queued: QueuedClip, keys: WorkspaceKeyring): 
   // clip at a time, so they see the state the last pull left and the person's or the agent's own
   // writes never wait on a whole pass
   return pass.queue(async (): Promise<Outcome> => {
-    if (context.noteFolders.has(noteId)) return { kind: "duplicate" };
+    if (context.noteFolders.has(noteId)) return filedBefore(pass, noteId, clip);
     const folderId = targetFolder(pass, payload.category);
     if (folderId === undefined) return { kind: "released", reason: "new_category" };
     const name = noteName(pass, folderId, clip);
@@ -377,7 +403,7 @@ async function fileOne(pass: Pass, queued: QueuedClip, keys: WorkspaceKeyring): 
       text: options.stamp?.(text, folderId, stampedAt) ?? text,
       ...(signedAt === undefined ? {} : { signedAt }),
     });
-    if (created === "duplicate") return { kind: "duplicate" };
+    if (created === "duplicate") return filedBefore(pass, noteId, clip);
     if (created !== "saved") return { kind: "released", reason: created };
     const at = new Date((options.now ?? Date.now)()).toISOString();
     const recorded = await recordClipped(pass, noteId, clip, at);
@@ -385,9 +411,42 @@ async function fileOne(pass: Pass, queued: QueuedClip, keys: WorkspaceKeyring): 
   });
 }
 
+/**
+ * A clip whose note exists already (a lost ack, a retry, a clip posted again): a duplicate to
+ * ack. When the note has no `clipped` record for it (the filer stopped between the note and its
+ * record), the record is added first, best effort, so "Saved from" isn't lost.
+ */
+async function filedBefore(pass: Pass, noteId: NoteId, clip: OpenedClip): Promise<Outcome> {
+  const { context } = pass;
+  try {
+    const events = await fetchEvents(context, { noteId });
+    const keys = await context.keys.get();
+    const recorded = events.some((event) => {
+      if (event.ciphertext === null) return false;
+      try {
+        const record = decryptEvent(
+          keys,
+          { workspaceId: context.workspaceId, id: event.id },
+          event.ciphertext,
+        ) as { type?: unknown; clipId?: unknown } | null;
+        return record?.type === "clipped" && record.clipId === clip.payload.clipId;
+      } catch {
+        return false;
+      }
+    });
+    if (!recorded) {
+      const at = new Date((pass.options.now ?? Date.now)()).toISOString();
+      await recordClipped(pass, noteId, clip, at);
+    }
+  } catch {
+    // best effort: the note stands, the clip is acked either way
+  }
+  return { kind: "duplicate" };
+}
+
 function readExtensions(pass: Pick<Pass, "context" | "ownerAccountId">) {
   const { context } = pass;
-  return fetchExtensions(context.api, {
+  return fetchExtensionRows(context.api, {
     workspaceId: context.workspaceId,
     owner: { publicKey: context.verifier.owner.publicKey, accountId: pass.ownerAccountId },
   });
@@ -452,18 +511,21 @@ export async function fileClips(
     wipe(own.privateKey);
     if (!matches) return result("inbox_key_mismatch");
   }
-  if (!options.folders.has(inbox.folderId)) return result("inbox_folder_missing");
   const pass: Pass = {
     context,
     options,
     ownerAccountId,
     inbox,
-    extensions: await readExtensions({ context, ownerAccountId }),
-    extensionsFresh: true,
+    folders: new Map(),
+    extensions: { verified: new Map(), unvouched: new Set() },
+    extensionsFresh: false,
     given: new Map(),
     made: new Map(),
     queue,
   };
+  // folders and extensions only once a claim returned clips: an empty queue costs a claim
+  let loaded = false;
+  let status: FileClipsResult["status"] = "done";
   const max = Math.min(Math.max(options.max ?? CLIP_QUEUE_LIMITS.claimDefault, 1), 50);
   // released clips keep their lease until the pass ends, so the next claim gets the ones behind
   const held: ClipId[] = [];
@@ -483,6 +545,19 @@ export async function fileClips(
         }),
       );
       pass.extensionsFresh = false;
+      if (data.clips.length > 0 && !loaded) {
+        loaded = true;
+        const folders = typeof options.folders === "function" ? options.folders() : options.folders;
+        pass.folders = await folders;
+        if (!pass.folders.has(inbox.folderId)) {
+          // the web app makes a new inbox folder and signs a new inbox key: the clips wait
+          for (const clip of data.clips) hold(clip.clipId, "inbox_folder_missing");
+          status = "inbox_folder_missing";
+          break;
+        }
+        pass.extensions = await readExtensions(pass);
+        pass.extensionsFresh = true;
+      }
       const acks: ClipId[] = [];
       const newest = Math.max(0, ...data.clips.map((clip) => clip.generation));
       if (newest > keys.current.generation) keys = await context.keys.refresh();
@@ -548,5 +623,5 @@ export async function fileClips(
   } finally {
     await send(context, routes.releaseClips, held).catch(() => undefined);
   }
-  return result("done");
+  return result(status);
 }

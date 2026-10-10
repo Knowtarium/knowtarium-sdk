@@ -1,6 +1,6 @@
 ---
 name: knowtarium-conventions
-description: Work in a Knowtarium knowledge base through its MCP tools. Use when reading, writing or checking notes in a Knowtarium workspace, when asked to check a person's edit, when list_pending_checks has work, or when asked about the inbox or saved links. Teaches the workspace conventions (its own index.md where it has one, OKF fields, file names named like the app names them), how changes land (saved at once, or proposed for approval in folders that ask for review), the consistency check that verifies a person's edit against connected notes, and how to triage the links the person saved with the web clipper.
+description: Work in a Knowtarium knowledge base through its MCP tools. Use when reading, writing or checking notes in a Knowtarium workspace, when asked to check a person's edit, when list_pending_checks has work, or when asked about the inbox, clips or saved links. Teaches the workspace conventions (its own index.md where it has one, OKF fields, file names named like the app names them), how changes land (saved at once, or proposed for approval in folders that ask for review), the consistency check that verifies a person's edit against connected notes, and how to triage the clips the person saved with the web clipper.
 ---
 
 # Knowtarium conventions
@@ -172,12 +172,12 @@ checked it against the notes connected to it. Run this whenever `list_pending_ch
      The recorded scope is what the web app shows as checked, so keep it honest: list what you read,
      nothing more.
 
-## The inbox (saved links)
+## The inbox (clips)
 
-The person can save links from their browser with Knowtarium's web clipper. Each one becomes a
-note in the workspace's inbox folder (`Inbox`, or a category folder under it), with `type: Clip`,
-`status: inbox`, the link in `url`, when it was saved in `saved`, and the person's own note, if
-any, as the body.
+The person can save links from their browser with Knowtarium's web clipper: clips. Each clip
+becomes a note in the workspace's inbox folder (`Inbox`, or a category folder under it), with
+`type: Clip`, `status: inbox`, the link in `url`, when it was saved in `saved`, and the person's
+own note, if any, as the body.
 
 - When the person asks about their inbox or the links they saved, call `list_inbox`. It lists the
   clips not handled yet, newest first (`status: done` or `any` for others), each with what was

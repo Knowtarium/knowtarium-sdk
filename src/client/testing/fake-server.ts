@@ -1948,10 +1948,6 @@ export class FakeServer {
         if (entry.client !== "extension")
           throw invalid(["params", "requestId"], "not an extension's");
         if (this.inboxKey === null) throw new HttpError("inbox_not_set");
-        const live = this.extensions.filter((extension) => extension.revokedAt === null);
-        if (live.length >= MAX_LIVE_EXTENSIONS) {
-          throw invalid(["body", "workspaceId"], "too many paired extensions");
-        }
         const body = this.json(request) as {
           extensionId: ExtensionId;
           tokenSecretSha256: string;
@@ -1971,6 +1967,11 @@ export class FakeServer {
           },
           body.keySignature,
         );
+        // after the signature, as the sync API checks it
+        const live = this.extensions.filter((extension) => extension.revokedAt === null);
+        if (live.length >= MAX_LIVE_EXTENSIONS) {
+          throw invalid(["body", "workspaceId"], "too many paired extensions");
+        }
         const extension = {
           extensionId: body.extensionId,
           signPublicKey: body.signPublicKey,

@@ -340,6 +340,14 @@ describe("web clipper vectors", () => {
       fromHex(vector.nonce),
     );
     expect(hex(sealed)).toBe(vector.sealed);
+    // padded to 4 KiB steps: the names' lengths don't show in the sealed size
+    for (const workspaceName of ["A", "A".repeat(1_000)]) {
+      const named = sealExtensionPairing(
+        { ...pairing, workspaceName, categories: [] },
+        { secret, signPublicKey: fromHex(vector.signPublicKey) },
+      );
+      expect(named.length).toBe(1 + 24 + 4096 + 16);
+    }
     // the random-nonce form opens to the same payload
     const fresh = sealExtensionPairing(pairing, {
       secret,

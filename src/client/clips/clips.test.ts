@@ -588,13 +588,14 @@ describe("filing clips in the web app", () => {
   it("files nothing while the inbox folder is gone, and nothing without an inbox", async () => {
     const { world, web, view, inboxKey } = await withInbox();
     const paired = pair(world);
-    save(world, paired, inboxKey);
+    const clipId = save(world, paired, inboxKey);
     view.folders.clear();
     expect(await web.engine.fileClips(view.options())).toMatchObject({
       status: "inbox_folder_missing",
       filed: [],
+      released: [{ clipId, reason: "inbox_folder_missing" }],
     });
-    expect(world.server.claims).toBe(0);
+    expect(world.server.clipQueue.get(clipId)?.leaseUntil).toBe(0);
     const bare = new World();
     const bareWeb = bare.web();
     expect((await bareWeb.engine.fileClips(viewOf(bareWeb).options())).status).toBe("no_inbox");
@@ -760,7 +761,7 @@ describe("filing passes", () => {
     const fresh = world.web();
     const reads = () =>
       world.server.requests.filter(
-        (call) => call.init.method === "GET" && call.url.includes(clipNoteId(clipId)),
+        (call) => call.init.method === "GET" && call.url.includes(`/notes/${clipNoteId(clipId)}`),
       ).length;
     const before = reads();
     const result = await fresh.engine.fileClips(view.options());
@@ -868,14 +869,16 @@ describe("filing passes", () => {
 describe("filing passes, continued", () => {
   it("reads the extensions again for one paired after the pass read them", async () => {
     const { world, web, view, inboxKey } = await withInbox();
+    const early = save(world, pair(world), inboxKey, {}, "2026-10-10T09:00:01.000Z");
     const late: Paired = { extensionId: newId("ext"), keys: createExtensionKeys() };
-    const clipId = save(world, late, inboxKey);
+    const clipId = save(world, late, inboxKey, {}, "2026-10-10T09:00:02.000Z");
     let open = (): void => undefined;
     const gate = new Promise<void>((resolve) => {
       open = resolve;
     });
     world.server.tamper.hold = (route) => (route === "listExtensions" ? gate : undefined);
-    const pass = web.engine.fileClips(view.options());
+    // one clip a claim: the list is read for the first batch, before the late one's
+    const pass = web.engine.fileClips(view.options({ max: 1 }));
     const listed = () => world.server.requests.some((call) => call.url.endsWith("/extensions"));
     for (let i = 0; i < 50 && !listed(); i++) await flush();
     // the pass read the list without it; the extension pairs now
@@ -883,7 +886,7 @@ describe("filing passes, continued", () => {
     delete world.server.tamper.hold;
     open();
     const result = await pass;
-    expect(result.filed.map((entry) => entry.clipId)).toEqual([clipId]);
+    expect(result.filed.map((entry) => entry.clipId)).toEqual([early, clipId]);
     expect(result.released).toEqual([]);
   });
 
@@ -1053,6 +1056,91 @@ describe("the inbox key's rollback marks and echo", () => {
       (caught: unknown) => caught,
     );
     expect(isVaultError(refused, "untrusted_signature")).toBe(true);
+  });
+});
+
+describe("filing passes, wave 2", () => {
+  it("adds the clipped record a filer left out before acking a filed clip", async () => {
+    const { world, web, view, inboxKey } = await withInbox();
+    const paired = pair(world);
+    const clipId = save(world, paired, inboxKey);
+    // the tab dies between the note and its record: no record, no ack
+    world.server.tamper.refuse = (route) =>
+      route === "addEvent" || route === "ackClips" ? "unavailable" : undefined;
+    const first = await web.engine.fileClips(view.options());
+    expect(first.filed).toEqual([expect.objectContaining({ clipId, recorded: false })]);
+    delete world.server.tamper.refuse;
+    expect(await clippedEntry(web, clipNoteId(clipId))).toBeUndefined();
+    // the lease runs out; the next pass finds the note, adds the record, then acks
+    const queued = world.server.clipQueue.get(clipId);
+    if (queued !== undefined) queued.leaseUntil = 0;
+    const retry = await web.engine.fileClips(view.options());
+    expect(retry.duplicates).toEqual([clipId]);
+    expect(await clippedEntry(web, clipNoteId(clipId))).toMatchObject({ signature: "verified" });
+    expect(world.server.clipQueue.size).toBe(0);
+    // and a record isn't added twice
+    requeue(world, clipId, paired, inboxKey);
+    await web.engine.fileClips(view.options());
+    const timeline = await web.engine.readHistory(clipNoteId(clipId));
+    const records = timeline.entries.filter(
+      (entry) => entry.kind === "event" && entry.event.event.type === "clipped",
+    );
+    expect(records).toHaveLength(1);
+  });
+
+  it("reads no folders and no extensions for an empty queue", async () => {
+    const { world, web, view } = await withInbox();
+    let folderLoads = 0;
+    const lists = () =>
+      world.server.requests.filter((call) => call.url.endsWith("/extensions")).length;
+    const before = lists();
+    const result = await web.engine.fileClips(
+      view.options({
+        folders: () => {
+          folderLoads++;
+          return view.folders;
+        },
+      }),
+    );
+    expect(result.status).toBe("done");
+    expect(folderLoads).toBe(0);
+    expect(lists()).toBe(before);
+    expect(await web.engine.clipSummary()).toEqual({
+      pending: 0,
+      leased: 0,
+      oldestPostedAt: null,
+    });
+  });
+
+  it("loads the folders once a claim returns clips, and says what waits", async () => {
+    const { world, web, view, inboxKey } = await withInbox();
+    const paired = pair(world);
+    save(world, paired, inboxKey);
+    expect(await web.engine.clipSummary()).toMatchObject({ pending: 1, leased: 0 });
+    let folderLoads = 0;
+    const result = await web.engine.fileClips(
+      view.options({
+        folders: () => {
+          folderLoads++;
+          return Promise.resolve(view.folders);
+        },
+      }),
+    );
+    expect(result.filed).toHaveLength(1);
+    expect(folderLoads).toBe(1);
+  });
+
+  it("rejects the clips of a listed extension whose key the owner didn't vouch for", async () => {
+    const { world, web, view, inboxKey } = await withInbox();
+    const paired = pair(world);
+    const row = world.server.extensions.find((entry) => entry.extensionId === paired.extensionId);
+    if (row === undefined) throw new Error("no row");
+    // another key than the one the owner signed
+    row.signPublicKey = toBase64Url(createExtensionKeys().publicKey);
+    const clipId = save(world, paired, inboxKey);
+    const result = await web.engine.fileClips(view.options());
+    expect(result.rejected).toEqual([{ clipId, reason: "bad_signature" }]);
+    expect(world.server.clipQueue.size).toBe(0);
   });
 });
 
