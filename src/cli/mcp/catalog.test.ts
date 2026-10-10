@@ -12,6 +12,7 @@ describe("the tool catalog", () => {
       "get_conventions",
       "list_comments",
       "list_folders",
+      "list_inbox",
       "list_notes",
       "list_pending_checks",
       "list_stale",

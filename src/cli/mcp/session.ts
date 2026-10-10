@@ -1,4 +1,4 @@
-import type { CheckRecordSignal } from "../../core/index.js";
+import { type Actor, type CheckRecordSignal, parseNote, setGenerated } from "../../core/index.js";
 import { boxKeyPairFromPrivateKey, fromBase64Url } from "../../crypto/index.js";
 import {
   type AgentPolicyFolderLookup,
@@ -9,15 +9,19 @@ import {
   type FolderId,
   type NoteId,
   routes,
+  type SignedInboxKey,
   type WorkspaceId,
 } from "../../protocol/index.js";
 import {
   type ApiClient,
   type CacheAdapter,
+  type ClipFolder,
   createApiClient,
   type EncryptedCache,
   type FetchLike,
   fetchAgentPolicy,
+  fetchInboxKey,
+  type FileClipsResult,
   isSyncApiError,
   type KeyProvider,
   NetworkError,
@@ -78,6 +82,19 @@ const HISTORY_RETENTION_CACHE_MS = 5 * 60_000;
  */
 const WRITE_MAX_RETRY_AFTER_MS = 5_000;
 
+/** How long one filing pass of the web clipper's clips may take (`list_inbox` waits for it). */
+export const CLIP_FILING_MAX_MS = 5_000;
+
+/** What the last look at the web clipper's inbox found: its inbox key and the last filing pass. */
+export interface InboxState {
+  /** The latest owner-signed inbox key (null: the workspace has no inbox). */
+  readonly inboxKey: SignedInboxKey | null;
+  /** Whether this connection may file clips (read-write, a vouched key, the inbox in scope). */
+  readonly mayFile: boolean;
+  /** The last filing pass's result, if one ran. */
+  readonly filed: FileClipsResult | null;
+}
+
 /**
  * Where a session is: `loading` until the local copy is open, `syncing` while the first pull
  * runs (answers may be partial), `ready`, `offline` (the API can't be reached: answers come from
@@ -127,6 +144,13 @@ export class WorkspaceSession {
   private failures = 0;
   /** When the last sync started, by `deps.now`. */
   private lastAttempt = Number.NEGATIVE_INFINITY;
+  /** The filing pass running now, if any (the web clipper; one at a time). */
+  private filing: Promise<InboxState> | undefined;
+  /**
+   * The agent's actor, as its `generated` stamps and unsigned `clipped` records name it; the MCP
+   * server sets it from the client's handshake.
+   */
+  actor: () => Actor = () => "knowtarium-cli/0";
 
   private constructor(
     readonly connection: Connection,
@@ -466,6 +490,70 @@ export class WorkspaceSession {
       await this.saveIndex();
     } catch (error) {
       this.fail(error);
+      return;
+    }
+    // the web clipper's clips, where this connection may file them; never fails the sync
+    await this.fileClips();
+  }
+
+  /**
+   * Reads the inbox key (the web clipper) and, when this connection may file clips (a
+   * `read-write` token whose signing key the owner vouched for, with the inbox folder in its
+   * scope), files the waiting ones into existing folders where agents' changes apply directly,
+   * for at most `maxMs`; the rest wait for the web app, with the reason. One pass at a time (a
+   * second call joins it). Never rejects: a failure leaves `filed` null.
+   */
+  fileClips(maxMs = CLIP_FILING_MAX_MS): Promise<InboxState> {
+    this.filing ??= this.filePass(maxMs).finally(() => {
+      this.filing = undefined;
+    });
+    return this.filing;
+  }
+
+  private async filePass(maxMs: number): Promise<InboxState> {
+    let inboxKey: SignedInboxKey | null;
+    try {
+      inboxKey = await fetchInboxKey(this.api, {
+        workspaceId: this.workspaceId,
+        owner: { publicKey: this.ownerKey, accountId: this.connection.ownerId },
+      });
+    } catch {
+      return { inboxKey: null, mayFile: false, filed: null };
+    }
+    const mayFile =
+      inboxKey !== null &&
+      !this.ended &&
+      this.writable &&
+      this.writesDirectly &&
+      this.view.folders.has(inboxKey.envelope.folderId) &&
+      this.inScope(inboxKey.envelope.folderId);
+    if (!mayFile) return { inboxKey, mayFile, filed: null };
+    const folders = new Map<string, ClipFolder>(
+      [...this.view.folders].map(([id, folder]) => [
+        id,
+        { name: folder.name, parentId: folder.parentId },
+      ]),
+    );
+    const started = this.now();
+    try {
+      const filed = await this.engine.fileClips({
+        folders,
+        takenNames: (folderId) =>
+          [...this.view.notes.values()]
+            .filter((note) => note.folderId === folderId && note.name !== null)
+            .map((note) => note.name ?? ""),
+        stamp: (text) => setGenerated(parseNote(text), this.actor(), new Date(this.now())).text,
+        actor: this.actor(),
+        agentWrite: {
+          minPolicyRevision: this.policyFloor,
+          visibleFolderIds: [...this.view.folders.keys()],
+        },
+        deadline: started + maxMs,
+        now: () => this.now(),
+      });
+      return { inboxKey, mayFile, filed };
+    } catch {
+      return { inboxKey, mayFile, filed: null };
     }
   }
 
@@ -520,13 +608,16 @@ export class WorkspaceSession {
     return this.checks.get(noteId) ?? [];
   }
 
-  /** Keeps the cache fresh while the server runs: live pings start pulls. */
+  /** Keeps the cache fresh while the server runs: live pings start pulls (and file clips). */
   goLive(connect: SocketFactory): void {
     if (this.ended) return;
     this.engine.on("synced", () => {
       void this.refreshChecks()
         .then(() => this.saveIndex())
         .catch(() => undefined);
+    });
+    this.engine.on("clip_added", () => {
+      void this.fileClips();
     });
     this.engine.connectLive(connect);
   }

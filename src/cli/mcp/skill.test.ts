@@ -145,11 +145,27 @@ describe("the conventions skill", () => {
     const named = new Set(
       [...skill.matchAll(/`([a-z]+(?:_[a-z]+)+)`/g)]
         .map((match) => match[1] ?? "")
-        .filter((name) => !["stale_after", "base_version", "next_offset"].includes(name)),
+        .filter(
+          (name) =>
+            ![
+              "stale_after",
+              "base_version",
+              "next_offset",
+              // list_inbox's reasons a clip waits
+              "new_category",
+              "old_generation",
+            ].includes(name),
+        ),
     );
     expect([...named].filter((name) => !tools.has(name))).toEqual([]);
     // the workflow tools all appear
-    for (const tool of ["list_pending_checks", "related_notes", "record_check", "propose_edit"]) {
+    for (const tool of [
+      "list_pending_checks",
+      "related_notes",
+      "record_check",
+      "propose_edit",
+      "list_inbox",
+    ]) {
       expect(named.has(tool)).toBe(true);
     }
     const fieldTable = skill.slice(skill.indexOf("### OKF fields"), skill.indexOf("A new note"));
