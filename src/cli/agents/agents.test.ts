@@ -184,7 +184,7 @@ describe("configuring agents", () => {
     await write(join(home, ".codex", "config.toml"), 'model = "o3"\n');
     await write(join(home, ".claude.json"), "{ not json");
     const found = await detectAgents(targets);
-    expect(found.map((target) => target.id)).toEqual(["claude-code", "cursor", "codex"]);
+    expect(found.map((target) => target.id)).toEqual(["claude-code", "codex", "cursor"]);
 
     const dry = await configureAgents(found, server, { dryRun: true });
     expect(dry.map((result) => result.status)).toEqual(["skipped", "added", "added"]);
@@ -367,8 +367,8 @@ describe("choosing the agents", () => {
     const added = async () =>
       [
         (await has(".claude.json")) && "claude-code",
-        (await has(join(".cursor", "mcp.json"))) && "cursor",
         (await has(join(".codex", "config.toml"))) && "codex",
+        (await has(join(".cursor", "mcp.json"))) && "cursor",
       ].filter(Boolean);
     return { context, added, home };
   }
@@ -392,9 +392,9 @@ describe("choosing the agents", () => {
 
   it("adds only the agents left ticked", async () => {
     const { context, added } = await threeAgents();
-    context.io.choices = [[0, 2]];
+    context.io.choices = [[0, 1]];
     expect(await COMMANDS["agents"]?.(context, [])).toBe(0);
-    expect(context.io.offered).toEqual([["Claude Code", "Cursor", "Codex"]]);
+    expect(context.io.offered).toEqual([["Claude Code", "Codex", "Cursor"]]);
     expect(await added()).toEqual(["claude-code", "codex"]);
     expect(context.io.lines.filter((line) => line.startsWith("added to"))).toHaveLength(2);
   });
@@ -414,15 +414,15 @@ describe("choosing the agents", () => {
     context.io.answers = [true];
     expect(await COMMANDS["agents"]?.(context, [])).toBe(0);
     expect(context.io.offered).toHaveLength(1);
-    expect(await added()).toEqual(["claude-code", "cursor", "codex"]);
+    expect(await added()).toEqual(["claude-code", "codex", "cursor"]);
   });
 
   it("leaves agents with the Knowtarium plugin unticked, and out with --yes", async () => {
     const { context, added, home } = await threeAgents();
     await withPlugins(home);
-    context.io.choices = [[1]];
+    context.io.choices = [[2]];
     expect(await COMMANDS["agents"]?.(context, [])).toBe(0);
-    expect(context.io.unticked).toEqual([[0, 2]]);
+    expect(context.io.unticked).toEqual([[0, 1]]);
     expect(context.io.lines).toContain(
       "Claude Code already runs Knowtarium through its plugin, so it isn't ticked: adding it too would run a second server. To add it anyway: `knowtarium agents --agent claude-code`.",
     );
@@ -438,7 +438,7 @@ describe("choosing the agents", () => {
     expect(await added()).toEqual(["cursor"]);
     // named, it is added anyway
     expect(await COMMANDS["agents"]?.(context, ["--agent", "codex"])).toBe(0);
-    expect(await added()).toEqual(["cursor", "codex"]);
+    expect(await added()).toEqual(["codex", "cursor"]);
   });
 
   /** Entries an earlier `connect` (0.1.2) wrote, which ran npx in the project folder. */
@@ -515,7 +515,7 @@ describe("choosing the agents", () => {
     );
     context.io.choices = [[]];
     expect(await COMMANDS["agents"]?.(context, [])).toBe(0);
-    expect(context.io.unticked.at(-1)).toEqual([2]);
+    expect(context.io.unticked.at(-1)).toEqual([1]);
   });
 
   it("shows no list with --yes, --agent or --dry-run", async () => {
@@ -525,7 +525,7 @@ describe("choosing the agents", () => {
     expect(await COMMANDS["agents"]?.(context, ["--agent", "cursor"])).toBe(0);
     expect(await added()).toEqual(["cursor"]);
     expect(await COMMANDS["agents"]?.(context, ["--yes"])).toBe(0);
-    expect(await added()).toEqual(["claude-code", "cursor", "codex"]);
+    expect(await added()).toEqual(["claude-code", "codex", "cursor"]);
     expect(context.io.offered).toEqual([]);
   });
 });

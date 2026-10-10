@@ -624,7 +624,7 @@ it finds. The CLI lives in `src/cli/` (Node only): `commands/`, `connect/`, `sto
 | Command                                             | What it does                                                               |
 | --------------------------------------------------- | -------------------------------------------------------------------------- |
 | `connect [--no-agents] [--yes] [--dry-run]`         | Pair with the web app (`login` is the same), then set up agents            |
-| `agents [--yes] [--dry-run] [--agent <id>]...`      | Add the MCP server to Claude Code, Claude Desktop, Cursor, Codex, OpenCode |
+| `agents [--yes] [--dry-run] [--agent <id>]...`      | Add the MCP server to Claude Code, Codex, Cursor, OpenCode, Claude Desktop |
 | `status [--offline] [--json]`                       | Connected workspaces, scope, agent changes, token state, cache cursor      |
 | `disconnect [--workspace <id>] [--all]`             | Revoke the token with the API, then delete the local keys and cache        |
 | `validate <folder> [--strict] [--json]`             | Check an OKF folder offline (paths, frontmatter, fields, `type`, links)    |
@@ -983,8 +983,8 @@ computer connected once. No password, token or key ever goes in a Claude setting
 have no `user_config`.
 
 - **Any agent:** `npx knowtarium connect` in a terminal (Node.js 20 or later) opens the browser to
-  approve this computer, then offers to add the server to Claude Code, Claude Desktop, Cursor,
-  Codex and OpenCode (`knowtarium agents` does it later).
+  approve this computer, then offers to add the server to Claude Code, Codex, Cursor, OpenCode
+  and Claude Desktop (`knowtarium agents` does it later).
 - **Claude Desktop:** open `knowtarium-<version>.mcpb` (or drag it onto Settings, Extensions);
   people download it from the GitHub Release (`releases/latest/download/knowtarium.mcpb`). The
   bundle holds the built CLI and its production dependencies (the OS keychain module for macOS,

@@ -5,7 +5,7 @@ import type { CliEnvironment } from "../env.js";
 import type { JsonLayout } from "./json-config.js";
 
 /** Every agent the CLI can add itself to. */
-export const AGENT_IDS = ["claude-code", "claude-desktop", "cursor", "codex", "opencode"] as const;
+export const AGENT_IDS = ["claude-code", "codex", "cursor", "opencode", "claude-desktop"] as const;
 export type AgentId = (typeof AGENT_IDS)[number];
 
 /** An agent the CLI can add itself to. */
@@ -45,9 +45,9 @@ function claudeDesktopFolders(env: CliEnvironment): string[] {
 /**
  * The agents `connect` configures and where each keeps its MCP servers (user scope, so the server
  * works in every project): Claude Code's `~/.claude.json` (`$CLAUDE_CONFIG_DIR/.claude.json` when
- * that is set), Claude Desktop's `claude_desktop_config.json`, Cursor's `~/.cursor/mcp.json`,
- * Codex's `~/.codex/config.toml` (`$CODEX_HOME/config.toml`) and OpenCode's
- * `~/.config/opencode/opencode.json` (or `opencode.jsonc`).
+ * that is set), Codex's `~/.codex/config.toml` (`$CODEX_HOME/config.toml`), Cursor's
+ * `~/.cursor/mcp.json`, OpenCode's `~/.config/opencode/opencode.json` (or `opencode.jsonc`) and
+ * Claude Desktop's `claude_desktop_config.json`.
  */
 export function agentTargets(env: CliEnvironment): AgentTarget[] {
   const home = env.userHome;
@@ -66,12 +66,12 @@ export function agentTargets(env: CliEnvironment): AgentTarget[] {
       format: "mcpServers",
     },
     {
-      id: "claude-desktop",
-      name: "Claude Desktop",
-      configPath: desktopConfig(desktop),
-      otherConfigPaths: otherDesktops.map(desktopConfig),
-      markers: [desktop, ...otherDesktops],
-      format: "mcpServers",
+      id: "codex",
+      name: "Codex",
+      configPath: join(codex, "config.toml"),
+      otherConfigPaths: [],
+      markers: [codex],
+      format: "codex-toml",
     },
     {
       id: "cursor",
@@ -82,20 +82,20 @@ export function agentTargets(env: CliEnvironment): AgentTarget[] {
       format: "mcpServers",
     },
     {
-      id: "codex",
-      name: "Codex",
-      configPath: join(codex, "config.toml"),
-      otherConfigPaths: [],
-      markers: [codex],
-      format: "codex-toml",
-    },
-    {
       id: "opencode",
       name: "OpenCode",
       configPath: join(opencode, "opencode.json"),
       otherConfigPaths: [join(opencode, "opencode.jsonc")],
       markers: [opencode],
       format: "opencode",
+    },
+    {
+      id: "claude-desktop",
+      name: "Claude Desktop",
+      configPath: desktopConfig(desktop),
+      otherConfigPaths: otherDesktops.map(desktopConfig),
+      markers: [desktop, ...otherDesktops],
+      format: "mcpServers",
     },
   ];
 }

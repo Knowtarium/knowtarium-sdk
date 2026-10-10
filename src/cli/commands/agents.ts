@@ -108,7 +108,7 @@ export async function setUpAgents(
       ? await detectAgents(all)
       : all.filter((target) => options.only?.includes(target.id));
   if (chosen.length === 0) {
-    io.out("No supported agent found (Claude Code, Claude Desktop, Cursor, Codex, OpenCode).");
+    io.out("No supported agent found (Claude Code, Codex, Cursor, OpenCode, Claude Desktop).");
     io.out(`Add this MCP server to your agent by hand: ${commandLine(server, platform)}`);
     return [];
   }

@@ -5,8 +5,8 @@ export const USAGE: Readonly<Record<string, string>> = {
       Knowtarium to the agents found here, which you pick from a list (all
       ticked). \`login\` does the same.`,
   agents: `  knowtarium agents [--yes] [--dry-run] [--agent <id>]...
-      Add the MCP server to Claude Code, Claude Desktop, Cursor, Codex or OpenCode
-      (ids: claude-code, claude-desktop, cursor, codex, opencode). Without --yes
+      Add the MCP server to Claude Code, Codex, Cursor, OpenCode or Claude Desktop
+      (ids: claude-code, codex, cursor, opencode, claude-desktop). Without --yes
       or --agent, pick the agents found from a list: all start ticked; arrows
       (or j/k) move, space toggles, a toggles all, Enter confirms, Esc cancels.`,
   status: `  knowtarium status [--offline] [--json]

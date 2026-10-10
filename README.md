@@ -67,7 +67,7 @@ runs npx in the project folder, so use one of the ways above.
 | Command                                             | What it does                                                                     |
 | --------------------------------------------------- | -------------------------------------------------------------------------------- |
 | `connect [--no-agents] [--yes] [--dry-run]`         | Connect this computer to a workspace (opens the browser), then set up agents     |
-| `agents [--yes] [--dry-run] [--agent <id>]...`      | Add Knowtarium to `claude-code`, `claude-desktop`, `cursor`, `codex`, `opencode` |
+| `agents [--yes] [--dry-run] [--agent <id>]...`      | Add Knowtarium to `claude-code`, `codex`, `cursor`, `opencode`, `claude-desktop` |
 | `status [--offline] [--json]`                       | Show the connected workspaces, their access and changes, token and local cache   |
 | `disconnect [--workspace <id>] [--all]`             | Revoke this computer's access and delete its local keys and cache                |
 | `convert <vault> <out> --person <name> [--dry-run]` | Convert an Obsidian vault into an OKF bundle in a new folder, offline            |
