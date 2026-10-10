@@ -933,13 +933,16 @@ have no `user_config`.
 - **Claude Code and Codex:** the plugins in the
   [knowtarium-plugins](https://github.com/Knowtarium/knowtarium-plugins) marketplace:
   `/plugin marketplace add Knowtarium/knowtarium-plugins`, then
-  `/plugin install knowtarium@knowtarium`; or `codex plugin marketplace add
+  `/plugin install knowtarium@knowtarium` (from a shell, Claude Code 2.1.292 or later:
+  `claude plugin install knowtarium --marketplace Knowtarium/knowtarium-plugins`); or
+  `codex plugin marketplace add
 Knowtarium/knowtarium-plugins`, then `codex plugin add knowtarium@knowtarium`. To try a build,
   add `dist-extras/marketplace` (a local path) instead. Each plugin holds the
-  `knowtarium-conventions` skill and an MCP server that runs `node server/launch.mjs` from the
-  plugin root (`${CLAUDE_PLUGIN_ROOT}` in the Claude Code plugin's `.mcp.json`, `${PLUGIN_ROOT}` in
-  the Codex plugin's `mcp.json`, which follows the portable Agent Plugins format); the launcher
-  starts `npx -y knowtarium@<version> mcp` (through `cmd /c` on Windows), passes signals on,
+  `knowtarium-conventions` skill and an MCP server that runs
+  `node server/launch.mjs -y knowtarium@<version> mcp` from the plugin root (`${CLAUDE_PLUGIN_ROOT}`
+  in the Claude Code plugin's `.mcp.json`, `${PLUGIN_ROOT}` in the Codex plugin's `mcp.json`, which
+  follows the portable Agent Plugins format), so the exact version is in plain sight in the config;
+  the launcher starts `npx` with those arguments (through `cmd /c` on Windows), passes signals on,
   returns the exit code and stops the whole process tree on Windows. Connect with
   `npx knowtarium connect` first, or through the `connect` tool.
 

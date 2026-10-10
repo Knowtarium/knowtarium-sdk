@@ -1,17 +1,19 @@
-// The Claude Code plugin's MCP server launcher: Claude Code runs `node launch.mjs`, which starts
-// `npx -y knowtarium@<version> mcp` (through `cmd /c` on Windows, where npx is a batch file) with
-// the same stdio. The arguments come from server-command.json next to it, written by the build.
-// Signals are passed on, the exit code comes back, and on Windows the whole process tree goes
-// when the launcher stops (killing cmd alone would leave node running).
+// The plugins' MCP server launcher: the client runs `node launch.mjs -y knowtarium@<version> mcp`
+// (the arguments, with the exact version, are in the plugin's .mcp.json or mcp.json, written by
+// the build), and the launcher starts `npx` with them (through `cmd /c` on Windows, where npx is a
+// batch file) and the same stdio. Signals are passed on, the exit code comes back, and on Windows
+// the whole process tree goes when the launcher stops (killing cmd alone would leave node running).
 import { spawn, spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { constants } from "node:os";
 import process from "node:process";
-import { URL } from "node:url";
 
-const { args } = JSON.parse(
-  readFileSync(new URL("./server-command.json", import.meta.url), "utf8"),
-);
+const args = process.argv.slice(2);
+if (args.length === 0) {
+  process.stderr.write(
+    "knowtarium: launch.mjs needs the npx arguments, such as -y knowtarium@1.2.3 mcp\n",
+  );
+  process.exit(1);
+}
 const windows = process.platform === "win32";
 const child = windows
   ? spawn("cmd", ["/c", "npx", ...args], { stdio: "inherit", windowsHide: true })

@@ -2,7 +2,7 @@
   "displayName": "Knowtarium",
   "description": "Your Knowtarium knowledge base in Claude: search, read and write notes (or propose changes where a folder asks for approval), and check a person's edits against connected notes. End-to-end encrypted.",
   "agentDescription": "Your Knowtarium knowledge base in your agent: search, read and write notes (or propose changes where a folder asks for approval), and check a person's edits against connected notes. End-to-end encrypted.",
-  "shortDescription": "Your end-to-end encrypted knowledge base, for your agent",
+  "shortDescription": "Encrypted notes for agents",
   "author": {
     "name": "Knowtarium",
     "email": "support@knowtarium.com",

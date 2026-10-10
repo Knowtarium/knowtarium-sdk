@@ -16,7 +16,8 @@ notes.
 ```
 
 On Claude Code 2.1.275 or later, one line does both:
-`/plugin install knowtarium --marketplace Knowtarium/knowtarium-plugins`.
+`/plugin install knowtarium --marketplace Knowtarium/knowtarium-plugins`. From a shell (Claude
+Code 2.1.292 or later): `claude plugin install knowtarium --marketplace Knowtarium/knowtarium-plugins`.
 
 **Codex**
 
@@ -42,23 +43,32 @@ password, token or key goes in your agent's settings. The plugins need Node.js 2
 Both plugins hold the same two things: the `knowtarium-conventions` skill and the `knowtarium` MCP
 server.
 
-- **They run** a small launcher in the plugin (`server/launch.mjs`), which runs
+- **They run** a small launcher in the plugin, `node server/launch.mjs -y knowtarium@{{version}} mcp`
+  (the arguments are in the plugin's `.mcp.json` or `mcp.json`), which runs
   `npx -y knowtarium@{{version}} mcp`: npx downloads the open source
   [`knowtarium`](https://www.npmjs.com/package/knowtarium) package at exactly that version, with the
   dependency versions its shrinkwrap pins, and starts its MCP server on stdio. Its source is at
   {{repository}}.
-- **They send** encrypted data only, and only to the Knowtarium sync API at `{{apiHost}}`. Notes,
-  names, comments and history are encrypted and decrypted on your computer; Knowtarium's servers
-  store ciphertext they can't read. Connecting opens `app.knowtarium.com` in your browser.
+- **They talk** only to the Knowtarium sync API at `{{apiHost}}`. Note text, names, comments and
+  history are encrypted on your computer before they're sent, and decrypted only there; the API
+  sees only IDs, versions, sizes and timing. Connecting opens `app.knowtarium.com` in your browser.
 - **They store** the connection, encrypted, with its key in the OS keychain (or, where there is
   none, in a file only you can read), and an encrypted local copy of your notes.
 
 ## Versions
 
 Every plugin version pins the `knowtarium` release it was tested with: this marketplace is at
-{{version}}. A new release changes the version, and your agent picks it up when it updates the
-marketplace (`/plugin marketplace update knowtarium` in Claude Code,
-`codex plugin marketplace upgrade knowtarium` in Codex).
+{{version}}. A new release changes the version. Updating the marketplace only refreshes the
+listing; then update the plugin itself, and restart the agent:
+
+```sh
+# Claude Code (or /plugin marketplace update knowtarium, then /plugin and Update now)
+claude plugin marketplace update knowtarium
+claude plugin update knowtarium@knowtarium
+# Codex: adding the plugin again installs the new version
+codex plugin marketplace upgrade knowtarium
+codex plugin add knowtarium@knowtarium
+```
 
 ## Layout
 

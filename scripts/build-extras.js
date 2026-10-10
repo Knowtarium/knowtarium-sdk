@@ -16,8 +16,9 @@
 //                               Codex one (.agents/plugins/marketplace.json), each with its own
 //                               plugin folder (plugins/claude/knowtarium, plugins/codex/knowtarium
 //                               in the portable Agent Plugins format) holding the
-//                               knowtarium-conventions skill, the MCP server (a launcher that runs
-//                               `npx -y knowtarium@<version> mcp`, so native Windows works too),
+//                               knowtarium-conventions skill, the MCP server (a launcher that the
+//                               MCP config gives `-y knowtarium@<version> mcp`, in plain sight,
+//                               and that runs npx with them, so native Windows works too),
 //                               the icon, a README that says what the plugin runs, sends and
 //                               stores, and the LICENSE.
 //
@@ -132,6 +133,8 @@ try {
   const description = devNote(config.description);
   const agentDescription = devNote(config.agentDescription);
   const npxArgs = serverCommand.npxArgs.map((arg) => arg.replace("{version}", pkg.version));
+  // the exact version, in plain sight in the plugins' MCP configs (a directory scanner reads them)
+  assert.ok(npxArgs.includes(`${pkg.name}@${pkg.version}`), "the server command pins this version");
   rmSync(out, { recursive: true, force: true });
 
   // ---- every tool the server can offer, from the real tool definitions (src/cli/mcp/catalog.ts)
@@ -320,9 +323,9 @@ try {
     });
   const devReadme = (text) =>
     dev ? `> Development build of ${pkg.version}, not for distribution.\n\n${text}` : text;
-  /** What both plugins hold: the launcher and its command, the skill, the icon, the license. */
+  /** What both plugins hold: the launcher, the skill, the icon, the README and the license. */
   const pluginBase = (folder, template) => {
-    write(join(folder, "server", "server-command.json"), json({ args: npxArgs }));
+    mkdirSync(join(folder, "server"), { recursive: true });
     copyFileSync(join(extras, "launch.mjs"), join(folder, "server", "launch.mjs"));
     cpSync(
       join(root, "skills", "knowtarium-conventions"),
@@ -366,7 +369,10 @@ try {
     join(claudePlugin, ".mcp.json"),
     json({
       mcpServers: {
-        knowtarium: { command: "node", args: ["${CLAUDE_PLUGIN_ROOT}/server/launch.mjs"] },
+        knowtarium: {
+          command: "node",
+          args: ["${CLAUDE_PLUGIN_ROOT}/server/launch.mjs", ...npxArgs],
+        },
       },
     }),
   );
@@ -407,6 +413,7 @@ try {
           category: "Productivity",
           capabilities: ["Read", "Write"],
           websiteURL: config.homepage,
+          supportURL: config.support,
           privacyPolicyURL: config.privacyPolicy,
           termsOfServiceURL: config.termsOfService,
           defaultPrompt: config.defaultPrompts,
@@ -420,7 +427,11 @@ try {
   const codexMcp = {
     $schema: "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
     mcpServers: {
-      knowtarium: { type: "stdio", command: "node", args: ["${PLUGIN_ROOT}/server/launch.mjs"] },
+      knowtarium: {
+        type: "stdio",
+        command: "node",
+        args: ["${PLUGIN_ROOT}/server/launch.mjs", ...npxArgs],
+      },
     },
   };
   write(join(codexPlugin, "plugin.json"), json(codexManifest));
@@ -460,6 +471,17 @@ try {
   const { interface: codexInterface } = codexManifest.extensions["com.openai"];
   for (const asset of [codexInterface.composerIcon, codexInterface.logo]) {
     assert.ok(existsSync(join(codexPlugin, asset)), `the Codex plugin has no ${asset}`);
+  }
+  // the directory's limits (developers.openai.com/plugins/deploy/submission)
+  const within = (field, value, most) =>
+    assert.ok(value.length <= most, `Codex interface.${field} is over ${String(most)} characters`);
+  within("displayName", codexInterface.displayName, dev ? 60 : 30);
+  within("shortDescription", codexInterface.shortDescription, 30);
+  within("longDescription", codexInterface.longDescription, 4000);
+  assert.ok(codexInterface.defaultPrompt.length <= 3, "at most three Codex default prompts");
+  for (const prompt of codexInterface.defaultPrompt) within("defaultPrompt", prompt, 128);
+  for (const url of ["websiteURL", "supportURL", "privacyPolicyURL", "termsOfServiceURL"]) {
+    assert.match(codexInterface[url], /^https:\/\//, `Codex interface.${url} is an https URL`);
   }
 
   const claude = run("claude", ["--version"]);

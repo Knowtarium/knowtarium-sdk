@@ -25,15 +25,16 @@ goes in Codex's settings. You need Node.js 20 or later.
 
 ## What it runs, sends and stores
 
-- **It runs** `node ${PLUGIN_ROOT}/server/launch.mjs`, a small launcher in this plugin. The
-  launcher runs `npx -y knowtarium@{{version}} mcp` (through `cmd /c` on Windows): npx downloads
+- **It runs** `node ${PLUGIN_ROOT}/server/launch.mjs -y knowtarium@{{version}} mcp` (see
+  `mcp.json`). The launcher, a small script in this plugin, runs `npx -y knowtarium@{{version}} mcp`
+  (through `cmd /c` on Windows): npx downloads
   the open source [`knowtarium`](https://www.npmjs.com/package/knowtarium) package at exactly
   version {{version}}, with the dependency versions its shrinkwrap pins, from your npm registry, and
   starts its MCP server on stdio. Its source is at {{repository}}.
-- **It sends** encrypted data only, and only to the Knowtarium sync API at `{{apiHost}}`. Notes,
-  file and folder names, comments and history are encrypted and decrypted on this computer
-  (XChaCha20-Poly1305 with libsodium); Knowtarium's servers store ciphertext they can't read.
-  Connecting opens `app.knowtarium.com` in your browser so you can approve this computer.
+- **It talks** only to the Knowtarium sync API at `{{apiHost}}`. Note text, file and folder
+  names, comments and history are encrypted on this computer before they're sent, and decrypted
+  only here (XChaCha20-Poly1305 with libsodium); the API sees only IDs, versions, sizes and
+  timing. Connecting opens `app.knowtarium.com` in your browser so you can approve this computer.
 - **It stores** the connection, encrypted, in your app data folder, with its key in the OS
   keychain (or, where there is none, in a file only you can read), and an encrypted local copy of
   your notes.
@@ -43,9 +44,14 @@ goes in Codex's settings. You need Node.js 20 or later.
 
 ## Versions
 
-Plugin version {{version}} runs `knowtarium` {{version}}. Each release of the plugin pins the
-release of the package it was tested with; `codex plugin marketplace upgrade knowtarium` fetches a
-new one.
+Plugin version {{version}} runs `knowtarium` {{version}}: each release of the plugin pins the
+release of the package it was tested with. To update, refresh the marketplace, then add the plugin
+again, which installs the new version:
+
+```sh
+codex plugin marketplace upgrade knowtarium
+codex plugin add knowtarium@knowtarium
+```
 
 ## Links
 

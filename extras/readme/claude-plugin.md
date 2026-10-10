@@ -13,7 +13,8 @@ approval), and check a person's edits against related notes.
 ```
 
 On Claude Code 2.1.275 or later, one line does both:
-`/plugin install knowtarium --marketplace Knowtarium/knowtarium-plugins`.
+`/plugin install knowtarium --marketplace Knowtarium/knowtarium-plugins`. From a shell (Claude
+Code 2.1.292 or later): `claude plugin install knowtarium --marketplace Knowtarium/knowtarium-plugins`.
 
 Then connect this computer once: run `npx knowtarium connect` in a terminal, or ask Claude to
 connect Knowtarium. Either way your browser opens, you sign in and approve this computer, and no
@@ -27,15 +28,16 @@ password, token or key goes in Claude's settings. You need Node.js 20 or later.
 
 ## What it runs, sends and stores
 
-- **It runs** `node ${CLAUDE_PLUGIN_ROOT}/server/launch.mjs`, a small launcher in this plugin. The
-  launcher runs `npx -y knowtarium@{{version}} mcp` (through `cmd /c` on Windows): npx downloads
+- **It runs** `node ${CLAUDE_PLUGIN_ROOT}/server/launch.mjs -y knowtarium@{{version}} mcp` (see
+  `.mcp.json`). The launcher, a small script in this plugin, runs `npx -y knowtarium@{{version}} mcp`
+  (through `cmd /c` on Windows): npx downloads
   the open source [`knowtarium`](https://www.npmjs.com/package/knowtarium) package at exactly
   version {{version}}, with the dependency versions its shrinkwrap pins, from your npm registry, and
   starts its MCP server on stdio. Its source is at {{repository}}.
-- **It sends** encrypted data only, and only to the Knowtarium sync API at `{{apiHost}}`. Notes,
-  file and folder names, comments and history are encrypted and decrypted on this computer
-  (XChaCha20-Poly1305 with libsodium); Knowtarium's servers store ciphertext they can't read.
-  Connecting opens `app.knowtarium.com` in your browser so you can approve this computer.
+- **It talks** only to the Knowtarium sync API at `{{apiHost}}`. Note text, file and folder
+  names, comments and history are encrypted on this computer before they're sent, and decrypted
+  only here (XChaCha20-Poly1305 with libsodium); the API sees only IDs, versions, sizes and
+  timing. Connecting opens `app.knowtarium.com` in your browser so you can approve this computer.
 - **It stores** the connection, encrypted, in your app data folder, with its key in the OS
   keychain (or, where there is none, in a file only you can read), and an encrypted local copy of
   your notes.
@@ -45,9 +47,17 @@ password, token or key goes in Claude's settings. You need Node.js 20 or later.
 
 ## Versions
 
-Plugin version {{version}} runs `knowtarium` {{version}}. Each release of the plugin pins the
-release of the package it was tested with; `/plugin marketplace update knowtarium` fetches a new
-one.
+Plugin version {{version}} runs `knowtarium` {{version}}: each release of the plugin pins the
+release of the package it was tested with. To update, refresh the marketplace, then the plugin, and
+restart Claude Code:
+
+```sh
+claude plugin marketplace update knowtarium
+claude plugin update knowtarium@knowtarium
+```
+
+Inside Claude Code, `/plugin marketplace update knowtarium`, then `/plugin` and **Update now**,
+does the same.
 
 ## Links
 

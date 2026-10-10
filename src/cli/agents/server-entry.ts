@@ -17,7 +17,7 @@ export interface ServerCommand {
  * (`npx -y knowtarium@<version> mcp`), so an agent never picks up a different release than the one
  * that wrote its config. On Windows, `npx` is a batch file that agents can't start directly, so
  * it goes through `cmd /c`. The arguments live in `server-command.json`, which the bundle build
- * (`scripts/build-extras.js`) reads too.
+ * (`scripts/build-extras.js`) reads too, to write them into the plugins' MCP configs.
  */
 export function serverCommand(version: string, platform: NodeJS.Platform): ServerCommand {
   const npx = SERVER_COMMAND.npxArgs.map((arg) => arg.replace("{version}", version));
