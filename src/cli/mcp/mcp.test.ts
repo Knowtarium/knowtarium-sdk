@@ -758,6 +758,33 @@ describe("the MCP server's states", () => {
     expect(b.session.status).toBe("revoked");
   });
 
+  it("lists workspaces once their first sync ends, with their names and revoked access", async () => {
+    const good = await seeded();
+    const bad = await seeded();
+    bad.world.server.tokenRevoked = true;
+    const slow =
+      (server: typeof good.world.server): typeof good.world.server.fetch =>
+      async (url, init) => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return server.fetch(url, init);
+      };
+    // a new MCP process: neither workspace has synced yet
+    const a = await connect(good.world, { wait: false, fetch: slow(good.world.server) });
+    const b = await connect(bad.world, { wait: false, fetch: slow(bad.world.server) });
+    expect(a.session.status).toBe("loading");
+    expect(b.session.status).toBe("loading");
+    const { call } = await serve([a.session, b.session]);
+    expect((await call("get_conventions")).error).toBe(false);
+    const workspaces = (await call("list_workspaces")).json() as { problem: string | null }[];
+    expect(workspaces).toMatchObject([
+      { id: good.world.workspaceId, name: "Clients", notes: 3, status: "ready", problem: null },
+      { id: bad.world.workspaceId, status: "revoked" },
+    ]);
+    expect(workspaces[1]?.problem).toContain(
+      `npx knowtarium disconnect --workspace ${bad.world.workspaceId}`,
+    );
+  });
+
   it("asks which workspace when several can be used, by ID; a shared name is refused", async () => {
     const one = await seeded();
     const two = await seeded();

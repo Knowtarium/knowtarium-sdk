@@ -18,6 +18,7 @@ import type { FolderId, NoteId } from "../../../protocol/index.js";
 import type { WorkspaceSession } from "../session.js";
 import {
   capped,
+  firstSyncs,
   guarded,
   json,
   NOT_CONNECTED,
@@ -181,6 +182,8 @@ export function registerReadTools(server: McpServer, context: ToolContext): void
         if (context.sessions.length === 0) {
           throw new ToolError(context.notConnected ?? NOT_CONNECTED);
         }
+        // a new process: its workspaces' first sync says their names, and which can't be used
+        await firstSyncs(context);
         // each workspace's policy read at once: a slow one doesn't hold up the others
         const workspaces = await Promise.all(
           context.sessions.map(async (session) => ({

@@ -181,6 +181,20 @@ function unusable(session: WorkspaceSession): string | null {
  */
 const FIRST_SYNC_WAIT_MS = 5_000;
 
+/**
+ * Waits, at most `FIRST_SYNC_WAIT_MS` and for all of them at once, for the workspaces still on
+ * their first sync, so their status, name and problem are known: revocation shows on the first
+ * pull, and a disconnect when a session looks for its connection. Never rejects.
+ */
+export async function firstSyncs(context: ToolContext): Promise<void> {
+  await Promise.all(
+    context.sessions.map(async (session) => {
+      await session.firstSync(FIRST_SYNC_WAIT_MS);
+      await session.connected();
+    }),
+  );
+}
+
 /** A session's state as a refusal lists it, with the fix when it can't be used. */
 function stateOf(session: WorkspaceSession): string {
   switch (session.status) {
@@ -206,15 +220,7 @@ function described(session: WorkspaceSession): string {
  */
 async function defaultSession(context: ToolContext): Promise<WorkspaceSession> {
   const candidates = () => context.sessions.filter((session) => !session.ended);
-  if (context.sessions.length > 1 && candidates().length > 1) {
-    // revocation shows on the first sync, and a disconnect when a session looks for its connection
-    await Promise.all(
-      context.sessions.map(async (session) => {
-        await session.firstSync(FIRST_SYNC_WAIT_MS);
-        await session.connected();
-      }),
-    );
-  }
+  if (context.sessions.length > 1 && candidates().length > 1) await firstSyncs(context);
   const usable = context.sessions.length === 1 ? context.sessions : candidates();
   const [only] = usable;
   if (usable.length === 1 && only !== undefined) return only;
