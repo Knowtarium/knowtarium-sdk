@@ -395,6 +395,19 @@ describe("filing clips in the web app", () => {
     expect(recipes.name).toBe("example.com.md");
   });
 
+  it("files a link saved with a user name and password without them, not as unclean", async () => {
+    const { world, web, view, inboxKey } = await withInbox();
+    const clipId = save(world, pair(world), inboxKey, {
+      url: "https://alice:s3cret@example.com/private",
+    });
+    const result = await web.engine.fileClips(view.options());
+    expect(result.filed.map((entry) => entry.clipId)).toEqual([clipId]);
+    expect(result.released).toEqual([]);
+    const note = await web.engine.readNote(clipNoteId(clipId));
+    expect(note.text).toContain("url: https://example.com/private");
+    expect(note.text).not.toContain("s3cret");
+  });
+
   it("numbers a name taken in the folder", async () => {
     const { world, web, view, inboxKey } = await withInbox();
     const paired = pair(world);

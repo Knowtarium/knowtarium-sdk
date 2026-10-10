@@ -151,15 +151,24 @@ export function normalizeCategory(name: string): string {
 }
 
 /** The WHATWG URL parser, typed by hand: `src/` has neither DOM nor Node types on purpose. */
+interface ParsedUrl {
+  readonly href: string;
+  readonly protocol: string;
+  username: string;
+  password: string;
+}
 interface UrlParser {
-  URL: new (input: string) => { readonly href: string; readonly protocol: string };
+  URL: new (input: string) => ParsedUrl;
 }
 const { URL } = globalThis as unknown as UrlParser;
 
-/** The link as `new URL(raw).href`: `http:` or `https:` only, at most 2,048 bytes. */
+/**
+ * The link as `new URL(raw).href` without a user name or password (the page is still saved, the
+ * credentials never are): `http:` or `https:` only, at most 2,048 bytes.
+ */
 function normalizeUrl(raw: unknown): string {
   if (typeof raw !== "string") throw new ClipError("bad_url", "the link must be a string");
-  let url: { readonly href: string; readonly protocol: string };
+  let url: ParsedUrl;
   try {
     url = new URL(raw);
   } catch {
@@ -168,6 +177,8 @@ function normalizeUrl(raw: unknown): string {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new ClipError("bad_url", "only http: and https: links can be saved");
   }
+  url.username = "";
+  url.password = "";
   if (utf8Encode(url.href).length > CLIP_LIMITS.urlBytes) {
     throw new ClipError("too_long", "the link is over 2,048 bytes");
   }
@@ -189,7 +200,7 @@ function matching(value: unknown, pattern: RegExp, field: string): string {
 
 /**
  * A clip payload made valid: IDs and `savedAt` checked; the link `http:` or `https:` as
- * `new URL(raw).href`; every text field without control and format characters (bidi controls
+ * `new URL(raw).href`, without a user name or password; every text field without control and format characters (bidi controls
  * included; U+200D stays, and the note keeps line breaks and tabs) and in NFC; the title also
  * without `\ * ? " < > |` and trimmed; the category through `normalizeCategory`. Throws
  * `ClipError` (`invalid`, `bad_url` or `too_long`) when a field can't be made valid; a title, note

@@ -145,6 +145,18 @@ describe("cleaning a clip", () => {
     }
   });
 
+  it("drops a user name and password from the link, keeping the page", () => {
+    for (const url of [
+      "https://alice:s3cret@example.com/a?b=1#c",
+      "https://alice@example.com/a?b=1#c",
+      "https://:s3cret@example.com/a?b=1#c",
+    ]) {
+      const cleaned = normalizeClip({ ...base, url });
+      expect(cleaned.url, url).toBe("https://example.com/a?b=1#c");
+      expect(normalizeClip(cleaned)).toEqual(cleaned);
+    }
+  });
+
   it("refuses a field over its limit instead of cutting it", () => {
     const long = `https://example.com/${"a".repeat(CLIP_LIMITS.urlBytes)}`;
     expect(codeOf(() => normalizeClip({ ...base, url: long }))).toBe("too_long");
