@@ -3,8 +3,9 @@
 // .d.ts, core edits a note without touching other bytes and imports nothing platform specific,
 // the client reaches only libsodium, zod, yaml and jsdiff, the built crypto entry reproduces the
 // committed vectors, knowtarium/clip (the web clipper's light entry) reaches only the standard
-// libsodium-wrappers build and opens nothing but a pairing payload, the binary runs (in a throwaway home: it never sees the real agent configs,
-// the OS keychain or the production API), and knowtarium/protocol (all the sync API imports)
+// libsodium-wrappers build and opens nothing but a pairing payload, the binary runs (in a
+// throwaway home: it never sees the real agent configs, the OS keychain or the production API),
+// and knowtarium/protocol (all the sync API imports)
 // shares no module with knowtarium/crypto and never imports libsodium.
 // Run `pnpm build` first.
 import assert from "node:assert/strict";
@@ -363,6 +364,8 @@ try {
 }
 
 process.stdout.write(`dist OK: ${Object.keys(pkg.exports).join(", ")} and the knowtarium bin\n`);
+const kib = (bytes) => `${(bytes / 1024).toFixed(1)} KiB`;
 process.stdout.write(
-  `knowtarium/clip: ${String(clipGraph.files.length)} files, ${(clipBytes / 1024).toFixed(1)} KiB (${(clipGzip / 1024).toFixed(1)} KiB gzipped), plus libsodium-wrappers\n`,
+  `knowtarium/clip: ${String(clipGraph.files.length)} files, ${kib(clipBytes)} ` +
+    `(${kib(clipGzip)} gzipped), plus libsodium-wrappers\n`,
 );

@@ -293,7 +293,7 @@ export function openExtensionPairingWith(
   ) {
     throw new ClipError("wrong_key", "the owner didn't vouch for this extension's key");
   }
-  if (!inboxKeyValid(lib, pairing.inboxKey, { ...owner, minRevision: 1 })) {
+  if (!inboxKeyValid(lib, pairing.inboxKey, { ...owner, minRevision: 1, minGeneration: 1 })) {
     throw new ClipError("bad_signature", "the inbox key isn't signed by the workspace owner");
   }
   return pairing;

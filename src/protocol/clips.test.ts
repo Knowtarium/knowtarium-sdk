@@ -13,8 +13,11 @@ import {
   formatId,
   parseExtensionConnectFragment,
   parseServerMessage,
+  POST_CLIP_STATUS,
   PostClipRequest,
+  PostClipResponse,
   PutInboxKeyRequest,
+  readSealedClipHeader,
   routes,
 } from "./index.js";
 import { b64, ct, id, now } from "./test-fixtures.js";
@@ -64,6 +67,18 @@ describe("the clip queue", () => {
     ).toBe(false);
     expect(PostClipRequest.safeParse({ clipId: id("note"), blob: smallest }).success).toBe(false);
     expect(routes.postClip.status).toBe(201);
+  });
+
+  it("answers a post queued or duplicate, and reads a sealed clip's 5 header bytes", () => {
+    expect(PostClipResponse.parse({ status: "duplicate" })).toEqual({ status: "duplicate" });
+    expect(PostClipResponse.safeParse({ status: "stored" }).success).toBe(false);
+    expect(POST_CLIP_STATUS).toEqual({ queued: 201, duplicate: 200 });
+    const blob = new Uint8Array(5 + 48 + 1024);
+    blob.set([1, 0x01, 0x02, 0x03, 0x04]);
+    expect(readSealedClipHeader(blob)).toEqual({ format: 1, generation: 0x01020304 });
+    blob.set([2, 0xff, 0xff, 0xff, 0xff]);
+    expect(readSealedClipHeader(blob)).toEqual({ format: 2, generation: 0xffffffff });
+    expect(readSealedClipHeader(blob.subarray(0, 1000))).toBeNull();
   });
 
   it("claims, acks and releases at most 50 clips", () => {

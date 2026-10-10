@@ -85,9 +85,36 @@ export type SealedClip = z.infer<typeof SealedClip>;
 export const PostClipRequest = z.strictObject({ clipId: ClipId, blob: SealedClip });
 export type PostClipRequest = z.infer<typeof PostClipRequest>;
 
-/** 201 `queued`, or 200 `duplicate` (the clip is queued or filed already). */
-export const PostClipResponse = z.object({ status: z.enum(["queued", "duplicate"]) });
+/**
+ * 201 `queued`, or 200 `duplicate`: the same clip ID waits with the same bytes, or its note
+ * (`clipNoteId`) exists, deleted ones included. The same clip ID waiting with other bytes is 409
+ * `already_exists`: a retry sends the same sealed bytes (see `signAndSealClip`).
+ */
+export const PostClipResponse = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("queued") }),
+  z.object({ status: z.literal("duplicate") }),
+]);
 export type PostClipResponse = z.infer<typeof PostClipResponse>;
+
+/** The HTTP status of each `postClip` answer. */
+export const POST_CLIP_STATUS = { queued: 201, duplicate: 200 } as const satisfies Record<
+  PostClipResponse["status"],
+  number
+>;
+
+/**
+ * The 5 header bytes of a sealed clip, all the server reads: the format byte and the key
+ * generation (uint32 big-endian). Null for a blob too short to be a sealed clip (the header,
+ * `crypto_box_seal`'s 48 bytes and one padded kilobyte); the caller checks the format byte
+ * (`SEALED_CLIP_FORMAT`) and the generation against the latest `inbox_key`.
+ */
+export function readSealedClipHeader(
+  blob: Uint8Array,
+): { readonly format: number; readonly generation: number } | null {
+  if (blob.length < SEALED_CLIP_MIN_BYTES) return null;
+  const [format = 0, a = 0, b = 0, c = 0, d = 0] = blob;
+  return { format, generation: ((a << 24) | (b << 16) | (c << 8) | d) >>> 0 };
+}
 
 /** The extension reads its workspace's latest inbox key (also in a `stale_inbox_key` answer). */
 export const ExtensionInboxKeyResponse = z.object({ inboxKey: SignedInboxKey });

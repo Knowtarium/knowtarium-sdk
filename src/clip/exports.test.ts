@@ -13,6 +13,7 @@ const EXPECTED = [
   "EXTENSION_ERROR_STATUS",
   "EXTENSION_PROTOCOL",
   "EXTENSION_ROUTES",
+  "POST_CLIP_STATUS",
   "createClipId",
   "createConnectSecret",
   "createExtensionKeys",
@@ -53,6 +54,8 @@ describe("the knowtarium/clip entry", () => {
     expect(clip.EXTENSION_CONNECT_PAGE_PATH).toBe(protocol.EXTENSION_CONNECT_PAGE_PATH);
     expect(clip.CLIP_LIMITS.sealedBytes).toBe(protocol.CLIP_QUEUE_LIMITS.sealedClipBytes);
     expect(clip.CLIP_FORMAT_VERSION).toBe(protocol.SEALED_CLIP_FORMAT);
+    expect(clip.POST_CLIP_STATUS).toEqual(protocol.POST_CLIP_STATUS);
+    expect(protocol.routes.postClip.status).toBe(protocol.POST_CLIP_STATUS.queued);
   });
 
   it("makes clip IDs as the protocol formats IDs", () => {

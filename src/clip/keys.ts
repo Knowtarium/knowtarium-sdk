@@ -75,7 +75,8 @@ function fieldsOf(envelope: unknown): SignedEnvelopeFields | null {
 /**
  * Whether an `inbox_key` is one to accept: signed by the pinned owner key, for the paired account
  * and workspace, at revision `minRevision` or above (pass the highest revision verified so far
- * plus one for a newer key) and, with `minGeneration`, not for an older key generation.
+ * plus one for a newer key) and not for a key generation below `minGeneration` (the highest one
+ * verified so far; 1 at pairing).
  */
 export function inboxKeyValid(
   lib: Pick<ClipSodium, "crypto_sign_verify_detached">,
@@ -85,7 +86,7 @@ export function inboxKeyValid(
     readonly accountId: string;
     readonly workspaceId: string;
     readonly minRevision: number;
-    readonly minGeneration?: number;
+    readonly minGeneration: number;
   },
 ): boolean {
   const fields = fieldsOf((signed as { envelope?: unknown } | null)?.envelope);
@@ -98,7 +99,7 @@ export function inboxKeyValid(
     typeof revision === "number" &&
     revision >= Math.max(1, expected.minRevision) &&
     typeof generation === "number" &&
-    generation >= (expected.minGeneration ?? 1) &&
+    generation >= Math.max(1, expected.minGeneration) &&
     envelopeSignatureValid(lib, fields, signed.signature, expected.ownerSigningPublicKey)
   );
 }

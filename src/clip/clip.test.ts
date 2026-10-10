@@ -172,6 +172,36 @@ describe("cleaning a clip", () => {
   });
 });
 
+describe("invisible characters and line separators", () => {
+  it("drops default ignorable characters, keeping U+200D and the emoji style selectors", () => {
+    const cleaned = normalizeClip({
+      ...base,
+      title: "a\u3164b\u115fc\u034fd ❤\ufe0f 👩\u200d💻",
+      note: "x\u3164y",
+      category: "\u3164",
+    });
+    expect(cleaned.title).toBe("abcd ❤\ufe0f 👩\u200d💻");
+    expect(cleaned.note).toBe("xy");
+    // a category of nothing visible is the inbox itself
+    expect(cleaned.category).toBe("");
+    expect(normalizeCategory("Re\u3164ading")).toBe("Reading");
+  });
+
+  it("turns line and paragraph separators into a space, or a line break in the note", () => {
+    const cleaned = normalizeClip({
+      ...base,
+      title: "one\u2028two\u2029three",
+      note: "one\u2028two\u2029three",
+      category: "a\u2028b",
+    });
+    expect(cleaned).toMatchObject({
+      title: "one two three",
+      note: "one\ntwo\nthree",
+      category: "a b",
+    });
+  });
+});
+
 describe("categories", () => {
   it.each([
     ["  Reading   list  ", "Reading list"],
@@ -262,6 +292,19 @@ describe("signing and sealing", () => {
     ).toBe("invalid");
   });
 
+  it("signs a queued payload again to the same signature, sealing it to new bytes", () => {
+    const keys = createExtensionKeys();
+    const inboxKey = { generation: 3, publicKey: signedInbox.envelope.publicKey };
+    const options = { signingSecretKey: keys.privateKey, inboxKey };
+    const first = signAndSealClip(base, options);
+    const again = signAndSealClip(base, options);
+    expect(toHex(first)).not.toBe(toHex(again));
+    const payload = normalizeClip(base);
+    expect(toHex(signClip(sodium(), payload, keys.privateKey))).toBe(
+      toHex(signClip(sodium(), payload, keys.privateKey)),
+    );
+  });
+
   it("makes clip IDs from 16 random bytes", () => {
     const id = createClipId();
     expect(id).toMatch(/^clip_[0-7][0-9a-hjkmnp-tv-z]{25}$/);
@@ -271,7 +314,7 @@ describe("signing and sealing", () => {
 
 describe("the owner-signed keys", () => {
   it("accepts the inbox_key vector under the pinned owner key", () => {
-    expect(verifyInboxKey(signedInbox, { ...owner, minRevision: 1 })).toBe(true);
+    expect(verifyInboxKey(signedInbox, { ...owner, minRevision: 1, minGeneration: 1 })).toBe(true);
     expect(verifyInboxKey(signedInbox, { ...owner, minRevision: 1, minGeneration: 3 })).toBe(true);
   });
 
@@ -287,23 +330,31 @@ describe("the owner-signed keys", () => {
         publicKey: extensionSignKey,
       },
     };
-    expect(verifyInboxKey(swappedKey, { ...owner, minRevision: 1 })).toBe(false);
-    expect(verifyInboxKey(swapped, { ...owner, minRevision: 1 })).toBe(false);
-    expect(verifyInboxKey(signedInbox, { ...owner, minRevision: 2 })).toBe(false);
+    expect(verifyInboxKey(swappedKey, { ...owner, minRevision: 1, minGeneration: 1 })).toBe(false);
+    expect(verifyInboxKey(swapped, { ...owner, minRevision: 1, minGeneration: 1 })).toBe(false);
+    expect(verifyInboxKey(signedInbox, { ...owner, minRevision: 2, minGeneration: 1 })).toBe(false);
     expect(verifyInboxKey(signedInbox, { ...owner, minRevision: 1, minGeneration: 4 })).toBe(false);
     expect(
       verifyInboxKey(signedInbox, {
         ...owner,
         workspaceId: "ws_3bbng6pxm1hjbt5bdrrf7dks7f",
         minRevision: 1,
+        minGeneration: 1,
       }),
     ).toBe(false);
     const stranger = createExtensionKeys().publicKey;
     expect(
-      verifyInboxKey(signedInbox, { ...owner, ownerSigningPublicKey: stranger, minRevision: 1 }),
+      verifyInboxKey(signedInbox, {
+        ...owner,
+        ownerSigningPublicKey: stranger,
+        minRevision: 1,
+        minGeneration: 1,
+      }),
     ).toBe(false);
     const extra = { ...signedInbox, envelope: { ...signedInbox.envelope, noteId: "x" } };
-    expect(verifyInboxKey(extra as never, { ...owner, minRevision: 1 })).toBe(false);
+    expect(verifyInboxKey(extra as never, { ...owner, minRevision: 1, minGeneration: 1 })).toBe(
+      false,
+    );
   });
 
   it("accepts the extension_key vector for exactly its extension and key", () => {

@@ -64,9 +64,11 @@ export interface PostClipRequest {
   readonly blob: string;
 }
 
-export interface PostClipResponse {
-  readonly status: "queued" | "duplicate";
-}
+/** 201 `queued`; 200 `duplicate` (the clip waits with these bytes already, or it was filed). */
+export type PostClipResponse = { readonly status: "queued" } | { readonly status: "duplicate" };
+
+/** The HTTP status of each `postClip` answer. */
+export const POST_CLIP_STATUS = { queued: 201, duplicate: 200 } as const;
 
 export interface ExtensionInboxKeyResponse {
   readonly inboxKey: SignedInboxKey;
@@ -81,6 +83,7 @@ export const EXTENSION_ERROR_STATUS = {
   quota_exceeded: 402,
   forbidden: 403,
   not_found: 404,
+  /** The clip ID waits with other bytes: a retry must send the same sealed bytes. */
   already_exists: 409,
   /** The body carries the latest `inboxKey`: verify it, seal again, retry once. */
   stale_inbox_key: 409,

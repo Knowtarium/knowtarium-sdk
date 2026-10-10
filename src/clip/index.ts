@@ -75,7 +75,8 @@ export function openExtensionPairing(
 /**
  * Whether to accept an `inbox_key` (from `getExtensionInboxKey` or a `stale_inbox_key` answer):
  * signed by the pinned owner key for the paired account and workspace, at `minRevision` or above
- * (the highest verified so far plus one) and not below `minGeneration`.
+ * (the highest verified so far plus one) and not below `minGeneration` (the highest generation
+ * verified so far), so a server can't move the extension back to an older key.
  */
 export function verifyInboxKey(
   signed: SignedInboxKey,
@@ -84,7 +85,7 @@ export function verifyInboxKey(
     readonly accountId: string;
     readonly workspaceId: string;
     readonly minRevision: number;
-    readonly minGeneration?: number;
+    readonly minGeneration: number;
   },
 ): boolean {
   return inboxKeyValid(sodium(), signed, expected);
@@ -108,6 +109,12 @@ export function verifyExtensionKey(
  * Cleans the payload (`normalizeClip`), signs it with the extension's secret key, pads it to 1 KiB
  * steps and seals it to the inbox key: `0x01 ‖ generation ‖ crypto_box_seal(...)`, at most 24
  * KiB. Send it as `blob` (base64url) with the payload's `clipId`.
+ *
+ * Queue the payload (with its `clipId` and `savedAt` fixed) and the sealed bytes. Ed25519 is
+ * deterministic, so signing the same payload again gives the same signature, but each seal is
+ * new bytes: retry a failed send (network, 5xx, 404, 429) with the SAME sealed bytes, since the
+ * API answers a clip ID it holds with other bytes 409 `already_exists`; seal again only after
+ * `stale_inbox_key` (the API kept nothing then), with the new inbox key.
  */
 export function signAndSealClip(
   payload: ClipInput,

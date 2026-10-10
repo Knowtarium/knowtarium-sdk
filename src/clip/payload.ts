@@ -85,23 +85,33 @@ const WORKSPACE_ID = new RegExp(`^ws_${ID_BODY}$`);
 const EXTENSION_ID = new RegExp(`^ext_${ID_BODY}$`);
 const ISO_MILLISECONDS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
-/** Control (Cc), format (Cf, the bidi controls among them) and lone surrogate (Cs) characters. */
-const INVISIBLE = /[\p{Cc}\p{Cf}\p{Cs}]/gu;
-const ZERO_WIDTH_JOINER = "‍";
+/**
+ * Control (Cc), format (Cf, the bidi controls among them), lone surrogate (Cs) and default
+ * ignorable characters (which render as nothing, like U+3164 HANGUL FILLER or U+200B).
+ */
+const INVISIBLE = /[\p{Cc}\p{Cf}\p{Cs}\p{Default_Ignorable_Code_Point}]/gu;
+/** Kept although invisible: U+200D joins emoji, U+FE0E and U+FE0F pick text or emoji style. */
+const KEPT_INVISIBLE = new Set(["\u200d", "\ufe0e", "\ufe0f"]);
+/** The line and paragraph separators, which break a line without being a control character. */
+const LINE_SEPARATORS = /[\u2028\u2029]/g;
 /** What a file name can't hold on some system (core's `UNSAFE`, controls and bidi aside). */
 const TITLE_UNSAFE = /[\\*?"<>|]/g;
 const NAME_UNSAFE = /[\\/:*?"<>|]/g;
 const WINDOWS_RESERVED = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
 
 /**
- * Text without control and format characters (U+200D, which joins emoji, stays). With
- * `keepLines`, line breaks (CR LF and CR become LF) and tabs stay too. Callers apply NFC after
- * their own removals, so a removal can't leave a sequence NFC would compose on a second pass.
+ * Text without control, format and default ignorable characters (U+200D, which joins emoji, and
+ * the emoji style selectors stay). Line and paragraph separators become a space, or with
+ * `keepLines` a line break; with `keepLines`, line breaks (CR LF and CR become LF) and tabs stay
+ * too. Callers apply NFC after their own removals, so a removal can't leave a sequence NFC would
+ * compose on a second pass.
  */
 function visible(text: string, keepLines: boolean): string {
-  const unified = keepLines ? text.replace(/\r\n?/g, "\n") : text;
+  const unified = keepLines
+    ? text.replace(/\r\n?/g, "\n").replace(LINE_SEPARATORS, "\n")
+    : text.replace(LINE_SEPARATORS, " ");
   return unified.replace(INVISIBLE, (char) =>
-    char === ZERO_WIDTH_JOINER || (keepLines && (char === "\n" || char === "\t")) ? char : "",
+    KEPT_INVISIBLE.has(char) || (keepLines && (char === "\n" || char === "\t")) ? char : "",
   );
 }
 
