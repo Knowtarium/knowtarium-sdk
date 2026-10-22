@@ -471,6 +471,11 @@ async function proposalDetails(
   for (const pending of changes) {
     let name: string | null = null;
     let title: string | null = null;
+    // a delete proposal has no blob: it proposes no new name or title
+    if (pending.kind === "delete") {
+      details.set(pending.id, { name, title, summary: summaries.get(pending.id) ?? null });
+      continue;
+    }
     try {
       const { data: blob } = await session.api.call(routes.getPendingBlob, {
         params: { workspaceId, pendingId: pending.id },
@@ -683,7 +688,7 @@ export function registerWriteTools(server: McpServer, context: ToolContext): Reg
     {
       title: "My pending changes",
       description:
-        "This agent's proposals and what became of them (open, approved, rejected with the reviewer's comment), each with when it was submitted, the proposed file name and title, and your summary. Read rejections before trying again.",
+        "This agent's proposals and what became of them (open, approved, rejected with the reviewer's comment), each with its `kind` (`edit`, or `delete` for a proposed delete), when it was submitted, the proposed file name and title, and your summary. Read rejections before trying again.",
       inputSchema: {
         workspace,
         status: z.enum(["open", "approved", "rejected"]).optional(),
@@ -722,6 +727,8 @@ export function registerWriteTools(server: McpServer, context: ToolContext): Reg
               ? session.view.pathOf(pending.noteId)
               : pending.noteId,
             noteId: pending.noteId,
+            // `edit` (a new version, a move or a new note included) or `delete`
+            kind: pending.kind,
             status: pending.status,
             submittedAt: pending.createdAt,
             proposedName: detail?.name ?? null,
@@ -883,16 +890,18 @@ export function registerWriteTools(server: McpServer, context: ToolContext): Reg
           { workspaceId: session.workspaceId, id },
           findings,
         );
-        const { data } = await session.api.call(routes.recordCheck, {
-          params: { workspaceId: session.workspaceId },
-          body: {
-            id,
-            noteId: note.noteId,
-            noteVersion: version,
-            ciphertext: sealed.ciphertext,
-          },
-          idempotent: true,
-        });
+        const { data } = await withScope(session, () =>
+          session.api.call(routes.recordCheck, {
+            params: { workspaceId: session.workspaceId },
+            body: {
+              id,
+              noteId: note.noteId,
+              noteVersion: version,
+              ciphertext: sealed.ciphertext,
+            },
+            idempotent: true,
+          }),
+        );
         session.addCheck({
           id: data.check.id,
           noteId: note.noteId,
@@ -942,7 +951,9 @@ export function registerWriteTools(server: McpServer, context: ToolContext): Reg
           kind: "conflict" as const,
           conflictsWith,
         };
-        const comment = await session.engine.addComment(note.noteId, record);
+        const comment = await withScope(session, () =>
+          session.engine.addComment(note.noteId, record),
+        );
         return json({ commentId: comment.id }, session);
       }),
   );
@@ -970,15 +981,15 @@ export function registerWriteTools(server: McpServer, context: ToolContext): Reg
             `No comment ${args.comment_id} on ${session.view.pathOf(note.noteId)}; list_comments shows the threads and their ids.`,
           );
         }
-        const comment = await session.engine.addComment(
-          note.noteId,
-          newComment({
-            author: context.actor(),
-            at: context.now(),
-            noteId: note.noteId,
-            text: args.text,
-            parent: args.comment_id,
-          }),
+        const reply = newComment({
+          author: context.actor(),
+          at: context.now(),
+          noteId: note.noteId,
+          text: args.text,
+          parent: args.comment_id,
+        });
+        const comment = await withScope(session, () =>
+          session.engine.addComment(note.noteId, reply),
         );
         return json({ commentId: comment.id }, session);
       }),

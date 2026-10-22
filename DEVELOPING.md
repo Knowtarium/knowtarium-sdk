@@ -440,7 +440,8 @@ canonicalizer. `pnpm test` runs the crypto tests in Node and again under happy-d
   `agent_edited` event (`envelopeProtocolVersion`).
 - **Agent permissions (protocol 3)**: `AgentPermission` (`notes.move`, `notes.delete`,
   `folders.create`, `folders.rename`, `folders.move`, `folders.delete`), only with `read-write`,
-  none by default; moving a note needs `notes.move` too, directly or as a proposal
+  none by default. Adding a permission needs a protocol bump: `AgentToken.permissions` and
+  `agentScopeText` refuse a value they don't know, so older clients would fail on it; moving a note needs `notes.move` too, directly or as a proposal
   (`permission_required`). A token carries `permissions`, `scopeRevision`, `scopeSha256` and the
   owner's signed `scope` (`SignedAgentScope`: the `agent_scope` envelope and the scope it hashes;
   null at revision 0, a token from before). `approveConnect` takes `permissions` with the owner's

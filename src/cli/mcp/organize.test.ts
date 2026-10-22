@@ -5,17 +5,22 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { ready, toBase64Url } from "../../crypto/index.js";
 import {
   type AgentPermission,
+  agentScopeSha256,
   type FolderId,
   PROTOCOL_HEADER,
   routes,
 } from "../../protocol/index.js";
 import {
   EncryptedCache,
+  encryptAgentName,
   MemoryTrustStorage,
   newId,
+  prepareConnectScope,
   prepareFolder,
   TrustState,
 } from "../../client/index.js";
+import { fakeSockets } from "../../client/testing/fake-socket.js";
+import { flush } from "../../client/testing/http.js";
 import { World } from "../../client/testing/world.js";
 import { FileCacheAdapter } from "../storage/file-cache.js";
 import type { AgentScopeFloor, Connection, ScopeFloorStore } from "../storage/credentials.js";
@@ -253,6 +258,136 @@ describe("organizing tools", () => {
     expect(session.scope.folderIds).toEqual([research, archive]);
   });
 
+  it("takes the permissions the owner signed at connect, and refuses unsigned ones", async () => {
+    const { world, web } = await seeded();
+    const bytes = (length: number, fill: number) => toBase64Url(new Uint8Array(length).fill(fill));
+    const approval = {
+      tokenId: world.tokenId,
+      tokenSecretSha256: bytes(32, 1),
+      workspaceId: world.workspaceId,
+      access: "read-write" as const,
+      folderIds: [],
+      encName: encryptAgentName(
+        world.key,
+        { workspaceId: world.workspaceId, tokenId: world.tokenId },
+        "Claude",
+      ),
+      publicKey: toBase64Url(world.agent.publicKey),
+      keyGeneration: 1,
+      encWorkspaceKey: bytes(80, 2),
+      signedAt: new Date().toISOString(),
+      signature: bytes(64, 3),
+      keyCommitment: "c".repeat(64),
+      generationSignedAt: new Date().toISOString(),
+      generationSignature: bytes(64, 4),
+    };
+    const scope = await prepareConnectScope(world.signer, {
+      workspaceId: world.workspaceId,
+      tokenId: world.tokenId,
+      access: "read-write",
+      folderIds: [],
+      permissions: ["notes.delete", "folders.create"],
+    });
+    // permissions without the owner's signed scope are refused
+    await expect(
+      web.api.call(routes.approveConnect, {
+        params: { requestId: newId("cr") },
+        body: { ...approval, permissions: ["notes.delete"] },
+      }),
+    ).rejects.toThrow();
+    // a forged scope signature is refused
+    await expect(
+      web.api.call(routes.approveConnect, {
+        params: { requestId: newId("cr") },
+        body: { ...approval, ...scope, scopeSignature: bytes(64, 9) },
+      }),
+    ).rejects.toThrow();
+    const { data } = await web.api.call(routes.approveConnect, {
+      params: { requestId: newId("cr") },
+      body: { ...approval, ...scope },
+    });
+    expect(data.token).toMatchObject({
+      scopeRevision: 1,
+      permissions: ["notes.delete", "folders.create"],
+    });
+    const { session, tools } = await connect(world);
+    expect(session.scope).toMatchObject({ revision: 1, verified: true });
+    expect((await tools()).filter((name) => ORGANIZE.includes(name)).sort()).toEqual([
+      "create_folder",
+      "delete_note",
+    ]);
+  });
+
+  it("follows a live scope_changed ping: reads the token again and switches the tools", async () => {
+    const { world } = await seeded();
+    const { session, tools, listChanged } = await connect(world);
+    const { connect: sockets, sockets: opened } = fakeSockets();
+    session.goLive(sockets);
+    for (let i = 0; i < 50 && opened.length === 0; i++) await flush();
+    expect((await tools()).filter((name) => ORGANIZE.includes(name))).toEqual([]);
+    const before = listChanged();
+    await world.grantScope({ permissions: ["notes.delete"] });
+    opened[0]?.receive({ type: "scope_changed", revision: 1 });
+    for (let i = 0; i < 100 && !session.allows("notes.delete"); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(await tools()).toContain("delete_note");
+    expect(listChanged()).toBeGreaterThan(before);
+  });
+
+  it("keeps the tools hidden when the server widens a scope the owner didn't sign", async () => {
+    const { world } = await seeded();
+    const { session, tools } = await connect(world);
+    await grant(world, session, []);
+    const [signed] = world.server.agentScopes;
+    if (signed === undefined) throw new Error("no scope");
+    const widened = {
+      access: "read-write" as const,
+      folderIds: [],
+      permissions: ["notes.delete" as const, "folders.delete" as const],
+    };
+    // the owner's revision 1 with a wider scope beside it: the hash no longer matches
+    world.server.agentScopes.splice(0, 1, { ...signed, scope: widened });
+    world.server.agentPermissions = [...widened.permissions];
+    await session.refreshScope();
+    expect(session.scope).toMatchObject({ revision: 1, problem: "hash_mismatch" });
+    // a revision 2 the owner never signed: the signature doesn't verify
+    const scopeSha256 = await agentScopeSha256(widened);
+    world.server.agentScopes.splice(0, 1, signed, {
+      envelope: { ...signed.envelope, revision: 2, scopeSha256 },
+      signature: signed.signature,
+      scope: widened,
+    });
+    world.server.scopeRevision = 2;
+    await session.refreshScope();
+    expect(session.scope).toMatchObject({ revision: 1, problem: "bad_signature" });
+    expect(session.permissions).toEqual([]);
+    expect((await tools()).filter((name) => ORGANIZE.includes(name))).toEqual([]);
+  });
+
+  it("reads once more when the scope changes during a read, and pulls if a caller asked", async () => {
+    const { world, research, archive } = await seeded();
+    const { session } = await connect(world);
+    let open = (): void => undefined;
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    world.server.tamper.hold = (route) => (route === "getCurrentToken" ? gate : undefined);
+    const first = session.refreshScope();
+    await flush();
+    // meanwhile the owner narrows the folders, and a ping asks for a refresh with a pull
+    await world.grantScope({ permissions: ["notes.delete"], folderIds: [research] });
+    const second = session.refreshScope({ pull: true });
+    delete world.server.tamper.hold;
+    open();
+    await Promise.all([first, second]);
+    expect(session.scope).toMatchObject({ revision: 1, folderIds: [research] });
+    expect(session.allows("notes.delete")).toBe(true);
+    // the copy was read again for the narrowed scope
+    expect(session.loaded).toBe(true);
+    expect([...session.view.folders.keys()]).not.toContain(archive);
+  });
+
   it("sends protocol 3 on every request", async () => {
     const { world } = await seeded();
     await connect(world);
@@ -433,6 +568,37 @@ describe("folder tools", () => {
     const answer = await call("create_folder", { parent: "Research", name: "Drafts" });
     expect(answer.error).toBe(true);
     expect(answer.text).toBe(FOLDER_CHANGES_ASK_FIRST);
+  });
+
+  it("refuses folders outside its scope, and the inbox for a delete", async () => {
+    const { world, web, folder, research } = await seeded();
+    const inbox = await folder("Inbox");
+    const { inboxKey } = await web.engine.ensureInboxKey({ folderId: inbox });
+    expect(inboxKey).not.toBeNull();
+    const whole = await connect(world);
+    await grant(world, whole.session, all);
+    // the session reads the inbox key with its filing pass
+    await whole.session.fileClips();
+    expect(whole.session.inboxFolderId).toBe(inbox);
+    const inboxDelete = await whole.call("delete_folder", { folder: "Inbox" });
+    expect(inboxDelete.error).toBe(true);
+    expect(inboxDelete.text).toMatch(/inbox/);
+    // renaming the inbox is allowed (the clipper follows its ID)
+    expect((await whole.call("rename_folder", { folder: "Inbox", name: "Saved" })).error).toBe(
+      false,
+    );
+    const scoped = await connect(world, { folderIds: [research] });
+    await grant(world, scoped.session, all, { folderIds: [research] });
+    for (const [tool, args] of [
+      ["rename_folder", { folder: "Archive", name: "Old" }],
+      ["move_folder", { folder: "Archive", parent: "Research" }],
+      ["delete_folder", { folder: "Archive" }],
+      ["create_folder", { parent: "Archive", name: "New" }],
+    ] as const) {
+      const answer = await scoped.call(tool, args);
+      expect(answer.error, tool).toBe(true);
+      expect(answer.text, tool).toMatch(/among the folders this agent may use/);
+    }
   });
 
   it("explains another agent's protected folder", async () => {

@@ -243,6 +243,9 @@ export class WorkspaceSession {
   private currentScope: SessionScope;
   /** The scope read running now, if any (concurrent callers share it). */
   private scopeRead: Promise<void> | undefined;
+  /** A call came in while a read ran (read once more), and whether any caller asked to pull. */
+  private scopeAgain = false;
+  private scopePull = false;
   /** Who wants to know when the scope changes (the MCP server's tool list). */
   private readonly scopeListeners = new Set<() => void>();
 
@@ -382,17 +385,41 @@ export class WorkspaceSession {
    * (`SyncEngine.reset`), and pulled again from version 0 when `pull` (else the next sync does);
    * a change of permissions alone needs no pull. `credentials.enc` stays as written at connect.
    * Runs at start, on `scope_changed` and once after `scope_denied`, `permission_required` or
-   * `stale_agent_scope`. Never rejects.
+   * `stale_agent_scope`. A call while a read runs joins it and has it read once more after (its
+   * `pull` counts too), so a scope changed meanwhile isn't missed. Never rejects.
    */
   refreshScope(options: { readonly pull?: boolean } = {}): Promise<void> {
-    this.scopeRead ??= this.readScope(options.pull === true).finally(() => {
-      this.scopeRead = undefined;
+    if (options.pull === true) this.scopePull = true;
+    // a call while a read runs: what it answers may already be stale, so read once more after
+    if (this.scopeRead !== undefined) {
+      this.scopeAgain = true;
+      return this.scopeRead;
+    }
+    const reads = async () => {
+      let reset = false;
+      do {
+        this.scopeAgain = false;
+        if (await this.readScope()) reset = true;
+      } while (this.readScopeAgain());
+      const pull = this.scopePull;
+      this.scopePull = false;
+      if (reset && pull) await this.sync();
+    };
+    const read = reads().finally(() => {
+      if (this.scopeRead === read) this.scopeRead = undefined;
     });
-    return this.scopeRead;
+    this.scopeRead = read;
+    return read;
   }
 
-  private async readScope(pull: boolean): Promise<void> {
-    if (this.ended) return;
+  /** Whether a call came in during the last scope read, so it reads once more. */
+  private readScopeAgain(): boolean {
+    return this.scopeAgain && !this.ended;
+  }
+
+  /** Reads and checks the token's scope once; true when it dropped the local copy. */
+  private async readScope(): Promise<boolean> {
+    if (this.ended) return false;
     let token;
     try {
       ({
@@ -400,7 +427,7 @@ export class WorkspaceSession {
       } = await this.policyApi.call(routes.getCurrentToken));
     } catch {
       // offline or refused: the last verified scope stays; the sync says why
-      return;
+      return false;
     }
     const before = this.currentScope;
     const floor = before.verified ? before.revision : 0;
@@ -413,7 +440,7 @@ export class WorkspaceSession {
     });
     if (!checked.ok) {
       this.setScope({ ...before, problem: checked.problem });
-      return;
+      return false;
     }
     const verified = checked.verified;
     const next =
@@ -432,7 +459,7 @@ export class WorkspaceSession {
     }
     const moved = reachChanged(before, next);
     this.setScope(next);
-    if (!moved) return;
+    if (!moved) return false;
     this.engine.setAgentFolderIds(next.folderIds);
     this.view.setScope(next.folderIds);
     this.lastPolicyAt = Number.NEGATIVE_INFINITY;
@@ -441,9 +468,9 @@ export class WorkspaceSession {
       this.loaded = false;
     } catch {
       // the engine stopped (revoked): nothing to pull
-      return;
+      return false;
     }
-    if (pull) await this.sync();
+    return true;
   }
 
   private setScope(scope: SessionScope): void {
