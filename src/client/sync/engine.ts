@@ -32,6 +32,7 @@ import {
   type MergedNote,
   restoreVersion,
   type RestoreVerify,
+  restoreVersionInto,
   type TakenNames,
   undoAgentFolderEvent,
   type UndoFolderResult,
@@ -114,6 +115,14 @@ import {
   submitPending,
 } from "./review.js";
 import { deleteNote, type NoteWrite, writeNote } from "./writes.js";
+
+/** What `SyncEngine.restoreVersion` takes besides the folder. */
+export interface RestoreOptions {
+  readonly baseVersion?: number;
+  readonly takenNames: readonly string[];
+  readonly signedAt?: string;
+  readonly verify?: RestoreVerify;
+}
 
 /** What a sync engine needs for one workspace. */
 export interface SyncEngineOptions {
@@ -417,19 +426,32 @@ export class SyncEngine {
    * Pass `baseVersion` (the version current when the person chose to restore) to make a retry
    * safe: an earlier attempt that got through isn't saved twice. Pass `verify: false` (or a
    * function of the folder that answers false) where agents apply changes directly, so the
-   * restore adds no `verified` entry of the person's.
+   * restore adds no `verified` entry of the person's. With `folderId` it is saved into that
+   * folder, moving the note back there as a person's move would (undoing an agent's move inside a
+   * run of its versions); a folder deleted since answers `folder_missing` instead, and nothing
+   * changes.
    */
   restoreVersion(
     noteId: NoteId,
     version: number,
-    options: {
-      readonly baseVersion?: number;
-      readonly takenNames: readonly string[];
-      readonly signedAt?: string;
-      readonly verify?: RestoreVerify;
-    },
-  ): Promise<WriteResult> {
-    return this.run(() => restoreVersion(this.context, noteId, version, options));
+    options: RestoreOptions & { readonly folderId?: undefined },
+  ): Promise<WriteResult>;
+  restoreVersion(
+    noteId: NoteId,
+    version: number,
+    options: RestoreOptions & { readonly folderId: FolderId },
+  ): Promise<UndoVersionResult>;
+  restoreVersion(
+    noteId: NoteId,
+    version: number,
+    options: RestoreOptions & { readonly folderId?: FolderId | undefined },
+  ): Promise<UndoVersionResult> {
+    const { folderId, ...rest } = options;
+    return this.run(() =>
+      folderId === undefined
+        ? restoreVersion(this.context, noteId, version, rest)
+        : restoreVersionInto(this.context, noteId, version, { ...rest, folderId }),
+    );
   }
 
   /** The three-way merge of a 409, with the base version fetched and verified. */

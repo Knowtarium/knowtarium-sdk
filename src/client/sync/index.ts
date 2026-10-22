@@ -13,7 +13,12 @@ export {
 } from "./folder-events.js";
 export { type Confirmation } from "./confirmations.js";
 export type { AgentConnection } from "./context.js";
-export { type EngineLiveOptions, SyncEngine, type SyncEngineOptions } from "./engine.js";
+export {
+  type EngineLiveOptions,
+  type RestoreOptions,
+  SyncEngine,
+  type SyncEngineOptions,
+} from "./engine.js";
 export {
   type AttachmentSnapshot,
   type FolderSnapshot,

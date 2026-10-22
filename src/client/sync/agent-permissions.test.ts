@@ -400,6 +400,57 @@ describe("an agent's note delete", () => {
     });
   });
 
+  it("restores a version into the folder it names, unless that folder is gone", async () => {
+    const { world, web, cli, home, noteId } = await seeded(["notes.move"]);
+    const other = await folder(world, web, "Other");
+    await cli.engine.pull();
+    const moved = await cli.engine.writeAsAgent({
+      noteId,
+      folderId: other,
+      baseVersion: 1,
+      name: "a.md",
+      text: note("A"),
+    });
+    expect(moved.status).toBe("saved");
+    const edited = await cli.engine.writeAsAgent({
+      noteId,
+      folderId: other,
+      baseVersion: 2,
+      name: "a.md",
+      text: note("A, edited"),
+    });
+    expect(edited.status).toBe("saved");
+    await web.engine.pull();
+    // version 1 comes back where it was, as the person's own move
+    const restored = await web.engine.restoreVersion(noteId, 1, {
+      baseVersion: 3,
+      takenNames: [],
+      folderId: home,
+    });
+    expect(restored).toMatchObject({ status: "saved", note: { version: 4, folderId: home } });
+    expect(world.server.notes.get(noteId)?.folderId).toBe(home);
+    // into a folder deleted since: folder_missing, from the server's refusal or the engine's own
+    // knowledge, and nothing changes
+    await web.api.call(routes.deleteFolder, {
+      params: { workspaceId: world.workspaceId, folderId: other },
+    });
+    const refused = await web.engine.restoreVersion(noteId, 3, {
+      baseVersion: 4,
+      takenNames: [],
+      folderId: other,
+    });
+    expect(refused).toEqual({ status: "folder_missing", folderId: other });
+    await web.engine.pull();
+    expect(
+      await web.engine.restoreVersion(noteId, 3, {
+        baseVersion: 4,
+        takenNames: [],
+        folderId: other,
+      }),
+    ).toEqual({ status: "folder_missing", folderId: other });
+    expect(world.server.notes.get(noteId)?.versions).toHaveLength(4);
+  });
+
   it("needs notes.move to move a note, directly or as a proposal", async () => {
     const { world, web, cli, noteId, scopeRevision } = await seeded([]);
     const other = await folder(world, web, "Other");

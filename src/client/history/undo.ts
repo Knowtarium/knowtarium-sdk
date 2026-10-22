@@ -63,9 +63,35 @@ async function verifiedBefore(
 export type UndoVersionResult =
   WriteResult | { readonly status: "folder_missing"; readonly folderId: FolderId };
 
-/** Whether the server's refusal of a restore means its folder is gone. */
+/** Whether the engine knows a folder as deleted. */
 function folderGone(context: SyncContext, folderId: FolderId): boolean {
   return context.folders.get(folderId)?.deleted === true;
+}
+
+/**
+ * `restoreVersion` into a given folder (session): the old version comes back as a new signed
+ * version in `folderId`, moving the note there when it sits elsewhere, as a person's move does
+ * (the server checks it the same way). When that folder was deleted since (as the engine's folders
+ * say, or the server's `not_found` for the write), answers `folder_missing` and nothing changes.
+ */
+export async function restoreVersionInto(
+  context: SyncContext,
+  noteId: NoteId,
+  version: number,
+  options: Parameters<typeof restoreVersion>[3] & { readonly folderId: FolderId },
+): Promise<UndoVersionResult> {
+  if (folderGone(context, options.folderId)) {
+    return { status: "folder_missing", folderId: options.folderId };
+  }
+  try {
+    return await restoreVersion(context, noteId, version, options);
+  } catch (error) {
+    // the folder the version comes back to is gone (deleted since, unknown to this engine)
+    if (isSyncApiError(error, "not_found")) {
+      return { status: "folder_missing", folderId: options.folderId };
+    }
+    throw error;
+  }
 }
 
 /**
@@ -152,24 +178,13 @@ export async function undoAgentVersion(
     // the person never reviewed what an agent wrote: no `verified` entry for it, whatever
     // `verify` (`restoreVersion` drops the `human:` entries it carries, which no person signed)
     const verify = (await personWroteVersion(context, before)) ? options.verify : false;
-    if (folderGone(context, before.folderId)) {
-      return { status: "folder_missing", folderId: before.folderId };
-    }
-    try {
-      return await restoreVersion(context, noteId, version - 1, {
-        baseVersion: version,
-        folderId: before.folderId,
-        takenNames: typeof takenNames === "function" ? takenNames(before.folderId) : takenNames,
-        ...(options.signedAt === undefined ? {} : { signedAt: options.signedAt }),
-        ...(verify === undefined ? {} : { verify }),
-      });
-    } catch (error) {
-      // the folder the version comes back to is gone (deleted since, unknown to this engine)
-      if (isSyncApiError(error, "not_found")) {
-        return { status: "folder_missing", folderId: before.folderId };
-      }
-      throw error;
-    }
+    return restoreVersionInto(context, noteId, version - 1, {
+      baseVersion: version,
+      folderId: before.folderId,
+      takenNames: typeof takenNames === "function" ? takenNames(before.folderId) : takenNames,
+      ...(options.signedAt === undefined ? {} : { signedAt: options.signedAt }),
+      ...(verify === undefined ? {} : { verify }),
+    });
   }
   // an agent's delete always has a version with content before it
   if (undoneType === "agent_deleted") {
