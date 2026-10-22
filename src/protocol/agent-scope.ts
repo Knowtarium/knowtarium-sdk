@@ -29,7 +29,8 @@ export type TokenAccess = z.infer<typeof TokenAccess>;
 /**
  * What an agent may do on top of `read-write`, in this order (also their order in the scope
  * hash): move a note to another folder, delete a note, create (or revive) a folder, rename one,
- * move one, delete an empty one.
+ * move one, delete an empty one. Adding one needs a protocol bump: `AgentToken.permissions` and
+ * `agentScopeText` refuse a value they don't know, so a client of this version would fail on it.
  */
 export const AgentPermission = z.enum([
   "notes.move",

@@ -16,6 +16,7 @@ import {
   formatVersionTag,
   MISSING_AGENT_POLICY_SHA256,
   type NoteId,
+  SIGNATURE_MAX_SKEW_SECONDS,
   routes,
 } from "../../protocol/index.js";
 import { isSyncApiError, RequestValidationError, VaultError } from "../errors/index.js";
@@ -1055,14 +1056,52 @@ function reaches(
 }
 
 /**
+ * The folders an action touched, for the scope's reach (the folder, a create's parent, both
+ * parents of a move) and for the modes table (every folder whose contents change: a note
+ * delete's folder, a create's parent, a rename's or a folder delete's folder and parent, a move's
+ * folder and both parents). Null is the top level; `modes` is null when a parent isn't known.
+ */
+function touchedBy(
+  action: AgentAction,
+  lookup: AgentPolicyFolderLookup,
+): { readonly reach: (string | null)[]; readonly modes: (string | null)[] | null } {
+  if (action.kind !== "folder") return { reach: [action.folderId], modes: [action.folderId] };
+  const { event } = action.entry;
+  switch (event.action) {
+    case "created":
+    case "restored":
+      return { reach: [event.folderId, event.parentAfter], modes: [event.parentAfter] };
+    case "moved":
+      return {
+        reach: [event.folderId, event.parentBefore, event.parentAfter],
+        modes: [event.folderId, event.parentBefore, event.parentAfter],
+      };
+    case "renamed":
+    case "deleted": {
+      // the row names the parent; a live folder's own record agrees
+      const parent =
+        event.parentBefore ??
+        (lookup(event.folderId) === undefined ? null : (lookup(event.folderId)?.parentId ?? null));
+      return { reach: [event.folderId], modes: [event.folderId, parent] };
+    }
+  }
+}
+
+/**
  * Audits an agent's protocol 3 action (a note delete or a folder change, from `agentActions`)
- * against the scope revisions the owner signed for its token (`fetchTokenScopes`; read them with
- * the device's floor): it is allowed only under the newest revision signed before the action,
- * when the action names that very revision, and its scope holds the action's permission and
- * reaches every folder the action touched (the folder, and for a create its parent, for a move
- * both parents). The policy part is checked as for edits (`auditAgentVersion`'s rule). A list
- * with a gap or below the floor is `unchecked`, as is an action whose folders aren't known
- * (`folders`, defaulting to the engine's). For display: the server enforces the scope.
+ * against the scope revisions the owner signed for its token (`fetchTokenScopes`, read with the
+ * device's floor): the revision R the action names must be the one in force when it was signed,
+ * allowing for the clock skew a signature may have (`SIGNATURE_MAX_SKEW_SECONDS`): R signed no
+ * later than the action's time plus the skew, and R + 1, if any, no earlier than its time minus
+ * the skew (so an action in flight while the owner signs R + 1 isn't flagged). R's scope must
+ * hold the action's permission and reach every folder the action touched (the folder, a create's
+ * parent, both parents of a move). The policy part is checked as for edits (`auditAgentVersion`'s
+ * rule), and every folder whose contents changed must have been `direct` under that policy
+ * revision, as these actions are only ever allowed there. A list with a gap, below the floor, or
+ * of another token's scopes is `unchecked`, as is an action whose folders aren't known (`folders`,
+ * defaulting to the engine's). The reach and the modes are judged on today's folder tree (a
+ * folder moved since may read differently; the folder history has the moves). For display: the
+ * server enforces the scope.
  */
 export async function auditAgentAction(
   context: SyncContext,
@@ -1079,61 +1118,82 @@ export async function auditAgentAction(
   if (fields === undefined || permission === undefined || !("scopeRevision" in fields)) {
     return { verdict: "unchecked", reason: "not_agent_action" };
   }
+  if (scopes.scopes.some((scope) => scope.signed.envelope.tokenId !== fields.tokenId)) {
+    return { verdict: "unchecked", reason: "other_token" };
+  }
   if (scopes.problem !== null) return { verdict: "unchecked", reason: scopes.problem };
   const at = Date.parse(fields.createdAt);
-  const before = scopes.scopes.filter((scope) => Date.parse(scope.signedAt) < at);
-  const governing = before.at(-1);
-  if (governing === undefined) {
-    return { verdict: "not_allowed", scopeRevision: fields.scopeRevision, reason: "no_scope" };
+  const skew = SIGNATURE_MAX_SKEW_SECONDS * 1000;
+  const revision = fields.scopeRevision;
+  const named = scopes.scopes.find((scope) => scope.revision === revision);
+  if (named === undefined) {
+    return { verdict: "not_allowed", scopeRevision: revision, reason: "no_scope" };
   }
   const notAllowed = (reason: "other_revision" | "permission" | "folders" | "policy") =>
-    ({ verdict: "not_allowed", scopeRevision: governing.revision, reason }) as const;
-  if (fields.scopeRevision !== governing.revision) return notAllowed("other_revision");
-  if (!agentScopeAllows(governing.scope, permission)) return notAllowed("permission");
+    ({ verdict: "not_allowed", scopeRevision: revision, reason }) as const;
+  const next = scopes.scopes.find((scope) => scope.revision === revision + 1);
+  if (Date.parse(named.signedAt) > at + skew) return notAllowed("other_revision");
+  if (next !== undefined && Date.parse(next.signedAt) < at - skew) {
+    return notAllowed("other_revision");
+  }
+  if (!agentScopeAllows(named.scope, permission)) return notAllowed("permission");
   const lookup = options.folders ?? knownFolders(context);
-  const touched: (string | null)[] = [];
-  if (action.kind === "folder") {
-    const { event } = action.entry;
-    touched.push(event.folderId);
-    if (event.action === "created" || event.action === "restored") touched.push(event.parentAfter);
-    if (event.action === "moved") touched.push(event.parentBefore, event.parentAfter);
-  } else {
-    touched.push(action.folderId);
-  }
-  const reach = touched.map((folderId) => reaches(governing.scope, folderId, lookup));
+  const touched = touchedBy(action, lookup);
+  const reach = touched.reach.map((folderId) => reaches(named.scope, folderId, lookup));
   if (reach.includes(false)) return notAllowed("folders");
-  if (reach.includes(null)) return { verdict: "unchecked", reason: "unknown_folder" };
-  const policy = await auditPolicyRevision(context, fields, options);
-  if (policy.status !== "consistent") {
-    return { ...notAllowed("policy"), policy };
+  if (reach.includes(null) || touched.modes === null) {
+    return { verdict: "unchecked", reason: "unknown_folder" };
   }
-  return { verdict: "allowed", scopeRevision: governing.revision, policy };
+  const audited = await auditPolicyRevision(context, fields, options);
+  if (audited.audit.status !== "consistent") {
+    return { ...notAllowed("policy"), policy: audited.audit };
+  }
+  const { rules } = audited;
+  const modes: (AgentWriteMode | null)[] = touched.modes.map((folderId) =>
+    folderId === null
+      ? (rules?.default ?? "direct")
+      : lookup(folderId) === undefined
+        ? null
+        : effectiveMode(rules, agentPolicyAncestry(folderId, lookup)),
+  );
+  if (modes.includes(null)) return { verdict: "unchecked", reason: "unknown_folder" };
+  const mode: AgentWriteMode = modes.every((each) => each === "direct") ? "direct" : "review";
+  const policy: AgentWriteAudit = { status: "consistent", revision: audited.audit.revision, mode };
+  if (mode !== "direct") return { ...notAllowed("policy"), policy };
+  return { verdict: "allowed", scopeRevision: revision, policy };
 }
 
 /**
  * `auditAgentVersion`'s policy rule for any agent-signed envelope: the owner-signed hash of the
  * revision it names (and this device's pin) must be the one it signed, never below its key's
- * floor. The mode under it isn't judged here (folder changes have several folders).
+ * floor. Answers the audit (with `mode` null: the caller judges the modes) and that revision's
+ * rules (null at revision 0, the missing policy: direct everywhere).
  */
 async function auditPolicyRevision(
   context: SyncContext,
   fields: { readonly tokenId: string; readonly revision: number; readonly policySha256: string },
   options: { readonly visibleFolderIds?: Iterable<string> },
-): Promise<AgentWriteAudit> {
+): Promise<{ readonly audit: AgentWriteAudit; readonly rules: AgentPolicyRules | null }> {
   const { revision, policySha256 } = fields;
+  const answer = (audit: AgentWriteAudit, rules: AgentPolicyRules | null = null) => ({
+    audit,
+    rules,
+  });
   const pinned = await context.trust.agentPolicySha256(context.workspaceId, revision);
   if (pinned !== undefined && pinned !== policySha256) {
-    return { status: "policy_mismatch", revision };
+    return answer({ status: "policy_mismatch", revision });
   }
   const floor = Math.max(
     0,
     ...(await context.verifier.agentKeys.forToken(fields.tokenId)).map((key) => key.policyRevision),
   );
-  if (revision < floor) return { status: "below_floor", revision, floor };
+  if (revision < floor) return answer({ status: "below_floor", revision, floor });
   if (revision === 0) {
-    return policySha256 === MISSING_AGENT_POLICY_SHA256
-      ? { status: "consistent", revision, mode: null }
-      : { status: "policy_mismatch", revision };
+    return answer(
+      policySha256 === MISSING_AGENT_POLICY_SHA256
+        ? { status: "consistent", revision, mode: null }
+        : { status: "policy_mismatch", revision },
+    );
   }
   let checked: CheckedAgentPolicy;
   try {
@@ -1145,12 +1205,14 @@ async function auditPolicyRevision(
     });
   } catch (error) {
     if (isSyncApiError(error, "not_found")) {
-      return { status: "unverifiable", revision, problem: "not_found" };
+      return answer({ status: "unverifiable", revision, problem: "not_found" });
     }
     throw error;
   }
   const { resolved } = checked;
-  if (!resolved.ok) return { status: "unverifiable", revision, problem: resolved.problem };
-  if (resolved.policySha256 !== policySha256) return { status: "policy_mismatch", revision };
-  return { status: "consistent", revision, mode: null };
+  if (!resolved.ok) return answer({ status: "unverifiable", revision, problem: resolved.problem });
+  if (resolved.policySha256 !== policySha256) {
+    return answer({ status: "policy_mismatch", revision });
+  }
+  return answer({ status: "consistent", revision, mode: null }, resolved.rules);
 }

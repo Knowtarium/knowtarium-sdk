@@ -31,8 +31,8 @@ export type Folder = z.infer<typeof Folder>;
 /**
  * Signed as `folder_created`. The ID of a deleted folder revives it (protocol 3), under its own ID
  * and only where it was: `parentId` must be its stored parent (another answers 400
- * `invalid_request`: move it afterwards), which must be live unless it was at the top level. It keeps `createdAt`, takes the name sent and records `restored` in the folder
- * history. A live folder with that ID still answers `already_exists`.
+ * `invalid_request`: move it afterwards), which must be live unless it was at the top level. It
+ * keeps `createdAt`, takes the name sent and records `restored` in the folder history. A live folder with that ID still answers `already_exists`.
  */
 export const CreateFolderRequest = z.strictObject({
   id: FolderId,
@@ -141,10 +141,22 @@ export type FolderEventAction = z.infer<typeof FolderEventAction>;
 
 /**
  * One change of a folder (protocol 3), people's and agents' alike, kept as long as note history:
- * who made it, when, and the parent and encrypted name before and after (null where it didn't
- * apply: no name before a create, no parent at the top level). `signed` is the change's envelope
- * (`folder_created`, `folder_moved`, or an agent's `agent_folder_*`), verified by clients; null
- * for a person's rename or delete, which are unsigned (the server's word).
+ * who made it, when, and the parent and encrypted name before and after. A parent is null at the
+ * top level, and also where the table says so; a name is null where the table says so:
+ *
+ * | action     | parentBefore      | parentAfter       | encNameBefore         | encNameAfter   |
+ * |------------|-------------------|-------------------|-----------------------|----------------|
+ * | `created`  | null              | its parent        | null                  | its name       |
+ * | `renamed`  | its parent        | its parent        | the old name          | the new name   |
+ * | `moved`    | the old parent    | the new parent    | its name              | its name       |
+ * | `deleted`  | its parent        | null              | its name              | null           |
+ * | `restored` | its stored parent | its stored parent | its name when deleted | the name sent  |
+ *
+ * So undoing a delete revives the folder under `parentBefore` with `encNameBefore`, and undoing a
+ * rename or a move puts back the `*Before` value. `signed` is the change's envelope
+ * (`folder_created` for `created` and `restored`, `folder_moved`, or an agent's
+ * `agent_folder_*`), verified by clients; null for a person's rename or delete, which are
+ * unsigned (the server's word).
  */
 export const FolderEvent = z.object({
   /** The workspace version of the change: the paging cursor. */

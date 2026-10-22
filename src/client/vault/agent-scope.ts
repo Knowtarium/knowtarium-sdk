@@ -221,6 +221,8 @@ export type UpdateTokenScopeResult =
  * same change again after a lost answer (or a save that stopped halfway) succeeds rather than
  * conflicting. The answer must hold that revision with this hash, signed by the owner, else
  * `untrusted_signature`; the revision then becomes this device's floor for the token (`trust`).
+ * A `baseRevision` below that floor answers `conflict` without signing anything, since signing
+ * over it would fork a revision this device already saw.
  */
 export async function updateTokenScope(
   api: ApiClient,
@@ -236,6 +238,9 @@ export async function updateTokenScope(
   const permissions =
     change.access === "read-write" ? sortAgentPermissions(change.permissions) : [];
   const scope = { access: change.access, folderIds: [...change.folderIds], permissions };
+  // an edit of a revision older than one this device verified: signing it would fork the next
+  const seen = (await flow.trust?.agentScopeRevision(change.tokenId)) ?? 0;
+  if (change.baseRevision < seen) return { status: "conflict", currentRevision: seen };
   const revision = change.baseRevision + 1;
   const action = await signAgentScopeRevision(signer, {
     workspaceId: change.workspaceId,

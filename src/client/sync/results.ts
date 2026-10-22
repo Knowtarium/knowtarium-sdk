@@ -225,12 +225,14 @@ export type AgentAction =
  * What auditing an agent's protocol 3 action against the scope revisions the owner signed found
  * (`auditAgentAction`), for display (the server enforces the scope):
  *
- * - `allowed`: the newest owner-signed revision signed before the action is the one the action
- *   names, and its scope holds the permission and reaches the folders; the policy part checked as
- *   for edits (`policy`, from `auditAgentVersion`'s rule);
- * - `not_allowed`: it isn't (`reason`): flag it ("Not allowed by your settings");
- * - `unchecked`: the revisions couldn't be read whole (a gap, below the device's floor), or the
- *   folders aren't known: flag it.
+ * - `allowed`: the revision the action names was the one in force when it was signed (within the
+ *   signature clock skew), its scope holds the permission and reaches the folders, the policy part
+ *   checks out as for edits and every folder whose contents changed was `direct` under it
+ *   (`policy`, with that `mode`);
+ * - `not_allowed`: it isn't (`reason`; `policy` with `mode` `review` when a folder asked first):
+ *   flag it ("Not allowed by your settings");
+ * - `unchecked`: the revisions couldn't be read whole (a gap, below the device's floor), they are
+ *   another token's, or the folders aren't known: flag it.
  */
 export type AgentActionAudit =
   | {
@@ -246,5 +248,6 @@ export type AgentActionAudit =
     }
   | {
       readonly verdict: "unchecked";
-      readonly reason: "gap" | "below_floor" | "unknown_folder" | "not_agent_action";
+      readonly reason:
+        "gap" | "below_floor" | "unknown_folder" | "not_agent_action" | "other_token";
     };

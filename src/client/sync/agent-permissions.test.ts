@@ -4,6 +4,7 @@ import { ready, verifyEnvelopeFor } from "../../crypto/index.js";
 import {
   type AgentPermission,
   agentScopeSha256,
+  SIGNATURE_MAX_SKEW_SECONDS,
   type FolderId,
   routes,
 } from "../../protocol/index.js";
@@ -22,6 +23,7 @@ import {
   signAgentFolderRenamed,
   signAgentScope,
   toSignedEnvelope,
+  type TokenScopes,
   TrustState,
   updateTokenScope,
   verifyAgentScope,
@@ -246,6 +248,16 @@ describe("agent scopes", () => {
       { ...change, permissions: ["notes.delete"] },
     );
     expect(stale).toEqual({ status: "conflict", currentRevision: 1 });
+    // a base below what this device verified: refused here, with nothing signed or sent
+    const sent = world.server.requests.length;
+    expect(
+      await updateTokenScope(
+        sessionApi(world),
+        { signer: world.signer, trust },
+        { ...change, permissions: ["notes.move"] },
+      ),
+    ).toEqual({ status: "conflict", currentRevision: 1 });
+    expect(world.server.requests.length).toBe(sent);
   });
 
   it("reads every revision, flagging a gap or a list below the device's floor", async () => {
@@ -560,7 +572,18 @@ describe("an agent's folder changes", () => {
       folder: { id: made.folder.id, parentId: home },
     });
     const history = await web.engine.readFolderEvents({ folderId: made.folder.id });
-    expect(history.at(-1)).toMatchObject({ event: { action: "restored" }, signature: "verified" });
+    // the rows as FolderEvent's table has them
+    expect(history.at(-2)).toMatchObject({
+      event: { action: "deleted", parentBefore: home, parentAfter: null, encNameAfter: null },
+      nameBefore: "Gone",
+      nameAfter: null,
+    });
+    expect(history.at(-1)).toMatchObject({
+      event: { action: "restored", parentBefore: home, parentAfter: home },
+      nameBefore: "Gone",
+      nameAfter: "Gone",
+      signature: "verified",
+    });
   });
 
   it("answers parent_missing when the parent it goes back under is gone", async () => {
@@ -590,9 +613,14 @@ describe("an agent's folder changes", () => {
 });
 
 describe("auditing an agent's actions", () => {
-  it("allows an action only under the newest owner-signed revision before it", async () => {
-    const { world, web, cli, noteId, scopeRevision } = await seeded(["notes.delete"]);
+  /** An agent deleted a note under scope revision 1; the person's engine knows the folders. */
+  async function audited() {
+    const seed = await seeded(["notes.delete"]);
+    const { world, web, cli, noteId, scopeRevision } = seed;
     await cli.engine.deleteAsAgent({ noteId, baseVersion: 1, scopeRevision });
+    await web.engine.pull();
+    const [action] = await web.engine.agentActions({ sinceMs: 60_000 });
+    if (action === undefined) throw new Error("no action");
     const trust = new TrustState(new MemoryTrustStorage());
     const scopes = () =>
       fetchTokenScopes(sessionApi(world), {
@@ -602,14 +630,28 @@ describe("auditing an agent's actions", () => {
         tokenId: world.tokenId,
         trust,
       });
-    const [action] = await web.engine.agentActions({ sinceMs: 60_000 });
+    return { ...seed, action, scopes };
+  }
+
+  /** The revisions as listed, with revision `revision` signed `shiftMs` later than it was. */
+  const shifted = (listed: TokenScopes, revision: number, shiftMs: number): TokenScopes => ({
+    ...listed,
+    scopes: listed.scopes.map((scope) =>
+      scope.revision === revision
+        ? { ...scope, signedAt: new Date(Date.parse(scope.signedAt) + shiftMs).toISOString() }
+        : scope,
+    ),
+  });
+
+  it("allows an action under the revision in force when it was signed", async () => {
+    const { world, web, action, noteId, scopes } = await audited();
     expect(action).toMatchObject({ kind: "deleted", noteId, tokenId: world.tokenId });
-    if (action === undefined) throw new Error("no action");
     expect(await web.engine.auditAgentAction(action, await scopes())).toMatchObject({
       verdict: "allowed",
       scopeRevision: 1,
+      policy: { status: "consistent", mode: "direct" },
     });
-    // a later narrowing doesn't change the verdict: the revision before the action counts
+    // a later narrowing doesn't change the verdict: the revision in force then counts
     await world.grantScope({ permissions: [] });
     expect((await web.engine.auditAgentAction(action, await scopes())).verdict).toBe("allowed");
     // a gap in the revisions, or a list below the floor, can't be checked
@@ -625,18 +667,34 @@ describe("auditing an agent's actions", () => {
     });
   });
 
-  it("flags an action under a scope that didn't hold its permission", async () => {
-    const { world, web, cli, noteId, scopeRevision } = await seeded(["notes.delete"]);
-    await cli.engine.deleteAsAgent({ noteId, baseVersion: 1, scopeRevision });
-    const [action] = await web.engine.agentActions({ sinceMs: 60_000 });
-    if (action === undefined) throw new Error("no action");
-    // the owner's revisions as a server could tamper with them: the one before held nothing
-    const listed = await fetchTokenScopes(sessionApi(world), {
-      ownerSigningPublicKey: world.account.signing.publicKey,
-      accountId: world.accountId,
-      workspaceId: world.workspaceId,
-      tokenId: world.tokenId,
+  it("allows for the signature clock skew, and no more", async () => {
+    const { world, web, action, scopes } = await audited();
+    await world.grantScope({ permissions: ["notes.delete", "notes.move"] });
+    const listed = await scopes();
+    const skew = SIGNATURE_MAX_SKEW_SECONDS * 1000;
+    const audit = (list: TokenScopes) => web.engine.auditAgentAction(action, list);
+    // revision 1 signed a little after the action, within the skew: still in force
+    expect((await audit(shifted(listed, 1, 120_000))).verdict).toBe("allowed");
+    // signed later than the skew allows: not the revision in force
+    expect(await audit(shifted(listed, 1, skew + 60_000))).toMatchObject({
+      verdict: "not_allowed",
+      reason: "other_revision",
     });
+    // revision 2 signed a little before the action (in flight meanwhile): 1 still counts
+    const second = listed.scopes[1];
+    if (second === undefined) throw new Error("no second revision");
+    const at = Date.parse(action.createdAt);
+    const before = (ms: number) => shifted(listed, 2, at - ms - Date.parse(second.signedAt));
+    expect((await audit(before(120_000))).verdict).toBe("allowed");
+    expect(await audit(before(skew + 60_000))).toMatchObject({
+      verdict: "not_allowed",
+      reason: "other_revision",
+    });
+  });
+
+  it("flags an action its scope's permission didn't allow, and won't judge by another token's", async () => {
+    const { web, action, scopes } = await audited();
+    const listed = await scopes();
     const [first] = listed.scopes;
     if (first === undefined) throw new Error("no scope");
     const narrowed = {
@@ -647,13 +705,61 @@ describe("auditing an agent's actions", () => {
       verdict: "not_allowed",
       reason: "permission",
     });
-    const later = {
+    const foreign = {
       ...listed,
-      scopes: [{ ...first, signedAt: new Date(Date.now() + 60_000).toISOString() }],
+      scopes: [
+        {
+          ...first,
+          signed: {
+            ...first.signed,
+            envelope: { ...first.signed.envelope, tokenId: newId("tok") },
+          },
+        },
+      ],
     };
-    expect(await web.engine.auditAgentAction(action, later)).toMatchObject({
+    expect(await web.engine.auditAgentAction(action, foreign)).toEqual({
+      verdict: "unchecked",
+      reason: "other_token",
+    });
+  });
+
+  it("judges every touched folder's mode under the policy revision the action named", async () => {
+    const { world, web, cli, home, noteId, scopeRevision } = await seeded(["notes.delete"]);
+    const other = await folder(world, web, "Other");
+    const policy = await web.engine.setAgentPolicy({
+      default: "direct",
+      folders: [{ folderId: other, mode: "review" }],
+      baseRevision: 0,
+    });
+    expect(policy.status).toBe("saved");
+    await cli.engine.pull();
+    expect((await cli.engine.deleteAsAgent({ noteId, baseVersion: 1, scopeRevision })).status).toBe(
+      "saved",
+    );
+    await web.engine.pull();
+    const [action] = await web.engine.agentActions({ sinceMs: 60_000 });
+    if (action === undefined) throw new Error("no action");
+    const scopes = await fetchTokenScopes(sessionApi(world), {
+      ownerSigningPublicKey: world.account.signing.publicKey,
+      accountId: world.accountId,
+      workspaceId: world.workspaceId,
+      tokenId: world.tokenId,
+    });
+    expect(await web.engine.auditAgentAction(action, scopes)).toMatchObject({
+      verdict: "allowed",
+      policy: { revision: 1, mode: "direct" },
+    });
+    // in a tree where Home sits under the folder that asks first, the delete wasn't allowed
+    const folders = (id: string) =>
+      id === home
+        ? { parentId: other, deleted: false }
+        : id === other
+          ? { parentId: null, deleted: false }
+          : undefined;
+    expect(await web.engine.auditAgentAction(action, scopes, { folders })).toMatchObject({
       verdict: "not_allowed",
-      reason: "no_scope",
+      reason: "policy",
+      policy: { mode: "review" },
     });
   });
 });

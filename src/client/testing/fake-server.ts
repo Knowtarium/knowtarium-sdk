@@ -1991,9 +1991,9 @@ export class FakeServer {
       authorId: change.byAgent ? this.options.tokenId : this.options.ownerId,
       authorTokenId: change.byAgent ? this.options.tokenId : null,
       createdAt: at,
-      parentBefore: known && change.action !== "restored" ? before.parentId : null,
+      parentBefore: known ? before.parentId : null,
       parentAfter: deleted ? null : change.parentId,
-      encNameBefore: known && change.action !== "restored" ? before.encName : null,
+      encNameBefore: known ? before.encName : null,
       encNameAfter: deleted ? null : change.encName,
       signed: change.signed as FolderEvent["signed"],
     });
@@ -2011,12 +2011,18 @@ export class FakeServer {
     );
   }
 
-  /** Verifies an agent's signature once: a signature already used is refused. */
-  private verifyAgentOnce(envelope: SignedEnvelopeFields, signature: string | undefined): void {
-    const signKey = this.agentSignPublicKey ?? new Uint8Array(32);
-    this.verify(envelope, signature, signKey);
-    if (this.usedAgentSignatures.has(signature ?? "")) throw new HttpError("invalid_signature");
-    this.usedAgentSignatures.add(signature ?? "");
+  /** Verifies an agent's signature under its key (`invalid_signature`). */
+  private verifyAgent(envelope: SignedEnvelopeFields, signature: string | undefined): void {
+    this.verify(envelope, signature, this.agentSignPublicKey ?? new Uint8Array(32));
+  }
+
+  /**
+   * The replay check, last before the change (as in the sync API's transaction): a signature is
+   * good for one change; it counts as used only once every other check passed.
+   */
+  private useAgentSignature(signature: string): void {
+    if (this.usedAgentSignatures.has(signature)) throw new HttpError("invalid_signature");
+    this.usedAgentSignatures.add(signature);
   }
 
   /**
@@ -2033,6 +2039,8 @@ export class FakeServer {
     const policyHeader = () => Number(headers.get("knowtarium-agent-policy-revision") ?? "-1");
     const scopeHeader = () => Number(headers.get("knowtarium-agent-scope-revision") ?? "-1");
     switch (request.name) {
+      case "approveConnect":
+        return this.approveConnectScope(request);
       case "updateTokenScope":
         return this.updateTokenScope(request);
       case "listTokenScopes": {
@@ -2147,13 +2155,12 @@ export class FakeServer {
           createdAt: headers.get("knowtarium-signed-at") ?? "",
         };
         const signature = headers.get("knowtarium-signature");
-        this.verify(envelope, signature, this.agentSignPublicKey ?? new Uint8Array(32));
-        if (this.usedAgentSignatures.has(signature ?? "")) throw new HttpError("invalid_signature");
+        this.verifyAgent(envelope, signature);
         this.requireDirect([row.folderId]);
         const current = this.currentVersion(noteId);
         if (baseVersion !== current) throw new HttpError("conflict", { currentVersion: current });
         this.checkCap(this.agentNoteDeletes, this.agentNoteDeleteDailyCap);
-        this.usedAgentSignatures.add(signature ?? "");
+        this.useAgentSignature(signature ?? "");
         this.agentNoteDeletes++;
         return response(
           200,
@@ -2227,9 +2234,13 @@ export class FakeServer {
           signature: string;
         };
         const revived = this.deletedFolders.has(body.id);
-        // a revive is checked on the deleted folder's own stored place, never another
+        // a revive is checked on the deleted folder's own stored position (its ancestry, deleted
+        // rows included), never another
         const stored = revived ? (this.folders.get(body.id)?.parentId ?? null) : body.parentId;
-        if (!this.inWriteScope(stored)) throw new HttpError("scope_denied");
+        const reached = revived
+          ? this.agentAccess === "read-write" && this.folderInScope(body.id)
+          : this.inWriteScope(stored);
+        if (!reached) throw new HttpError("scope_denied");
         this.checkAgentScope("folders.create", undefined);
         if (revived && stored !== body.parentId) {
           throw invalid(["body", "parentId"], "A deleted folder comes back where it was");
@@ -2252,9 +2263,10 @@ export class FakeServer {
           scopeRevision: body.scopeRevision,
           createdAt: body.signedAt,
         };
-        this.verifyAgentOnce(envelope, body.signature);
+        this.verifyAgent(envelope, body.signature);
         this.requireDirect([body.parentId]);
         this.checkCap(this.agentFolderChanges, this.agentFolderChangeDailyCap);
+        this.useAgentSignature(body.signature);
         this.agentFolderChanges++;
         const seq = this.changeFolder(body.id, {
           action: revived ? "restored" : "created",
@@ -2326,13 +2338,14 @@ export class FakeServer {
                 ...agent,
                 ciphertextSha256: ciphertextSha256(fromBase64Url(encName ?? "")),
               };
-        this.verifyAgentOnce(envelope, body.signature);
+        this.verifyAgent(envelope, body.signature);
         this.requireDirect(touched);
         if (moving && destination !== null && !this.liveFolder(destination)) {
           throw new HttpError("not_found");
         }
         if (deleting && this.holdsContent(folderId)) throw new HttpError("not_empty");
         this.checkCap(this.agentFolderChanges, this.agentFolderChangeDailyCap);
+        this.useAgentSignature(body.signature);
         this.agentFolderChanges++;
         const seq = this.changeFolder(folderId, {
           action: deleting ? "deleted" : moving ? "moved" : "renamed",
@@ -2368,16 +2381,14 @@ export class FakeServer {
     const scope = { access: body.access, folderIds: body.folderIds, permissions: body.permissions };
     const scopeSha256 = await agentScopeSha256(scope);
     const next = body.baseRevision + 1;
-    // the same signed revision again (a lost answer): it stands, as stored
-    if (next === this.scopeRevision && scopeSha256 === this.scopeSha256) {
-      return response(200, { token: this.agentTokenInfo() });
-    }
-    if (body.baseRevision !== this.scopeRevision) {
-      throw new HttpError("scope_conflict", { currentRevision: this.scopeRevision });
-    }
+    // the body first, then the base revision, then the signature (the sync API's order)
     const missing = body.folderIds.findIndex((folderId) => !this.liveFolder(folderId));
     if (missing !== -1) {
       throw invalid(["body", "folderIds", missing], "Not a folder of this workspace");
+    }
+    const retry = next === this.scopeRevision && scopeSha256 === this.scopeSha256;
+    if (!retry && body.baseRevision !== this.scopeRevision) {
+      throw new HttpError("scope_conflict", { currentRevision: this.scopeRevision });
     }
     const envelope: SignedEnvelopeFields = {
       type: "agent_scope",
@@ -2389,11 +2400,63 @@ export class FakeServer {
       createdAt: body.signedAt,
     };
     this.verify(envelope, body.signature);
+    // the same signed revision again (a lost answer, signed anew or not): it stands, as stored
+    if (retry) return response(200, { token: this.agentTokenInfo() });
     this.applyScope(
       { envelope, signature: body.signature, scope } as SignedAgentScope,
       scopeSha256,
     );
     return response(200, { token: this.agentTokenInfo() });
+  }
+
+  /**
+   * The scope part of `approveConnect` (protocol 3), then the rest as before: with
+   * `scopeSignature`, the owner's `agent_scope` at revision 1 over the access, folders and
+   * permissions sent, rebuilt and verified, stored with its hash; without it (an older web tab),
+   * revision 0 with no permissions, and permissions without a signature are refused.
+   */
+  private async approveConnectScope(request: Request): Promise<FetchResponse> {
+    const body = this.json(request) as {
+      tokenId: TokenId;
+      access: "read" | "read-write";
+      folderIds: FolderId[];
+      permissions?: AgentPermission[];
+      scopeSignedAt?: string;
+      scopeSignature?: string;
+    };
+    const permissions = body.permissions ?? [];
+    if (body.scopeSignature === undefined && permissions.length > 0) {
+      throw invalid(["body", "scopeSignature"], "Permissions need a signed scope");
+    }
+    let signed: SignedAgentScope | null = null;
+    let scopeSha256: string | null = null;
+    if (body.scopeSignature !== undefined) {
+      const scope = { access: body.access, folderIds: body.folderIds, permissions };
+      scopeSha256 = await agentScopeSha256(scope);
+      const envelope: SignedEnvelopeFields = {
+        type: "agent_scope",
+        accountId: this.options.ownerId,
+        workspaceId: this.options.workspaceId,
+        tokenId: body.tokenId,
+        revision: 1,
+        scopeSha256,
+        createdAt: body.scopeSignedAt ?? "",
+      };
+      this.verify(envelope, body.scopeSignature);
+      signed = { envelope, signature: body.scopeSignature, scope } as SignedAgentScope;
+    }
+    // the agent key and the token, as before
+    const answer = this.routeConnect(request);
+    this.agentScopes.length = 0;
+    if (signed !== null && scopeSha256 !== null) this.applyScope(signed, scopeSha256);
+    else {
+      this.agentAccess = body.access;
+      this.agentFolderIds = [...body.folderIds];
+      this.agentPermissions = [];
+      this.scopeRevision = 0;
+      this.scopeSha256 = null;
+    }
+    return answer.status === 200 ? response(200, { token: this.agentTokenInfo() }) : answer;
   }
 
   /** Makes a verified signed scope the token's current one (and keeps it with the others). */
