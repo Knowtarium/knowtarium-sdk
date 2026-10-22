@@ -133,6 +133,11 @@ export type SyncEvent =
    * that files clips runs `fileClips` now.
    */
   | { readonly type: "clip_added"; readonly pending: number }
+  /**
+   * The owner changed this agent token's scope (protocol 3), now at `revision`: read the token
+   * again (`getCurrentToken`) and verify its scope.
+   */
+  | { readonly type: "scope_changed"; readonly revision: number }
   /** Access is gone for good: the engine stopped (see `SyncEngine`). */
   | { readonly type: "revoked" }
   /** The notes whose newest version failed verification, each time the set changes. */

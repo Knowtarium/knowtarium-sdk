@@ -1,4 +1,9 @@
-import { type NoteEvent, routes, type TokenRevocation } from "../../protocol/index.js";
+import {
+  isAgentSigned,
+  routes,
+  type SignedEvent,
+  type TokenRevocation,
+} from "../../protocol/index.js";
 import type { ApiClient } from "../api/index.js";
 import { type TrustedSigner, verifiedAgentKeys, type VerifiedAgentKey } from "../vault/index.js";
 
@@ -119,13 +124,18 @@ export interface VersionVerifier {
   readonly agentKeys: AgentKeyDirectory;
 }
 
-/** The verified keys of the agent whose `agent_edited` an event carries; none for other events. */
+/**
+ * The verified keys of the agent whose own signature an event carries (`agent_edited`, or the
+ * protocol 3 `agent_deleted` and `agent_folder_*`); none for other events.
+ */
 export async function agentKeysFor(
   verifier: VersionVerifier,
-  event: NoteEvent | undefined,
+  event: { readonly signed: SignedEvent | null } | undefined,
 ): Promise<readonly VerifiedAgentKey[]> {
   const fields = event?.signed?.envelope;
-  return fields?.type === "agent_edited" ? verifier.agentKeys.forToken(fields.tokenId) : [];
+  return fields !== undefined && isAgentSigned(fields.type) && "tokenId" in fields
+    ? verifier.agentKeys.forToken(fields.tokenId)
+    : [];
 }
 
 /** Whether the agent behind these keys was revoked (flag only; see `VerifiedAgentKey`). */

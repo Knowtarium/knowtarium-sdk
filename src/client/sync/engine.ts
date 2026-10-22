@@ -33,7 +33,10 @@ import {
   restoreVersion,
   type RestoreVerify,
   type TakenNames,
+  undoAgentFolderEvent,
+  type UndoFolderResult,
   undoAgentVersion,
+  type UndoVersionResult,
   updateComment,
 } from "../history/index.js";
 import { LiveConnection, type LiveOptions, type SocketFactory } from "../live/index.js";
@@ -41,18 +44,30 @@ import type {
   CheckedAgentPolicy,
   KeyProvider,
   Signer,
+  TokenScopes,
   TrustedSigner,
   TrustState,
 } from "../vault/index.js";
 import { AgentKeyDirectory } from "./agent-keys.js";
 import {
+  type AgentActionOptions,
+  type AgentNoteDelete,
   type AgentNoteWrite,
   type AgentPolicyRead,
+  auditAgentAction,
   auditAgentVersion,
+  createFolderAsAgent,
+  deleteAsAgent,
+  deleteFolderAsAgent,
+  listAgentActions,
+  moveFolderAsAgent,
+  proposeDelete,
   readAgentPolicy,
+  renameFolderAsAgent,
   setAgentPolicy,
   writeAsAgent,
 } from "./agent-writes.js";
+import { fetchFolderEvents, type FolderEventEntry } from "./folder-events.js";
 import { type AgentConnection, requireIdentity, type SyncContext } from "./context.js";
 import {
   type NoteSnapshot,
@@ -72,6 +87,10 @@ import { pullFeed, retryQuarantine } from "./pull.js";
 import { Quarantine } from "./quarantine.js";
 import { SerialQueue } from "./queue.js";
 import type {
+  AgentAction,
+  AgentActionAudit,
+  AgentActionRefusal,
+  AgentFolderResult,
   AgentWriteAudit,
   AgentWriteResult,
   ApproveResult,
@@ -87,7 +106,13 @@ import { discardClips } from "../clips/discard.js";
 import { fetchClipSummary } from "../clips/extensions.js";
 import { type EnsuredInboxKey, ensureInboxKey } from "../clips/inbox.js";
 import { fileClips, type FileClipsOptions, type FileClipsResult } from "./file-clips.js";
-import { approvePending, readPending, rejectPending, submitPending } from "./review.js";
+import {
+  approveDelete,
+  approvePending,
+  readPending,
+  rejectPending,
+  submitPending,
+} from "./review.js";
 import { deleteNote, type NoteWrite, writeNote } from "./writes.js";
 
 /** What a sync engine needs for one workspace. */
@@ -467,8 +492,119 @@ export class SyncEngine {
       readonly signedAt?: string;
       readonly verify?: RestoreVerify;
     },
-  ): Promise<WriteResult> {
+  ): Promise<UndoVersionResult> {
     return this.run(() => undoAgentVersion(this.context, noteId, version, options));
+  }
+
+  /**
+   * An agent deletes a note directly (agent, protocol 3, `notes.delete`), signed with its own
+   * key, where the note's folder is `direct`; `approval_required`, `agent_key_required` or
+   * `rate_limited` (the daily cap) mean proposing the delete instead (`proposeDelete`). Both
+   * versions on a 409.
+   */
+  deleteAsAgent(target: AgentNoteDelete): Promise<AgentWriteResult> {
+    return this.run(() => deleteAsAgent(this.context, target));
+  }
+
+  /** An agent proposes deleting a note at the version it read (agent, protocol 3). */
+  proposeDelete(target: {
+    readonly noteId: NoteId;
+    readonly baseVersion: number;
+  }): Promise<SubmitResult> {
+    return this.run(() => proposeDelete(this.context, target));
+  }
+
+  /**
+   * An agent creates a folder, or revives a deleted one where it was (`folderId`), signed with its
+   * own key (agent, protocol 3, `folders.create`). Folder changes are never proposed: a refusal
+   * means telling the person.
+   */
+  createFolderAsAgent(
+    change: AgentActionOptions & {
+      readonly parentId: FolderId | null;
+      readonly name: string;
+      readonly folderId?: FolderId;
+    },
+  ): Promise<AgentFolderResult> {
+    return this.run(() => createFolderAsAgent(this.context, change));
+  }
+
+  /** An agent renames a folder (agent, protocol 3, `folders.rename`). */
+  renameFolderAsAgent(
+    change: AgentActionOptions & { readonly folderId: FolderId; readonly name: string },
+  ): Promise<AgentFolderResult> {
+    return this.run(() => renameFolderAsAgent(this.context, change));
+  }
+
+  /** An agent moves a folder with everything in it (agent, protocol 3, `folders.move`). */
+  moveFolderAsAgent(
+    change: AgentActionOptions & {
+      readonly folderId: FolderId;
+      readonly parentId: FolderId | null;
+    },
+  ): Promise<AgentFolderResult> {
+    return this.run(() => moveFolderAsAgent(this.context, change));
+  }
+
+  /** An agent deletes an empty folder (agent, protocol 3, `folders.delete`). */
+  deleteFolderAsAgent(change: AgentActionOptions & { readonly folderId: FolderId }): Promise<
+    | {
+        readonly status: "saved";
+        readonly workspaceVersion: number;
+        readonly policyRevision: number;
+      }
+    | AgentActionRefusal
+  > {
+    return this.run(() => deleteFolderAsAgent(this.context, change));
+  }
+
+  /**
+   * The folder history (protocol 3), for one folder or every folder in scope, each change
+   * verified (a person's rename or delete is unsigned) and with its names decrypted.
+   */
+  readFolderEvents(
+    query: { readonly since?: number; readonly folderId?: FolderId } = {},
+  ): Promise<FolderEventEntry[]> {
+    return this.run(() => fetchFolderEvents(this.context, query));
+  }
+
+  /**
+   * The agents' direct writes, note deletes and folder changes of the last `sinceMs`
+   * milliseconds, newest first, each verified (one agent's with `tokenId`): what "Undo this
+   * agent's last 24 hours" works through, stopping at the first undo that doesn't go through.
+   */
+  agentActions(options: {
+    readonly sinceMs: number;
+    readonly tokenId?: string;
+  }): Promise<AgentAction[]> {
+    return this.run(() => listAgentActions(this.context, options));
+  }
+
+  /**
+   * Audits an agent's note delete or folder change against the scope revisions the owner signed
+   * for its token (`fetchTokenScopes`, read against the device's floor): for display, the server
+   * enforces the scope.
+   */
+  auditAgentAction(
+    action: AgentAction,
+    scopes: TokenScopes,
+    options: {
+      readonly folders?: AgentPolicyFolderLookup;
+      readonly visibleFolderIds?: Iterable<string>;
+    } = {},
+  ): Promise<AgentActionAudit> {
+    return this.run(() => auditAgentAction(this.context, action, scopes, options));
+  }
+
+  /**
+   * A person undoes an agent's folder change (session, protocol 3): deletes a folder it made,
+   * renames or moves one back, revives one it deleted (see `undoAgentFolderEvent`).
+   */
+  undoAgentFolderEvent(
+    entry: FolderEventEntry,
+    options: { readonly signedAt?: string } = {},
+  ): Promise<UndoFolderResult> {
+    return this.run(() => undoAgentFolderEvent(this.context, entry, options));
   }
 
   /**
@@ -545,6 +681,17 @@ export class SyncEngine {
     return this.run(() => approvePending(this.context, pending, approved, options));
   }
 
+  /**
+   * A person approves an agent's delete proposal (session, protocol 3) with their own signed
+   * delete of the note at the proposal's base version; both versions on a 409.
+   */
+  approveDelete(
+    pending: PendingChange,
+    options: { readonly signedAt?: string } = {},
+  ): Promise<ApproveResult> {
+    return this.run(() => approveDelete(this.context, pending, options));
+  }
+
   /** A person rejects a pending change with an encrypted comment record (session). */
   rejectPending(
     pending: PendingChange,
@@ -618,6 +765,10 @@ export class SyncEngine {
         return;
       case "clip_added":
         emitter.emit({ type: "clip_added", pending: message.pending });
+        return;
+      case "scope_changed":
+        // the agent's own token changed: its holder reads it again (the server closes the socket)
+        emitter.emit({ type: "scope_changed", revision: message.revision });
         return;
       case "revoked":
         this.revoke();

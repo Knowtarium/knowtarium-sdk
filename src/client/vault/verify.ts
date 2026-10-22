@@ -6,7 +6,7 @@ import {
 } from "../../crypto/index.js";
 import type { NoteEvent, SignedAgentPolicy, SignedEvent } from "../../protocol/index.js";
 import { VaultError } from "../errors/index.js";
-import { checkAgentEdited, type VerifiedAgentKey } from "./agent-keys.js";
+import { checkAgentEdited, checkAgentSigned, type VerifiedAgentKey } from "./agent-keys.js";
 
 /** A protocol signed event (`{ envelope, signature }`) in the form `knowtarium/crypto` verifies. */
 export function toSignedEnvelope(event: SignedEvent): SignedEnvelope {
@@ -43,7 +43,10 @@ export function findVersionEvent(
   return undefined;
 }
 
-/** The signed `deleted` event for a note's delete marker at `version`, among `events`. */
+/**
+ * The signed delete event for a note's delete marker at `version`, among `events`: a person's
+ * `deleted`, or an agent's `agent_deleted` (protocol 3).
+ */
 export function findDeleteEvent(
   events: Iterable<NoteEvent>,
   noteId: string,
@@ -51,7 +54,11 @@ export function findDeleteEvent(
 ): NoteEvent | undefined {
   for (const event of events) {
     const fields = event.signed?.envelope;
-    if (fields?.type === "deleted" && fields.noteId === noteId && fields.version === version) {
+    if (
+      (fields?.type === "deleted" || fields?.type === "agent_deleted") &&
+      fields.noteId === noteId &&
+      fields.version === version
+    ) {
       return event;
     }
   }
@@ -159,8 +166,9 @@ export function agentWriteOf(event: NoteEvent | undefined, revoked: boolean): Ag
 }
 
 /**
- * Requires a person's signed `deleted` envelope for a note's delete marker at `version`; returns
- * the verified event.
+ * Requires a signed delete for a note's delete marker at `version`: a person's `deleted`, or an
+ * agent's `agent_deleted` (protocol 3) under a key in `agentKeys` (owner-vouched). Returns the
+ * verified event.
  */
 export function verifyNoteDeletion(details: {
   readonly workspaceId: string;
@@ -168,14 +176,15 @@ export function verifyNoteDeletion(details: {
   readonly version: number;
   readonly event: NoteEvent | undefined;
   readonly signer: TrustedSigner;
+  /** The verified keys of the agent an `agent_deleted` names (none: it is refused). */
+  readonly agentKeys?: readonly VerifiedAgentKey[];
 }): NoteEvent {
   const { event } = details;
   const signed = event?.signed;
   if (event === undefined || signed == null) {
     throw new VaultError("missing_signature", "the delete is not signed");
   }
-  const expected = {
-    type: "deleted" as const,
+  const common = {
     workspaceId: details.workspaceId,
     noteId: details.noteId,
     version: details.version,
@@ -186,11 +195,15 @@ export function verifyNoteDeletion(details: {
     event.ciphertext === null;
   const ok =
     rowMatches &&
-    verifyEnvelopeFor(
-      toSignedEnvelope(signed),
-      details.signer.publicKey,
-      withAccount(expected, details.signer),
-    );
+    (signed.envelope.type === "agent_deleted"
+      ? (details.agentKeys ?? []).some(
+          (key) => checkAgentSigned(signed, key, withAccount(common, details.signer)).ok,
+        )
+      : verifyEnvelopeFor(
+          toSignedEnvelope(signed),
+          details.signer.publicKey,
+          withAccount({ type: "deleted" as const, ...common }, details.signer),
+        ));
   if (!ok) throw new VaultError("untrusted_signature", "the delete's signature is not valid");
   return event;
 }

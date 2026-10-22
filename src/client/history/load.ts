@@ -61,7 +61,9 @@ export async function readEventEntry(
     authorIsPerson: isPerson(event.authorId),
   });
   const agent =
-    signed?.type === "agent_edited" && signed.tokenId !== undefined && signatureValid
+    (signed?.type === "agent_edited" || signed?.type === "agent_deleted") &&
+    signed.tokenId !== undefined &&
+    signatureValid
       ? { agent: { tokenId: signed.tokenId, revoked: anyRevoked(agentKeys) } }
       : {};
   return {

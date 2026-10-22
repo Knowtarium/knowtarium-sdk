@@ -786,6 +786,7 @@ describe("undoing an agent's change", () => {
     const web = world.web();
     const cli = world.cli();
     const home = await agentsFolder(world, web);
+    await world.grantScope({ permissions: ["notes.move"] });
     const request = prepareFolder(world.signer, world.key, {
       workspaceId: world.workspaceId,
       parentId: null,
@@ -830,6 +831,7 @@ describe("undoing an agent's change", () => {
       const web = world.web();
       const cli = world.cli();
       const home = await agentsFolder(world, web);
+      await world.grantScope({ permissions: ["notes.move"] });
       const request = prepareFolder(world.signer, world.key, {
         workspaceId: world.workspaceId,
         parentId: null,

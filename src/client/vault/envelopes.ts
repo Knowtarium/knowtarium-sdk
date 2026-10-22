@@ -84,6 +84,12 @@ const SIGNED_AT_PLACE: Partial<Record<SignedEnvelopeFields["type"], SignedAtPlac
   agent_edited: ["writeNoteAsAgent", "headers", SIGNED_AT_HEADER],
   inbox_key: ["putInboxKey", "body", "signedAt"],
   extension_key: ["approveExtensionConnect", "body", "keySignedAt"],
+  agent_scope: ["updateTokenScope", "body", "signedAt"],
+  agent_deleted: ["deleteNoteAsAgent", "headers", SIGNED_AT_HEADER],
+  agent_folder_created: ["createFolderAsAgent", "body", "signedAt"],
+  agent_folder_renamed: ["renameFolderAsAgent", "body", "signedAt"],
+  agent_folder_moved: ["moveFolderAsAgent", "body", "signedAt"],
+  agent_folder_deleted: ["deleteFolderAsAgent", "headers", SIGNED_AT_HEADER],
 };
 
 /**
@@ -529,6 +535,44 @@ export function signExtensionKey(
   );
 }
 
+/** The requests that carry a signed `agent_scope`. */
+export type AgentScopeRoute = "approveConnect" | "updateTokenScope";
+
+/**
+ * The owner's `agent_scope` (protocol 3) for `approveConnect` (revision 1; send `signedAt` as
+ * `scopeSignedAt` and `signature` as `scopeSignature`) and `updateTokenScope` (`baseRevision + 1`):
+ * the token's scope revision and `agentScopeSha256` of its access, folders and permissions
+ * (`signAgentScopeRevision` in agent-scope.ts computes the hash).
+ */
+export function signAgentScope(
+  signer: Signer,
+  details: {
+    readonly workspaceId: string;
+    readonly tokenId: string;
+    readonly revision: number;
+    readonly scopeSha256: string;
+    /** The request the signature goes in (for errors); defaults to `updateTokenScope`. */
+    readonly route?: AgentScopeRoute;
+  } & SigningTime,
+): SignedAction {
+  const place: SignedAtPlace =
+    details.route === "approveConnect"
+      ? ["approveConnect", "body", "scopeSignedAt"]
+      : ["updateTokenScope", "body", "signedAt"];
+  const signedAt = signingTime(signer, "agent_scope", details.signedAt, place);
+  return sign(
+    signer,
+    details.workspaceId,
+    {
+      type: "agent_scope",
+      tokenId: details.tokenId,
+      revision: details.revision,
+      scopeSha256: details.scopeSha256,
+    },
+    signedAt,
+  );
+}
+
 /**
  * A connected agent that signs its own direct writes: its token, the workspace owner's account
  * (the `accountId` every `agent_edited` names) and its own Ed25519 key pair, never the account's.
@@ -573,6 +617,169 @@ export function signAgentEdited(
       ciphertextSha256: ciphertextSha256(details.ciphertext),
       revision: details.revision,
       policySha256: details.policySha256,
+    },
+    details.signedAt,
+  );
+}
+
+/**
+ * What every agent action of protocol 3 signs besides its own fields: the agent policy revision
+ * the agent checked with that revision's hash (`MISSING_AGENT_POLICY_SHA256` at revision 0), and
+ * the scope revision it acts under.
+ */
+export interface AgentActionRevisions {
+  readonly revision: number;
+  readonly policySha256: string;
+  readonly scopeRevision: number;
+}
+
+/** Signs an agent-signed envelope with the agent's own key. */
+function signAsAgent(
+  agent: AgentSigner,
+  workspaceId: string,
+  fields: Fields,
+  signedAt: string | undefined,
+): SignedAction {
+  return sign(
+    {
+      accountId: agent.ownerAccountId,
+      signing: agent.signing,
+      ...(agent.now === undefined ? {} : { now: agent.now }),
+    },
+    workspaceId,
+    fields,
+    signedAt,
+  );
+}
+
+const revisionsOf = (details: AgentActionRevisions) => ({
+  revision: details.revision,
+  policySha256: details.policySha256,
+  scopeRevision: details.scopeRevision,
+});
+
+/**
+ * `agent_deleted` for `deleteNoteAsAgent`, signed with the agent's own key: the delete marker is
+ * the base version + 1 of the note in `folderId` (the note's folder).
+ */
+export function signAgentDeleted(
+  agent: AgentSigner,
+  details: {
+    readonly workspaceId: string;
+    readonly noteId: string;
+    readonly folderId: string;
+    readonly baseVersion: number;
+  } & AgentActionRevisions &
+    SigningTime,
+): SignedAction {
+  return signAsAgent(
+    agent,
+    details.workspaceId,
+    {
+      type: "agent_deleted",
+      tokenId: agent.tokenId,
+      noteId: details.noteId,
+      folderId: details.folderId,
+      version: details.baseVersion + 1,
+      ...revisionsOf(details),
+    },
+    details.signedAt,
+  );
+}
+
+/**
+ * `agent_folder_created` for `createFolderAsAgent` (a new folder, or a deleted one revived where
+ * it was); a folder at the top level has no `parentId`.
+ */
+export function signAgentFolderCreated(
+  agent: AgentSigner,
+  details: {
+    readonly workspaceId: string;
+    readonly folderId: string;
+    readonly parentId: string | null;
+    /** The encrypted name's bytes (the decoded `encName`). */
+    readonly encName: Uint8Array;
+  } & AgentActionRevisions &
+    SigningTime,
+): SignedAction {
+  return signAsAgent(
+    agent,
+    details.workspaceId,
+    {
+      type: "agent_folder_created",
+      tokenId: agent.tokenId,
+      folderId: details.folderId,
+      ...(details.parentId === null ? {} : { parentId: details.parentId }),
+      ciphertextSha256: ciphertextSha256(details.encName),
+      ...revisionsOf(details),
+    },
+    details.signedAt,
+  );
+}
+
+/** `agent_folder_renamed` for `renameFolderAsAgent`, over the new encrypted name. */
+export function signAgentFolderRenamed(
+  agent: AgentSigner,
+  details: {
+    readonly workspaceId: string;
+    readonly folderId: string;
+    /** The new encrypted name's bytes (the decoded `encName`). */
+    readonly encName: Uint8Array;
+  } & AgentActionRevisions &
+    SigningTime,
+): SignedAction {
+  return signAsAgent(
+    agent,
+    details.workspaceId,
+    {
+      type: "agent_folder_renamed",
+      tokenId: agent.tokenId,
+      folderId: details.folderId,
+      ciphertextSha256: ciphertextSha256(details.encName),
+      ...revisionsOf(details),
+    },
+    details.signedAt,
+  );
+}
+
+/** `agent_folder_moved` for `moveFolderAsAgent`; `parentId` null moves it to the top level. */
+export function signAgentFolderMoved(
+  agent: AgentSigner,
+  details: {
+    readonly workspaceId: string;
+    readonly folderId: string;
+    readonly parentId: string | null;
+  } & AgentActionRevisions &
+    SigningTime,
+): SignedAction {
+  return signAsAgent(
+    agent,
+    details.workspaceId,
+    {
+      type: "agent_folder_moved",
+      tokenId: agent.tokenId,
+      folderId: details.folderId,
+      ...(details.parentId === null ? {} : { parentId: details.parentId }),
+      ...revisionsOf(details),
+    },
+    details.signedAt,
+  );
+}
+
+/** `agent_folder_deleted` for `deleteFolderAsAgent`. */
+export function signAgentFolderDeleted(
+  agent: AgentSigner,
+  details: { readonly workspaceId: string; readonly folderId: string } & AgentActionRevisions &
+    SigningTime,
+): SignedAction {
+  return signAsAgent(
+    agent,
+    details.workspaceId,
+    {
+      type: "agent_folder_deleted",
+      tokenId: agent.tokenId,
+      folderId: details.folderId,
+      ...revisionsOf(details),
     },
     details.signedAt,
   );

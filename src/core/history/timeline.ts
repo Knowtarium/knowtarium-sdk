@@ -113,6 +113,7 @@ function writeVersion(event: HistoryEvent): number | null {
     event.type === "approved" ||
     event.type === "check_applied" ||
     event.type === "agent_edited" ||
+    event.type === "agent_deleted" ||
     event.type === "deleted"
     ? event.version
     : null;

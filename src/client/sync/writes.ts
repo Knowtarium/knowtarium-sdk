@@ -4,6 +4,7 @@ import {
   type FolderId,
   formatVersionTag,
   type NoteId,
+  type PendingId,
   routes,
 } from "../../protocol/index.js";
 import { isSyncApiError } from "../errors/index.js";
@@ -124,10 +125,19 @@ export async function writeNote(
   }
 }
 
-/** Deletes a note as a signed (`deleted`) new version, if `baseVersion` is still current. */
+/**
+ * Deletes a note as a signed (`deleted`) new version, if `baseVersion` is still current. With
+ * `pendingId` (protocol 3) the delete approves an agent's delete proposal, which the server
+ * closes as approved with it.
+ */
 export async function deleteNote(
   context: SyncContext,
-  target: { readonly noteId: NoteId; readonly baseVersion: number; readonly signedAt?: string },
+  target: {
+    readonly noteId: NoteId;
+    readonly baseVersion: number;
+    readonly signedAt?: string;
+    readonly pendingId?: PendingId;
+  },
 ): Promise<WriteResult> {
   const identity = requireIdentity(context, "deleteNote");
   const { workspaceId } = context;
@@ -140,7 +150,11 @@ export async function deleteNote(
   try {
     const { data } = await context.api.call(routes.deleteNote, {
       params: { workspaceId, noteId: target.noteId },
-      headers: { "if-match": formatVersionTag(target.baseVersion), ...signingHeaders(action) },
+      headers: {
+        "if-match": formatVersionTag(target.baseVersion),
+        ...(target.pendingId === undefined ? {} : { "knowtarium-pending-id": target.pendingId }),
+        ...signingHeaders(action),
+      },
     });
     checkStoredWrite(context, data, { noteId: target.noteId, baseVersion: target.baseVersion });
     const note = await acceptNote(context, {

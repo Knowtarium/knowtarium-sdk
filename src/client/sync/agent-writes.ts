@@ -1,7 +1,12 @@
-import { normalizeNoteName } from "../../core/files/index.js";
-import { toBase64Url } from "../../crypto/index.js";
+import { normalizeNoteName, ROOT_FOLDER_NAME } from "../../core/files/index.js";
+import { fromBase64Url, toBase64Url } from "../../crypto/index.js";
 import {
   type AgentEditedEnvelope,
+  type AgentPermission,
+  type AgentScopeBody,
+  agentScopeAllows,
+  type Folder,
+  type FolderId,
   type AgentPolicyFolder,
   type AgentPolicyFolderLookup,
   type AgentPolicyRules,
@@ -14,17 +19,28 @@ import {
   routes,
 } from "../../protocol/index.js";
 import { isSyncApiError, RequestValidationError, VaultError } from "../errors/index.js";
-import { newId } from "../platform/ids.js";
+import { newId, newPendingNonce } from "../platform/ids.js";
 import {
+  type AgentActionRevisions,
   type AgentPolicyTrust,
+  type AgentSigner,
   type CheckedAgentPolicy,
   checkAgentPolicy,
+  decryptFolderName,
   encryptEvent,
+  encryptFolderName,
   encryptNote,
   fetchAgentPolicy,
   prepareAgentPolicy,
+  signAgentDeleted,
   signAgentEdited,
+  signAgentFolderCreated,
+  signAgentFolderDeleted,
+  signAgentFolderMoved,
+  signAgentFolderRenamed,
+  signingFields,
   signingHeaders,
+  type TokenScopes,
   type VerifiedAgentKey,
 } from "../vault/index.js";
 import { eventSignatureValid } from "../history/verify.js";
@@ -34,13 +50,20 @@ import {
   requireIdentity,
   type SyncContext,
   withCurrentKey,
+  withKeys,
 } from "./context.js";
+import { fetchFolderEvents } from "./folder-events.js";
 import { acceptNote, checkStoredWrite, fetchEvents } from "./notes.js";
 import type {
+  AgentAction,
+  AgentActionAudit,
+  AgentActionRefusal,
+  AgentFolderResult,
   AgentWriteAudit,
   AgentWriteConflict,
   AgentWriteResult,
   SetAgentPolicyResult,
+  SubmitResult,
 } from "./results.js";
 import { type ConflictHandling, conflictResult, type NoteWrite } from "./writes.js";
 
@@ -368,7 +391,7 @@ async function recordWrote(
   context: SyncContext,
   noteId: NoteId,
   saved: { readonly note: { readonly version: number } },
-  write: AgentNoteWrite,
+  write: Pick<AgentNoteWrite, "record">,
 ): Promise<boolean> {
   const record = write.record;
   if (record === undefined) return false;
@@ -472,4 +495,662 @@ export async function auditAgentVersion(
   if (!resolved.ok) return { status: "unverifiable", revision, problem: resolved.problem };
   if (resolved.policySha256 !== policySha256) return { status: "policy_mismatch", revision };
   return { status: "consistent", revision, mode: modeUnder(resolved.rules) };
+}
+
+/*
+ * Protocol 3: an agent's own signed note deletes and folder changes, each on its agent route with
+ * the policy revision it checked and the scope revision it acts under (`scopeRevision`, from its
+ * verified `agent_scope`; the CLI's `WorkspaceSession` knows it). The same checks as
+ * `writeAsAgent` come first: the agent's key is the one the owner vouched for, the policy verifies
+ * and every folder whose contents change (the top level reads the default) is `direct`. The
+ * server enforces the permissions and the scope; a `stale_agent_scope` or `permission_required`
+ * answer is thrown, for the caller to read its token again.
+ */
+
+/** What every agent action of protocol 3 takes besides its own fields. */
+export interface AgentActionOptions {
+  /** The scope revision the agent acts under (its verified `agent_scope`'s). */
+  readonly scopeRevision: number;
+  /** As for `writeAsAgent`: the caller's pinned policy floor. */
+  readonly minPolicyRevision?: number;
+  /** As for `writeAsAgent`: looks folders up for the policy's ancestry. */
+  readonly folders?: AgentPolicyFolderLookup;
+  /** As for `writeAsAgent`: more folders the caller sees, none of whose overrides may hide. */
+  readonly visibleFolderIds?: Iterable<string>;
+  /** When to sign (see `SigningTime`); defaults to now. */
+  readonly signedAt?: string;
+}
+
+/** What an agent action signs with, once the checks passed. */
+interface AgentActionSigning {
+  readonly signer: AgentSigner;
+  readonly own: readonly VerifiedAgentKey[];
+  readonly revisions: AgentActionRevisions;
+}
+
+/**
+ * Runs an agent action of protocol 3 after `writeAsAgent`'s checks, for the folders `touched`
+ * (null: the top level, which reads the default): a refusal instead when one fails, and once
+ * more after `stale_agent_policy`. `approval_required`, `agent_key_required` and `rate_limited`
+ * from the server come back as refusals; anything else is thrown.
+ */
+async function runAgentAction<T>(
+  context: SyncContext,
+  route: string,
+  options: AgentActionOptions,
+  touched: readonly (string | null)[],
+  send: (signing: AgentActionSigning) => Promise<T>,
+): Promise<T | AgentActionRefusal> {
+  if (context.agent === undefined) return { status: "agent_key_required" };
+  const { agent, signer } = requireAgent(context, route);
+  const own = await ownKeys(context, agent);
+  if (own.length === 0) return { status: "agent_key_required" };
+  const floor = Math.max(options.minPolicyRevision ?? 0, ...own.map((key) => key.policyRevision));
+  const lookup = options.folders ?? knownFolders(context);
+  const folders = [...new Set(touched.filter((folderId) => folderId !== null))];
+  if (folders.some((folderId) => lookup(folderId) === undefined)) {
+    return { status: "approval_required", reason: "unknown_folder", policyRevision: null };
+  }
+  const topLevel = touched.includes(null);
+  const ancestries = folders.map((folderId) => agentPolicyAncestry(folderId, lookup));
+  const visible = new Set([
+    ...(options.visibleFolderIds ?? []),
+    ...context.folders.keys(),
+    ...ancestries.flatMap((ancestry) =>
+      ancestry.filter((folder) => folder.unknown !== true).map((folder) => folder.folderId),
+    ),
+  ]);
+  let lastRevision: number | null = null;
+  const attempt = async (retried: boolean): Promise<T | AgentActionRefusal> => {
+    const { resolved } = await fetchAgentPolicy(context.api, policyTrust(context, floor, visible));
+    if (!resolved.ok) {
+      return {
+        status: "approval_required",
+        reason: "unverified_policy",
+        policyRevision: null,
+        problem: resolved.problem,
+      };
+    }
+    lastRevision = resolved.revision;
+    const asksFirst =
+      (topLevel && resolved.rules.default !== "direct") ||
+      ancestries.some((ancestry) => effectiveMode(resolved.rules, ancestry) !== "direct");
+    if (asksFirst) {
+      return { status: "approval_required", reason: "policy", policyRevision: resolved.revision };
+    }
+    try {
+      return await send({
+        signer,
+        own,
+        revisions: {
+          revision: resolved.revision,
+          policySha256: resolved.policySha256,
+          scopeRevision: options.scopeRevision,
+        },
+      });
+    } catch (error) {
+      if (isSyncApiError(error, "stale_agent_policy") && !retried) return attempt(true);
+      throw error;
+    }
+  };
+  try {
+    return await attempt(false);
+  } catch (error) {
+    if (isSyncApiError(error, "approval_required")) {
+      return { status: "approval_required", reason: "server", policyRevision: lastRevision };
+    }
+    if (isSyncApiError(error, "agent_key_required")) return { status: "agent_key_required" };
+    if (isSyncApiError(error, "rate_limited")) {
+      const { detail } = error;
+      return {
+        status: "rate_limited",
+        retryAfterSeconds: detail.code === "rate_limited" ? detail.retryAfterSeconds : null,
+      };
+    }
+    throw error;
+  }
+}
+
+/** An agent's note delete (protocol 3, `notes.delete`). */
+export interface AgentNoteDelete extends AgentActionOptions {
+  readonly noteId: NoteId;
+  /** The version the agent read: the delete marker becomes the next one. */
+  readonly baseVersion: number;
+  /** Appends the agent's unsigned `wrote` record for the marker (who, and why). Best effort. */
+  readonly record?: { readonly actor: string; readonly summary?: string };
+}
+
+/**
+ * An agent deletes a note directly (protocol 3), signed with its own key (`agent_deleted`), where
+ * the note's folder is `direct`: `writeAsAgent`'s checks and refusals (propose the delete instead
+ * with `proposeDelete` on `approval_required`, `agent_key_required` or the daily cap), and both
+ * sides on a 409. The note's folder must be one the engine knows (else `unknown_folder`).
+ */
+export async function deleteAsAgent(
+  context: SyncContext,
+  target: AgentNoteDelete,
+): Promise<AgentWriteResult> {
+  const { workspaceId } = context;
+  const folderId = context.noteFolders.get(target.noteId);
+  if (folderId === undefined) {
+    return { status: "approval_required", reason: "unknown_folder", policyRevision: null };
+  }
+  let result: AgentWriteResult;
+  try {
+    result = await runAgentAction(
+      context,
+      "deleteNoteAsAgent",
+      target,
+      [folderId],
+      async ({ signer, own, revisions }) => {
+        const action = signAgentDeleted(signer, {
+          workspaceId,
+          noteId: target.noteId,
+          folderId,
+          baseVersion: target.baseVersion,
+          ...revisions,
+          ...(target.signedAt === undefined ? {} : { signedAt: target.signedAt }),
+        });
+        const { data } = await context.api.call(routes.deleteNoteAsAgent, {
+          params: { workspaceId, noteId: target.noteId },
+          headers: {
+            "if-match": formatVersionTag(target.baseVersion),
+            ...signingHeaders(action),
+            "knowtarium-agent-policy-revision": String(revisions.revision),
+            "knowtarium-agent-scope-revision": String(revisions.scopeRevision),
+          },
+        });
+        checkStoredWrite(context, data, target, own);
+        const note = await acceptNote(context, {
+          noteId: target.noteId,
+          folderId: data.note.folderId,
+          version: data.note.currentVersion,
+          name: null,
+          text: null,
+          createdAt: data.note.createdAt,
+          event: data.event,
+          agentKeys: own,
+        });
+        return {
+          status: "saved" as const,
+          note,
+          workspaceVersion: data.workspaceVersion,
+          policyRevision: revisions.revision,
+          recorded: false,
+        };
+      },
+    );
+  } catch (error) {
+    if (!isSyncApiError(error, "conflict")) throw error;
+    const conflict = await conflictResult(context, target.noteId, {
+      baseVersion: target.baseVersion,
+      name: null,
+      text: null,
+    });
+    return { ...conflict, currentVersion: conflict.theirs.version } satisfies AgentWriteConflict;
+  }
+  if (result.status !== "saved" || target.record === undefined) return result;
+  return {
+    ...result,
+    recorded: await recordWrote(context, target.noteId, result, { record: target.record }),
+  };
+}
+
+/**
+ * An agent proposes deleting a note (protocol 3, `notes.delete`) where its folder asks first:
+ * a delete proposal at `baseVersion` (the version it read), unsigned, for a person to approve with
+ * their own signed delete. Both sides on a 409.
+ */
+export async function proposeDelete(
+  context: SyncContext,
+  target: { readonly noteId: NoteId; readonly baseVersion: number },
+): Promise<SubmitResult> {
+  if (context.api.auth.kind !== "agent") {
+    throw new RequestValidationError("proposeNoteDelete", "auth");
+  }
+  try {
+    const { data } = await context.api.call(routes.proposeNoteDelete, {
+      params: { workspaceId: context.workspaceId, noteId: target.noteId },
+      headers: {
+        "if-match": formatVersionTag(target.baseVersion),
+        "knowtarium-pending-nonce": newPendingNonce(),
+      },
+    });
+    return { status: "submitted", pending: data.pending };
+  } catch (error) {
+    if (!isSyncApiError(error, "conflict")) throw error;
+    return conflictResult(context, target.noteId, {
+      baseVersion: target.baseVersion,
+      name: null,
+      text: null,
+    });
+  }
+}
+
+/** Reports a folder the server stored for this agent's change, as the feed would. */
+async function reportFolder(context: SyncContext, folder: Folder): Promise<void> {
+  const name = await withKeys(context, (keys) =>
+    decryptFolderName(
+      keys,
+      { workspaceId: context.workspaceId, folderId: folder.id },
+      folder.encName,
+    ),
+  );
+  context.emitter.emit({
+    type: "folder",
+    folder: {
+      folderId: folder.id,
+      parentId: folder.parentId,
+      name,
+      deleted: false,
+      createdAt: folder.createdAt,
+    },
+  });
+}
+
+/** A folder name an agent gives: the empty name is the workspace root's own. */
+function folderName(route: string, name: string): string {
+  if (name === ROOT_FOLDER_NAME) throw new RequestValidationError(route, "body", ["encName"]);
+  return name;
+}
+
+/**
+ * An agent creates a folder (protocol 3, `folders.create`) under `parentId` (null: the top level,
+ * which only a whole-workspace token may use), signed `agent_folder_created`, where the parent
+ * (or the default, at the top level) is `direct`. With `folderId`, the ID of a deleted folder, it
+ * revives it where it was (`parentId` must be its stored parent). The folder is reported as the
+ * feed would report it. Folder changes are never proposed: a refusal means telling the person.
+ */
+export async function createFolderAsAgent(
+  context: SyncContext,
+  change: AgentActionOptions & {
+    readonly parentId: FolderId | null;
+    readonly name: string;
+    readonly folderId?: FolderId;
+  },
+): Promise<AgentFolderResult> {
+  const { workspaceId } = context;
+  const name = folderName("createFolderAsAgent", change.name);
+  const folderId = change.folderId ?? newId("fld");
+  return runAgentAction(
+    context,
+    "createFolderAsAgent",
+    change,
+    [change.parentId],
+    ({ signer, revisions }) =>
+      withCurrentKey(context, async (keys) => {
+        const encName = encryptFolderName(keys.current, { workspaceId, folderId }, name);
+        const action = signAgentFolderCreated(signer, {
+          workspaceId,
+          folderId,
+          parentId: change.parentId,
+          encName: fromBase64Url(encName),
+          ...revisions,
+          ...(change.signedAt === undefined ? {} : { signedAt: change.signedAt }),
+        });
+        const { data } = await context.api.call(routes.createFolderAsAgent, {
+          params: { workspaceId },
+          body: {
+            id: folderId,
+            parentId: change.parentId,
+            encName,
+            policyRevision: revisions.revision,
+            scopeRevision: revisions.scopeRevision,
+            ...signingFields(action),
+          },
+        });
+        await reportFolder(context, data.folder);
+        return {
+          status: "saved" as const,
+          folder: data.folder,
+          workspaceVersion: data.workspaceVersion,
+          policyRevision: revisions.revision,
+        };
+      }),
+  );
+}
+
+/** The parent of a folder the engine (or `folders`) knows; undefined when it doesn't know it. */
+function parentOf(
+  context: SyncContext,
+  options: AgentActionOptions,
+  folderId: string,
+): string | null | undefined {
+  return (options.folders ?? knownFolders(context))(folderId)?.parentId;
+}
+
+/**
+ * An agent renames a folder (protocol 3, `folders.rename`), signed `agent_folder_renamed`, where
+ * the folder and its parent are `direct`.
+ */
+export async function renameFolderAsAgent(
+  context: SyncContext,
+  change: AgentActionOptions & { readonly folderId: FolderId; readonly name: string },
+): Promise<AgentFolderResult> {
+  const { workspaceId } = context;
+  const name = folderName("renameFolderAsAgent", change.name);
+  const parent = parentOf(context, change, change.folderId);
+  if (parent === undefined) {
+    return { status: "approval_required", reason: "unknown_folder", policyRevision: null };
+  }
+  return runAgentAction(
+    context,
+    "renameFolderAsAgent",
+    change,
+    [change.folderId, parent],
+    ({ signer, revisions }) =>
+      withCurrentKey(context, async (keys) => {
+        const encName = encryptFolderName(
+          keys.current,
+          { workspaceId, folderId: change.folderId },
+          name,
+        );
+        const action = signAgentFolderRenamed(signer, {
+          workspaceId,
+          folderId: change.folderId,
+          encName: fromBase64Url(encName),
+          ...revisions,
+          ...(change.signedAt === undefined ? {} : { signedAt: change.signedAt }),
+        });
+        const { data } = await context.api.call(routes.renameFolderAsAgent, {
+          params: { workspaceId, folderId: change.folderId },
+          body: {
+            encName,
+            policyRevision: revisions.revision,
+            scopeRevision: revisions.scopeRevision,
+            ...signingFields(action),
+          },
+        });
+        await reportFolder(context, data.folder);
+        return {
+          status: "saved" as const,
+          folder: data.folder,
+          workspaceVersion: data.workspaceVersion,
+          policyRevision: revisions.revision,
+        };
+      }),
+  );
+}
+
+/**
+ * An agent moves a folder, with everything in it, under `parentId` (protocol 3, `folders.move`;
+ * null: the top level, only for a whole-workspace token), signed `agent_folder_moved`, where the
+ * folder, its current parent and the new parent are `direct`.
+ */
+export async function moveFolderAsAgent(
+  context: SyncContext,
+  change: AgentActionOptions & { readonly folderId: FolderId; readonly parentId: FolderId | null },
+): Promise<AgentFolderResult> {
+  const { workspaceId } = context;
+  const parent = parentOf(context, change, change.folderId);
+  if (parent === undefined) {
+    return { status: "approval_required", reason: "unknown_folder", policyRevision: null };
+  }
+  return runAgentAction(
+    context,
+    "moveFolderAsAgent",
+    change,
+    [change.folderId, parent, change.parentId],
+    async ({ signer, revisions }) => {
+      const action = signAgentFolderMoved(signer, {
+        workspaceId,
+        folderId: change.folderId,
+        parentId: change.parentId,
+        ...revisions,
+        ...(change.signedAt === undefined ? {} : { signedAt: change.signedAt }),
+      });
+      const { data } = await context.api.call(routes.moveFolderAsAgent, {
+        params: { workspaceId, folderId: change.folderId },
+        body: {
+          parentId: change.parentId,
+          policyRevision: revisions.revision,
+          scopeRevision: revisions.scopeRevision,
+          ...signingFields(action),
+        },
+      });
+      await reportFolder(context, data.folder);
+      return {
+        status: "saved" as const,
+        folder: data.folder,
+        workspaceVersion: data.workspaceVersion,
+        policyRevision: revisions.revision,
+      };
+    },
+  );
+}
+
+/**
+ * An agent deletes an empty folder (protocol 3, `folders.delete`), signed
+ * `agent_folder_deleted`, where the folder and its parent are `direct`. The server answers
+ * `not_empty` (thrown) while it holds a folder, a note, a file or a recent unfinished upload.
+ */
+export async function deleteFolderAsAgent(
+  context: SyncContext,
+  change: AgentActionOptions & { readonly folderId: FolderId },
+): Promise<
+  | { readonly status: "saved"; readonly workspaceVersion: number; readonly policyRevision: number }
+  | AgentActionRefusal
+> {
+  const { workspaceId } = context;
+  const parent = parentOf(context, change, change.folderId);
+  if (parent === undefined) {
+    return { status: "approval_required", reason: "unknown_folder", policyRevision: null };
+  }
+  return runAgentAction(
+    context,
+    "deleteFolderAsAgent",
+    change,
+    [change.folderId, parent],
+    async ({ signer, revisions }) => {
+      const action = signAgentFolderDeleted(signer, {
+        workspaceId,
+        folderId: change.folderId,
+        ...revisions,
+        ...(change.signedAt === undefined ? {} : { signedAt: change.signedAt }),
+      });
+      const { data } = await context.api.call(routes.deleteFolderAsAgent, {
+        params: { workspaceId, folderId: change.folderId },
+        headers: {
+          ...signingHeaders(action),
+          "knowtarium-agent-policy-revision": String(revisions.revision),
+          "knowtarium-agent-scope-revision": String(revisions.scopeRevision),
+        },
+      });
+      context.emitter.emit({
+        type: "folder",
+        folder: {
+          folderId: change.folderId,
+          parentId: parent === null ? null : (parent as FolderId),
+          name: null,
+          deleted: true,
+          createdAt: null,
+        },
+      });
+      return {
+        status: "saved" as const,
+        workspaceVersion: data.workspaceVersion,
+        policyRevision: revisions.revision,
+      };
+    },
+  );
+}
+
+/**
+ * The agents' direct writes, note deletes and folder changes of the last `sinceMs` milliseconds
+ * (by when each was signed), newest first, each verified under its agent's vouched key (anything
+ * that doesn't verify is left out); only one agent's with `tokenId`. For a person's list of an
+ * agent's changes, with `auditAgentAction` and the undo helpers.
+ */
+export async function listAgentActions(
+  context: SyncContext,
+  options: { readonly sinceMs: number; readonly tokenId?: string; readonly now?: number },
+): Promise<AgentAction[]> {
+  const { workspaceId } = context;
+  const since = (options.now ?? Date.now()) - options.sinceMs;
+  const recent = (createdAt: string) => Date.parse(createdAt) >= since;
+  const wanted = (tokenId: string) => options.tokenId === undefined || options.tokenId === tokenId;
+  const actions: AgentAction[] = [];
+  for (const event of await fetchEvents(context, {})) {
+    const fields = event.signed?.envelope;
+    if (fields?.type !== "agent_edited" && fields?.type !== "agent_deleted") continue;
+    if (!wanted(fields.tokenId) || !recent(fields.createdAt)) continue;
+    const keys = await context.verifier.agentKeys.forToken(fields.tokenId);
+    if (!eventSignatureValid(event, workspaceId, context.verifier.owner, keys)) continue;
+    actions.push({
+      kind: fields.type === "agent_edited" ? "edited" : "deleted",
+      tokenId: fields.tokenId,
+      createdAt: fields.createdAt,
+      noteId: fields.noteId,
+      version: fields.version,
+      folderId: fields.folderId,
+      event,
+    });
+  }
+  for (const entry of await fetchFolderEvents(context)) {
+    const fields = entry.event.signed?.envelope;
+    if (entry.agent === null || fields === undefined || !recent(fields.createdAt)) continue;
+    if (!wanted(entry.agent.tokenId)) continue;
+    actions.push({
+      kind: "folder",
+      tokenId: entry.agent.tokenId,
+      createdAt: fields.createdAt,
+      folderId: entry.event.folderId,
+      entry,
+    });
+  }
+  return actions.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+}
+
+/** The permission each agent action needs. */
+const PERMISSION_OF: Partial<Record<string, AgentPermission>> = {
+  agent_deleted: "notes.delete",
+  agent_folder_created: "folders.create",
+  agent_folder_renamed: "folders.rename",
+  agent_folder_moved: "folders.move",
+  agent_folder_deleted: "folders.delete",
+};
+
+/**
+ * Whether a scope's write reach holds a folder (null: the top level, only a whole-workspace
+ * scope): `read-write`, and the folder is one of its folders or under one.
+ */
+function reaches(
+  scope: AgentScopeBody,
+  folderId: string | null,
+  lookup: AgentPolicyFolderLookup,
+): boolean | null {
+  if (scope.access !== "read-write") return false;
+  if (scope.folderIds.length === 0) return true;
+  if (folderId === null) return false;
+  const ancestry = agentPolicyAncestry(folderId, lookup);
+  if (
+    ancestry.some(
+      (folder) => folder.unknown !== true && scope.folderIds.includes(folder.folderId as FolderId),
+    )
+  ) {
+    return true;
+  }
+  // a chain cut off by an unknown folder: the caller doesn't know the tree well enough
+  return ancestry.some((folder) => folder.unknown === true) ? null : false;
+}
+
+/**
+ * Audits an agent's protocol 3 action (a note delete or a folder change, from `agentActions`)
+ * against the scope revisions the owner signed for its token (`fetchTokenScopes`; read them with
+ * the device's floor): it is allowed only under the newest revision signed before the action,
+ * when the action names that very revision, and its scope holds the action's permission and
+ * reaches every folder the action touched (the folder, and for a create its parent, for a move
+ * both parents). The policy part is checked as for edits (`auditAgentVersion`'s rule). A list
+ * with a gap or below the floor is `unchecked`, as is an action whose folders aren't known
+ * (`folders`, defaulting to the engine's). For display: the server enforces the scope.
+ */
+export async function auditAgentAction(
+  context: SyncContext,
+  action: AgentAction,
+  scopes: TokenScopes,
+  options: {
+    readonly folders?: AgentPolicyFolderLookup;
+    readonly visibleFolderIds?: Iterable<string>;
+  } = {},
+): Promise<AgentActionAudit> {
+  const signed = action.kind === "folder" ? action.entry.event.signed : action.event.signed;
+  const fields = signed?.envelope;
+  const permission = fields === undefined ? undefined : PERMISSION_OF[fields.type];
+  if (fields === undefined || permission === undefined || !("scopeRevision" in fields)) {
+    return { verdict: "unchecked", reason: "not_agent_action" };
+  }
+  if (scopes.problem !== null) return { verdict: "unchecked", reason: scopes.problem };
+  const at = Date.parse(fields.createdAt);
+  const before = scopes.scopes.filter((scope) => Date.parse(scope.signedAt) < at);
+  const governing = before.at(-1);
+  if (governing === undefined) {
+    return { verdict: "not_allowed", scopeRevision: fields.scopeRevision, reason: "no_scope" };
+  }
+  const notAllowed = (reason: "other_revision" | "permission" | "folders" | "policy") =>
+    ({ verdict: "not_allowed", scopeRevision: governing.revision, reason }) as const;
+  if (fields.scopeRevision !== governing.revision) return notAllowed("other_revision");
+  if (!agentScopeAllows(governing.scope, permission)) return notAllowed("permission");
+  const lookup = options.folders ?? knownFolders(context);
+  const touched: (string | null)[] = [];
+  if (action.kind === "folder") {
+    const { event } = action.entry;
+    touched.push(event.folderId);
+    if (event.action === "created" || event.action === "restored") touched.push(event.parentAfter);
+    if (event.action === "moved") touched.push(event.parentBefore, event.parentAfter);
+  } else {
+    touched.push(action.folderId);
+  }
+  const reach = touched.map((folderId) => reaches(governing.scope, folderId, lookup));
+  if (reach.includes(false)) return notAllowed("folders");
+  if (reach.includes(null)) return { verdict: "unchecked", reason: "unknown_folder" };
+  const policy = await auditPolicyRevision(context, fields, options);
+  if (policy.status !== "consistent") {
+    return { ...notAllowed("policy"), policy };
+  }
+  return { verdict: "allowed", scopeRevision: governing.revision, policy };
+}
+
+/**
+ * `auditAgentVersion`'s policy rule for any agent-signed envelope: the owner-signed hash of the
+ * revision it names (and this device's pin) must be the one it signed, never below its key's
+ * floor. The mode under it isn't judged here (folder changes have several folders).
+ */
+async function auditPolicyRevision(
+  context: SyncContext,
+  fields: { readonly tokenId: string; readonly revision: number; readonly policySha256: string },
+  options: { readonly visibleFolderIds?: Iterable<string> },
+): Promise<AgentWriteAudit> {
+  const { revision, policySha256 } = fields;
+  const pinned = await context.trust.agentPolicySha256(context.workspaceId, revision);
+  if (pinned !== undefined && pinned !== policySha256) {
+    return { status: "policy_mismatch", revision };
+  }
+  const floor = Math.max(
+    0,
+    ...(await context.verifier.agentKeys.forToken(fields.tokenId)).map((key) => key.policyRevision),
+  );
+  if (revision < floor) return { status: "below_floor", revision, floor };
+  if (revision === 0) {
+    return policySha256 === MISSING_AGENT_POLICY_SHA256
+      ? { status: "consistent", revision, mode: null }
+      : { status: "policy_mismatch", revision };
+  }
+  let checked: CheckedAgentPolicy;
+  try {
+    checked = await readAgentPolicy(context, {
+      revision,
+      ...(options.visibleFolderIds === undefined
+        ? {}
+        : { visibleFolderIds: options.visibleFolderIds }),
+    });
+  } catch (error) {
+    if (isSyncApiError(error, "not_found")) {
+      return { status: "unverifiable", revision, problem: "not_found" };
+    }
+    throw error;
+  }
+  const { resolved } = checked;
+  if (!resolved.ok) return { status: "unverifiable", revision, problem: resolved.problem };
+  if (resolved.policySha256 !== policySha256) return { status: "policy_mismatch", revision };
+  return { status: "consistent", revision, mode: null };
 }

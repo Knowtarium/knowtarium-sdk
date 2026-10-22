@@ -13,7 +13,13 @@ import {
   toBase64Url,
   wrapAndSignWorkspaceKey,
 } from "../../crypto/index.js";
-import type { AccountId, FolderId, TokenId, WorkspaceId } from "../../protocol/index.js";
+import type {
+  AccountId,
+  AgentPermission,
+  FolderId,
+  TokenId,
+  WorkspaceId,
+} from "../../protocol/index.js";
 import { type ApiClient, createApiClient, type RetryPolicy } from "../api/index.js";
 import type { EncryptedCache } from "../cache/index.js";
 import { newId } from "../platform/ids.js";
@@ -26,6 +32,8 @@ import {
   type Signer,
   signAgentKey,
   TrustState,
+  updateTokenScope,
+  type UpdateTokenScopeResult,
 } from "../vault/index.js";
 import { FakeServer } from "./fake-server.js";
 import { wrappedRecord } from "./wrapped.js";
@@ -122,6 +130,34 @@ export class World {
       agentKeySignedAt: vouched.signedAt,
       agentKeySignature: vouched.signature,
     });
+  }
+
+  /**
+   * The owner signs the agent token's next scope revision in the web app (`updateTokenScope`):
+   * `permissions` on top of its current access and folders, unless given.
+   */
+  async grantScope(scope: {
+    readonly permissions: readonly AgentPermission[];
+    readonly access?: "read" | "read-write";
+    readonly folderIds?: readonly FolderId[];
+  }): Promise<UpdateTokenScopeResult> {
+    const api = createApiClient({
+      baseUrl: "https://api.test",
+      fetch: this.server.fetch,
+      auth: { kind: "session" },
+    });
+    return updateTokenScope(
+      api,
+      { signer: this.signer },
+      {
+        workspaceId: this.workspaceId,
+        tokenId: this.tokenId,
+        baseRevision: this.server.scopeRevision,
+        access: scope.access ?? this.server.agentAccess,
+        folderIds: scope.folderIds ?? this.server.agentFolderIds,
+        permissions: scope.permissions,
+      },
+    );
   }
 
   /** The web app: session auth, the account's keys, the account's own signing key trusted. */

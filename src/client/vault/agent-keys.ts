@@ -5,12 +5,13 @@ import {
   verifyEnvelopeFor,
   verifyTokenRevocation,
 } from "../../crypto/index.js";
-import type {
-  AgentKeyRecord,
-  ListKeysResponse,
-  SignedAgentKey,
-  SignedEvent,
-  TokenRevocation,
+import {
+  type AgentKeyRecord,
+  isAgentSigned,
+  type ListKeysResponse,
+  type SignedAgentKey,
+  type SignedEvent,
+  type TokenRevocation,
 } from "../../protocol/index.js";
 import type { TrustedSigner } from "./verify.js";
 
@@ -24,7 +25,8 @@ function asEnvelope(signed: SignedEvent | SignedAgentKey): SignedEnvelope {
 }
 
 /*
- * Agent signing keys (protocol 2). An agent's direct write (`agent_edited`) counts only under an
+ * Agent signing keys (protocol 2). An agent's direct write (`agent_edited`), and in protocol 3 its
+ * note deletes and folder changes (`agent_deleted`, `agent_folder_*`), count only under an
  * Ed25519 key the workspace owner vouched for with a signed `agent_key` naming the same token.
  * The keys come from `listKeys` (`agentKeys`) and are verified here against the owner's key from
  * a source the server can't swap, so callers keep passing only the owner key.
@@ -139,8 +141,23 @@ export function checkAgentEdited(
   key: VerifiedAgentKey,
   expected: Partial<SignedEnvelopeFields> = {},
 ): AgentEditedCheck {
+  if (signed.envelope.type !== "agent_edited") return { ok: false, problem: "not_agent_edited" };
+  return checkAgentSigned(signed, key, expected);
+}
+
+/**
+ * `checkAgentEdited` for any envelope an agent signs with its own key: `agent_edited`, and the
+ * protocol 3 actions (`agent_deleted`, `agent_folder_*`). Anything else is `not_agent_edited`.
+ */
+export function checkAgentSigned(
+  signed: SignedEvent,
+  key: VerifiedAgentKey,
+  expected: Partial<SignedEnvelopeFields> = {},
+): AgentEditedCheck {
   const fields = signed.envelope;
-  if (fields.type !== "agent_edited") return { ok: false, problem: "not_agent_edited" };
+  if (!isAgentSigned(fields.type) || !("tokenId" in fields)) {
+    return { ok: false, problem: "not_agent_edited" };
+  }
   const vouched = key.signed.envelope;
   if (
     fields.tokenId !== vouched.tokenId ||
@@ -151,7 +168,7 @@ export function checkAgentEdited(
   }
   const ok = verifyEnvelopeFor(asEnvelope(signed), key.publicKey, {
     ...expected,
-    type: "agent_edited",
+    type: fields.type,
     tokenId: vouched.tokenId,
     workspaceId: vouched.workspaceId,
     accountId: vouched.accountId,

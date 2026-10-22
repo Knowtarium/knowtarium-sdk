@@ -12,7 +12,13 @@ import {
 import { utf8Decode, utf8Encode } from "../../crypto/encoding.js";
 import {
   type AccountId,
+  type AgentPermission,
+  agentScopeSha256,
   type AgentToken,
+  type Folder,
+  type FolderEvent,
+  type FolderEventAction,
+  type SignedAgentScope,
   attachmentChunkCountFits,
   ENVELOPE_OVERHEAD_BYTES,
   LIMITS,
@@ -174,6 +180,8 @@ export interface Tampering {
   hold?: (route: RouteName) => Promise<void> | undefined;
   /** Rewrites the `ETag` of every answer that has one, as an edge proxy might. */
   etag?: (tag: string) => string;
+  /** Rewrites the signed scope revisions `listTokenScopes` answers. */
+  scopes?: (scopes: SignedAgentScope[]) => SignedAgentScope[];
 }
 
 /** The answer with its `ETag` rewritten. */
@@ -216,7 +224,10 @@ export class FakeServer {
   readonly comments: NoteComment[] = [];
   readonly checks: CheckRecord[] = [];
   readonly changes = new Map<string, ChangeEntry>();
-  readonly folders = new Map<FolderId, { parentId: FolderId | null; encName: string }>();
+  readonly folders = new Map<
+    FolderId,
+    { parentId: FolderId | null; encName: string; createdAt?: string }
+  >();
   /** Attachments by id, with the chunks stored so far. */
   readonly attachments = new Map<AttachmentId, { attachment: Attachment; chunks: Uint8Array[] }>();
   /** The storage attachments count against, in bytes (lower it to test a full workspace). */
@@ -235,6 +246,24 @@ export class FakeServer {
   agentFolderIds: FolderId[] = [];
   /** The agent token's access; a `read` token may neither write nor propose. */
   agentAccess: "read" | "read-write" = "read-write";
+  /** The agent token's permissions (protocol 3); none until its scope is signed with some. */
+  agentPermissions: AgentPermission[] = [];
+  /** The agent token's scope revision and its hash (0 and null: never signed). */
+  scopeRevision = 0;
+  scopeSha256: string | null = null;
+  /** Every signed scope revision of the agent token, oldest first. */
+  readonly agentScopes: SignedAgentScope[] = [];
+  /** Other connected agents' scope folders, which no agent may rename, move or delete. */
+  otherScopeFolderIds: FolderId[] = [];
+  /** The workspace root folder marker (`setRootFolder`). */
+  rootFolderId: FolderId | null = null;
+  /** Every folder change, people's and agents' (`listFolderEvents`). */
+  readonly folderEvents: FolderEvent[] = [];
+  /** The agent's note deletes and folder changes so far, and their daily caps (then 429). */
+  agentNoteDeletes = 0;
+  agentFolderChanges = 0;
+  agentNoteDeleteDailyCap = Number.POSITIVE_INFINITY;
+  agentFolderChangeDailyCap = Number.POSITIVE_INFINITY;
   /** Folders marked deleted, as the agent policy's ancestry reads them. */
   readonly deletedFolders = new Set<FolderId>();
   /** The most direct writes an agent may make a day (the sync API's cap); then 429. */
@@ -922,9 +951,11 @@ export class FakeServer {
       createdAt: new Date().toISOString(),
       lastUsedAt: null,
       revokedAt: this.tokenRevoked ? new Date().toISOString() : null,
-      permissions: [],
-      scopeRevision: 0,
-      scope: null,
+      permissions: [...this.agentPermissions],
+      scopeRevision: this.scopeRevision,
+      scopeSha256: this.scopeSha256,
+      scope:
+        this.agentScopes.find((scope) => scope.envelope.revision === this.scopeRevision) ?? null,
     };
   }
 
@@ -1196,6 +1227,7 @@ export class FakeServer {
       encName: this.options.encName,
       keyGeneration: this.keyGeneration,
       agentPolicyRevision: policy.revision,
+      ...(this.rootFolderId === null ? {} : { rootFolderId: this.rootFolderId }),
     });
     return response(200, { policy, workspaceVersion: seq });
   }
@@ -1210,6 +1242,15 @@ export class FakeServer {
     const folderId = headers.get("knowtarium-folder-id") as FolderId;
     const base = Number(/^"(\d+)"$/.exec(headers.get("if-match") ?? "")?.[1] ?? "-1");
     if (this.agentAccess === "read") throw new HttpError("scope_denied");
+    // a move needs notes.move (protocol 3), right after the scope
+    const moving = this.notes.get(noteId)?.folderId;
+    if (
+      moving !== undefined &&
+      moving !== folderId &&
+      !this.agentPermissions.includes("notes.move")
+    ) {
+      throw new HttpError("permission_required");
+    }
     if (!this.folders.has(folderId)) throw new HttpError("not_found");
     const signKey = this.agentSignPublicKey;
     if (signKey === null) throw new HttpError("agent_key_required");
@@ -1392,6 +1433,7 @@ export class FakeServer {
           ...(this.agentPolicy.revision === 0
             ? {}
             : { agentPolicyRevision: this.agentPolicy.revision }),
+          ...(this.rootFolderId === null ? {} : { rootFolderId: this.rootFolderId }),
         });
         return response(200, {
           workspace: {
@@ -1483,6 +1525,7 @@ export class FakeServer {
       case "writeNote": {
         const base = Number(/^"(\d+)"$/.exec(headers.get("if-match") ?? "")?.[1] ?? "-1");
         const folderId = headers.get("knowtarium-folder-id") as FolderId;
+        if (this.deletedFolders.has(folderId)) throw new HttpError("not_found");
         const current = this.currentVersion(noteId);
         if (base !== current) throw new HttpError("conflict", { currentVersion: current });
         const body = request.body ?? new Uint8Array();
@@ -1539,15 +1582,49 @@ export class FakeServer {
           version: base + 1,
           createdAt: signedAt,
         };
+        // approving an agent's delete proposal (protocol 3)
+        const pendingDelete = headers.get("knowtarium-pending-id") as PendingId | undefined;
+        const proposal =
+          pendingDelete === undefined ? undefined : this.openPending(pendingDelete, true);
+        if (
+          proposal !== undefined &&
+          (proposal.change.kind !== "delete" ||
+            proposal.change.noteId !== noteId ||
+            proposal.change.baseVersion !== base)
+        ) {
+          throw invalid(["headers", "knowtarium-pending-id"], "Not a delete of this note");
+        }
         this.verify(envelope, signature);
         const folderId = this.noteMeta(noteId).folderId;
-        return response(
-          200,
-          this.storeVersion(noteId, folderId, null, { envelope, signature: signature ?? "" }, null),
+        const stored = this.storeVersion(
+          noteId,
+          folderId,
+          null,
+          { envelope, signature: signature ?? "" },
+          pendingDelete ?? null,
         );
+        if (proposal !== undefined) {
+          this.decide(
+            proposal,
+            {
+              ...proposal.change,
+              status: "approved",
+              decidedAt: stored.event.createdAt,
+              resultingVersion: stored.note.currentVersion,
+              seq: stored.workspaceVersion,
+            },
+            stored.workspaceVersion,
+          );
+        }
+        return response(200, stored);
       }
       case "submitPending": {
         if (this.agentAccess === "read") throw new HttpError("scope_denied");
+        const from = this.notes.get(noteId)?.folderId;
+        const to = headers.get("knowtarium-folder-id") as FolderId;
+        if (from !== undefined && from !== to && !this.agentPermissions.includes("notes.move")) {
+          throw new HttpError("permission_required");
+        }
         const base = Number(/^"(\d+)"$/.exec(headers.get("if-match") ?? "")?.[1] ?? "-1");
         const current = this.currentVersion(noteId);
         if (base !== current) throw new HttpError("conflict", { currentVersion: current });
@@ -1585,10 +1662,17 @@ export class FakeServer {
       }
       case "getPending":
         return response(200, { pending: this.openPending(pendingId, false).change });
-      case "getPendingBlob":
-        return response(200, this.openPending(pendingId, false).blob);
+      case "getPendingBlob": {
+        const entry = this.openPending(pendingId, false);
+        // a delete proposal has no blob
+        if (entry.change.kind === "delete") throw new HttpError("not_found");
+        return response(200, entry.blob);
+      }
       case "approvePending": {
         const entry = this.openPending(pendingId, true);
+        if (entry.change.kind === "delete") {
+          throw invalid(["params", "pendingId"], "Approve a delete with deleteNote");
+        }
         const current = this.currentVersion(entry.change.noteId);
         if (entry.change.baseVersion !== current) {
           throw new HttpError("conflict", { currentVersion: current });
@@ -1705,29 +1789,21 @@ export class FakeServer {
           ciphertextSha256: ciphertextSha256(fromBase64Url(body.encName)),
           createdAt: body.signedAt,
         };
+        // the ID of a deleted folder revives it, only where it was (protocol 3)
+        const revived = this.deletedFolders.has(body.id);
+        if (revived && this.folders.get(body.id)?.parentId !== body.parentId) {
+          throw invalid(["body", "parentId"], "A deleted folder comes back where it was");
+        }
+        if (this.liveFolder(body.id)) throw new HttpError("already_exists");
         this.verify(envelope, body.signature);
-        const seq = this.bump();
-        const at = new Date().toISOString();
-        this.folders.set(body.id, { parentId: body.parentId, encName: body.encName });
-        this.recordChange(`folder:${body.id}`, {
-          kind: "folder",
-          seq,
-          at,
-          folderId: body.id,
+        const seq = this.changeFolder(body.id, {
+          action: revived ? "restored" : "created",
           parentId: body.parentId,
           encName: body.encName,
-          deleted: false,
-          createdAt: at,
+          byAgent: false,
+          signed: { envelope, signature: body.signature },
         });
-        const folder = {
-          id: body.id,
-          workspaceId,
-          parentId: body.parentId,
-          encName: body.encName,
-          createdAt: at,
-          updatedAt: at,
-        };
-        return response(201, { folder, workspaceVersion: seq });
+        return response(201, { folder: this.folderOf(body.id), workspaceVersion: seq });
       }
       case "createWorkspace": {
         const body = this.json(request) as {
@@ -1781,12 +1857,568 @@ export class FakeServer {
       }
       default:
         return (
+          this.routeAgentPermissions(request) ??
           this.routeClips(request) ??
           this.routeAttachments(request) ??
           this.routeHistorySettings(request) ??
           this.routeHistory(request)
         );
     }
+  }
+
+  /**
+   * The scope revision an agent request names must be the token's (`stale_agent_scope`), and the
+   * token must hold the permission (`permission_required`), with read-write (`scope_denied`).
+   */
+  private checkAgentScope(permission: AgentPermission, scopeRevision: number | undefined): void {
+    if (this.agentAccess === "read") throw new HttpError("scope_denied");
+    if (!this.agentPermissions.includes(permission)) throw new HttpError("permission_required");
+    if (scopeRevision !== undefined && scopeRevision !== this.scopeRevision) {
+      throw new HttpError("stale_agent_scope");
+    }
+  }
+
+  /** The agent's signing key and the policy revision header, as `writeNoteAsAgent` checks them. */
+  private agentSigning(policyRevision: number): { signKey: Uint8Array; policySha256: string } {
+    const signKey = this.agentSignPublicKey;
+    if (signKey === null) throw new HttpError("agent_key_required");
+    const policy = this.agentPolicy;
+    if (policyRevision !== policy.revision) throw new HttpError("stale_agent_policy");
+    return {
+      signKey,
+      policySha256: policy.signed?.envelope.policySha256 ?? MISSING_AGENT_POLICY_SHA256,
+    };
+  }
+
+  /** Every folder must be `direct` (null: the top level, which reads the default). */
+  private requireDirect(folders: readonly (FolderId | null)[]): void {
+    const policy = this.agentPolicy;
+    const asksFirst = folders.some((folder) =>
+      folder === null
+        ? policy.default !== "direct"
+        : effectiveMode(policy, agentPolicyAncestry(folder, this.folderLookup)) !== "direct",
+    );
+    if (asksFirst) throw new HttpError("approval_required");
+  }
+
+  /** Whether a folder is live (known and not deleted). */
+  private liveFolder(folderId: FolderId | null): boolean {
+    return folderId !== null && this.folders.has(folderId) && !this.deletedFolders.has(folderId);
+  }
+
+  /** The agent's write reach: a folder in its scope, or the top level for a whole-workspace one. */
+  private inWriteScope(folderId: FolderId | null): boolean {
+    return folderId === null ? this.agentFolderIds.length === 0 : this.folderInScope(folderId);
+  }
+
+  /** Whether an agent may rename, move (or, with `deleting`, delete) a folder. */
+  private protectedFolder(folderId: FolderId, deleting: boolean): boolean {
+    const inbox = this.inboxKeys.at(-1)?.envelope.folderId;
+    return (
+      this.agentFolderIds.includes(folderId) ||
+      this.otherScopeFolderIds.includes(folderId) ||
+      folderId === this.rootFolderId ||
+      (deleting && folderId === inbox)
+    );
+  }
+
+  /** Whether a folder holds a live folder, note or file. */
+  private holdsContent(folderId: FolderId): boolean {
+    const folders = [...this.folders].some(
+      ([id, folder]) => folder.parentId === folderId && !this.deletedFolders.has(id),
+    );
+    const notes = [...this.notes.values()].some(
+      (row) => row.folderId === folderId && row.versions.at(-1)?.deleted === false,
+    );
+    const files = [...this.attachments.values()].some(
+      (entry) => entry.attachment.folderId === folderId,
+    );
+    return folders || notes || files;
+  }
+
+  /** The folder as `FolderResponse` answers it. */
+  private folderOf(folderId: FolderId): Folder {
+    const folder = this.folders.get(folderId);
+    if (folder === undefined) throw new HttpError("not_found");
+    return {
+      id: folderId,
+      workspaceId: this.options.workspaceId,
+      parentId: folder.parentId,
+      encName: folder.encName,
+      createdAt: folder.createdAt ?? new Date(0).toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Applies a folder change (anyone's): the feed entry and the folder history row, at a new
+   * workspace version.
+   */
+  private changeFolder(
+    folderId: FolderId,
+    change: {
+      readonly action: FolderEventAction;
+      readonly parentId: FolderId | null;
+      readonly encName: string;
+      readonly byAgent: boolean;
+      readonly signed: { envelope: SignedEnvelopeFields; signature: string } | null;
+    },
+  ): number {
+    const before = this.folders.get(folderId);
+    const seq = this.bump();
+    const at = new Date().toISOString();
+    const deleted = change.action === "deleted";
+    const createdAt =
+      change.action === "created" ? at : (before?.createdAt ?? new Date(0).toISOString());
+    this.folders.set(folderId, { parentId: change.parentId, encName: change.encName, createdAt });
+    if (deleted) this.deletedFolders.add(folderId);
+    else this.deletedFolders.delete(folderId);
+    this.recordChange(`folder:${folderId}`, {
+      kind: "folder",
+      seq,
+      at,
+      folderId,
+      parentId: change.parentId,
+      encName: change.encName,
+      deleted,
+      createdAt,
+    });
+    const known = before !== undefined && change.action !== "created";
+    this.folderEvents.push({
+      seq,
+      folderId,
+      action: change.action,
+      authorId: change.byAgent ? this.options.tokenId : this.options.ownerId,
+      authorTokenId: change.byAgent ? this.options.tokenId : null,
+      createdAt: at,
+      parentBefore: known && change.action !== "restored" ? before.parentId : null,
+      parentAfter: deleted ? null : change.parentId,
+      encNameBefore: known && change.action !== "restored" ? before.encName : null,
+      encNameAfter: deleted ? null : change.encName,
+      signed: change.signed as FolderEvent["signed"],
+    });
+    return seq;
+  }
+
+  /** A day's cap on the agent's note deletes or folder changes (the fake's day never ends). */
+  private checkCap(used: number, cap: number): void {
+    if (used < cap) return;
+    const wait = this.agentWriteRetryAfterSeconds;
+    throw new HttpError(
+      "rate_limited",
+      { retryAfterSeconds: wait },
+      { "Retry-After": String(wait) },
+    );
+  }
+
+  /** Verifies an agent's signature once: a signature already used is refused. */
+  private verifyAgentOnce(envelope: SignedEnvelopeFields, signature: string | undefined): void {
+    const signKey = this.agentSignPublicKey ?? new Uint8Array(32);
+    this.verify(envelope, signature, signKey);
+    if (this.usedAgentSignatures.has(signature ?? "")) throw new HttpError("invalid_signature");
+    this.usedAgentSignatures.add(signature ?? "");
+  }
+
+  /**
+   * Agent permissions (protocol 3): token scopes, an agent's note deletes and delete proposals,
+   * its folder changes, the folder history and the root folder marker, refused in the sync API's
+   * order.
+   */
+  private routeAgentPermissions(
+    request: Request,
+  ): FetchResponse | Promise<FetchResponse> | undefined {
+    const { params, headers } = request;
+    const workspaceId = this.options.workspaceId;
+    const base = { accountId: this.options.ownerId, workspaceId };
+    const policyHeader = () => Number(headers.get("knowtarium-agent-policy-revision") ?? "-1");
+    const scopeHeader = () => Number(headers.get("knowtarium-agent-scope-revision") ?? "-1");
+    switch (request.name) {
+      case "updateTokenScope":
+        return this.updateTokenScope(request);
+      case "listTokenScopes": {
+        if (params["tokenId"] !== this.options.tokenId) throw new HttpError("not_found");
+        return response(200, {
+          scopes: this.tamper.scopes?.(this.agentScopes) ?? this.agentScopes,
+        });
+      }
+      case "setRootFolder": {
+        const { folderId } = this.json(request) as { folderId: FolderId };
+        if (!this.liveFolder(folderId)) throw new HttpError("not_found");
+        if (this.folders.get(folderId)?.parentId !== null) {
+          throw invalid(["body", "folderId"], "Not a top-level folder");
+        }
+        if (this.rootFolderId !== null && this.liveFolder(this.rootFolderId)) {
+          throw new HttpError("already_exists");
+        }
+        this.rootFolderId = folderId;
+        this.announceWorkspace();
+        return response(200, { ok: true });
+      }
+      case "listFolders": {
+        const folders = [...this.folders.keys()]
+          .filter((id) => !this.deletedFolders.has(id))
+          .filter((id) => request.caller !== "agent" || this.folderInScope(id))
+          .map((id) => this.folderOf(id));
+        return response(200, { folders });
+      }
+      case "listFolderEvents": {
+        const since = Number(request.query.get("since") ?? "0");
+        const folderId = request.query.get("folderId");
+        const events = this.folderEvents
+          .filter(
+            (event) => event.seq > since && (folderId === null || event.folderId === folderId),
+          )
+          .filter((event) => request.caller !== "agent" || this.folderInScope(event.folderId));
+        return response(200, this.page("events", events, request));
+      }
+      case "updateFolder": {
+        const folderId = params["folderId"] as FolderId;
+        const body = this.json(request) as {
+          encName?: string;
+          parentId?: FolderId | null;
+          signedAt?: string;
+          signature?: string;
+        };
+        if (!this.liveFolder(folderId)) throw new HttpError("not_found");
+        const folder = this.folders.get(folderId) ?? { parentId: null, encName: "" };
+        let signed: { envelope: SignedEnvelopeFields; signature: string } | null = null;
+        if (body.parentId !== undefined) {
+          if (body.parentId !== null && !this.liveFolder(body.parentId)) {
+            throw new HttpError("not_found");
+          }
+          const envelope: SignedEnvelopeFields = {
+            type: "folder_moved",
+            ...base,
+            folderId,
+            ...(body.parentId === null ? {} : { parentId: body.parentId }),
+            createdAt: body.signedAt ?? "",
+          };
+          this.verify(envelope, body.signature);
+          signed = { envelope, signature: body.signature ?? "" };
+        }
+        const seq = this.changeFolder(folderId, {
+          action: body.parentId === undefined ? "renamed" : "moved",
+          parentId: body.parentId === undefined ? folder.parentId : body.parentId,
+          encName: body.encName ?? folder.encName,
+          byAgent: false,
+          signed,
+        });
+        return response(200, { folder: this.folderOf(folderId), workspaceVersion: seq });
+      }
+      case "deleteFolder": {
+        const folderId = params["folderId"] as FolderId;
+        if (!this.liveFolder(folderId)) throw new HttpError("not_found");
+        if (this.holdsContent(folderId)) throw new HttpError("not_empty");
+        const folder = this.folders.get(folderId) ?? { parentId: null, encName: "" };
+        const seq = this.changeFolder(folderId, {
+          action: "deleted",
+          parentId: folder.parentId,
+          encName: folder.encName,
+          byAgent: false,
+          signed: null,
+        });
+        return response(200, { workspaceVersion: seq });
+      }
+      case "deleteNoteAsAgent": {
+        const noteId = params["noteId"] as NoteId;
+        const row = this.notes.get(noteId);
+        if (row !== undefined && !this.inWriteScope(row.folderId)) {
+          throw new HttpError("scope_denied");
+        }
+        this.checkAgentScope("notes.delete", undefined);
+        if (row === undefined || row.versions.at(-1)?.deleted !== false) {
+          throw new HttpError("not_found");
+        }
+        const revision = policyHeader();
+        const { policySha256 } = this.agentSigning(revision);
+        if (scopeHeader() !== this.scopeRevision) throw new HttpError("stale_agent_scope");
+        const baseVersion = Number(/^"(\d+)"$/.exec(headers.get("if-match") ?? "")?.[1] ?? "-1");
+        const envelope: SignedEnvelopeFields = {
+          type: "agent_deleted",
+          accountId: this.options.ownerId,
+          workspaceId,
+          tokenId: this.options.tokenId,
+          noteId,
+          version: baseVersion + 1,
+          folderId: row.folderId,
+          revision,
+          policySha256,
+          scopeRevision: this.scopeRevision,
+          createdAt: headers.get("knowtarium-signed-at") ?? "",
+        };
+        const signature = headers.get("knowtarium-signature");
+        this.verify(envelope, signature, this.agentSignPublicKey ?? new Uint8Array(32));
+        if (this.usedAgentSignatures.has(signature ?? "")) throw new HttpError("invalid_signature");
+        this.requireDirect([row.folderId]);
+        const current = this.currentVersion(noteId);
+        if (baseVersion !== current) throw new HttpError("conflict", { currentVersion: current });
+        this.checkCap(this.agentNoteDeletes, this.agentNoteDeleteDailyCap);
+        this.usedAgentSignatures.add(signature ?? "");
+        this.agentNoteDeletes++;
+        return response(
+          200,
+          this.storeVersion(
+            noteId,
+            row.folderId,
+            null,
+            { envelope, signature: signature ?? "" },
+            null,
+            true,
+          ),
+        );
+      }
+      case "proposeNoteDelete": {
+        const noteId = params["noteId"] as NoteId;
+        const row = this.notes.get(noteId);
+        if (row !== undefined && !this.inWriteScope(row.folderId)) {
+          throw new HttpError("scope_denied");
+        }
+        this.checkAgentScope("notes.delete", undefined);
+        if (row === undefined || row.versions.at(-1)?.deleted !== false) {
+          throw new HttpError("not_found");
+        }
+        const baseVersion = Number(/^"(\d+)"$/.exec(headers.get("if-match") ?? "")?.[1] ?? "-1");
+        const current = this.currentVersion(noteId);
+        if (baseVersion !== current) throw new HttpError("conflict", { currentVersion: current });
+        const open = [...this.pending.values()].some(
+          ({ change }) =>
+            change.kind === "delete" && change.noteId === noteId && change.status === "open",
+        );
+        if (open) throw new HttpError("already_exists");
+        const seq = this.bump();
+        const createdAt = new Date().toISOString();
+        const change: PendingChange = {
+          id: this.id("pc"),
+          workspaceId,
+          noteId,
+          folderId: row.folderId,
+          baseVersion,
+          clientNonce: headers.get("knowtarium-pending-nonce") ?? "",
+          sizeBytes: 0,
+          submittedBy: this.options.tokenId,
+          authorTokenId: this.options.tokenId,
+          createdAt,
+          status: "open",
+          decidedAt: null,
+          resultingVersion: null,
+          rejectionCommentId: null,
+          seq,
+          kind: "delete",
+        };
+        this.pending.set(change.id, { change, blob: new Uint8Array() });
+        this.recordChange(`pending:${change.id}`, {
+          kind: "pending",
+          seq,
+          at: createdAt,
+          pendingId: change.id,
+          noteId,
+          status: "open",
+        });
+        return response(201, { pending: change });
+      }
+      case "createFolderAsAgent": {
+        const body = this.json(request) as {
+          id: FolderId;
+          parentId: FolderId | null;
+          encName: string;
+          policyRevision: number;
+          scopeRevision: number;
+          signedAt: string;
+          signature: string;
+        };
+        const revived = this.deletedFolders.has(body.id);
+        // a revive is checked on the deleted folder's own stored place, never another
+        const stored = revived ? (this.folders.get(body.id)?.parentId ?? null) : body.parentId;
+        if (!this.inWriteScope(stored)) throw new HttpError("scope_denied");
+        this.checkAgentScope("folders.create", undefined);
+        if (revived && stored !== body.parentId) {
+          throw invalid(["body", "parentId"], "A deleted folder comes back where it was");
+        }
+        if (this.liveFolder(body.id)) throw new HttpError("already_exists");
+        if (body.parentId !== null && !this.liveFolder(body.parentId)) {
+          throw new HttpError("not_found");
+        }
+        const { policySha256 } = this.agentSigning(body.policyRevision);
+        if (body.scopeRevision !== this.scopeRevision) throw new HttpError("stale_agent_scope");
+        const envelope: SignedEnvelopeFields = {
+          type: "agent_folder_created",
+          ...base,
+          tokenId: this.options.tokenId,
+          folderId: body.id,
+          ...(body.parentId === null ? {} : { parentId: body.parentId }),
+          ciphertextSha256: ciphertextSha256(fromBase64Url(body.encName)),
+          revision: body.policyRevision,
+          policySha256,
+          scopeRevision: body.scopeRevision,
+          createdAt: body.signedAt,
+        };
+        this.verifyAgentOnce(envelope, body.signature);
+        this.requireDirect([body.parentId]);
+        this.checkCap(this.agentFolderChanges, this.agentFolderChangeDailyCap);
+        this.agentFolderChanges++;
+        const seq = this.changeFolder(body.id, {
+          action: revived ? "restored" : "created",
+          parentId: body.parentId,
+          encName: body.encName,
+          byAgent: true,
+          signed: { envelope, signature: body.signature },
+        });
+        return response(201, { folder: this.folderOf(body.id), workspaceVersion: seq });
+      }
+      case "renameFolderAsAgent":
+      case "moveFolderAsAgent":
+      case "deleteFolderAsAgent": {
+        const folderId = params["folderId"] as FolderId;
+        const deleting = request.name === "deleteFolderAsAgent";
+        const moving = request.name === "moveFolderAsAgent";
+        const body = deleting
+          ? {
+              policyRevision: policyHeader(),
+              scopeRevision: scopeHeader(),
+              signedAt: headers.get("knowtarium-signed-at") ?? "",
+              signature: headers.get("knowtarium-signature") ?? "",
+            }
+          : (this.json(request) as {
+              encName?: string;
+              parentId?: FolderId | null;
+              policyRevision: number;
+              scopeRevision: number;
+              signedAt: string;
+              signature: string;
+            });
+        const folder = this.folders.get(folderId);
+        const parentId = folder?.parentId ?? null;
+        const destination = moving
+          ? ((body as { parentId?: FolderId | null }).parentId ?? null)
+          : null;
+        const touched = moving ? [folderId, parentId, destination] : [folderId, parentId];
+        if (this.liveFolder(folderId) && !touched.every((id) => this.inWriteScope(id))) {
+          throw new HttpError("scope_denied");
+        }
+        this.checkAgentScope(
+          deleting ? "folders.delete" : moving ? "folders.move" : "folders.rename",
+          undefined,
+        );
+        if (!this.liveFolder(folderId) || folder === undefined) throw new HttpError("not_found");
+        if (this.protectedFolder(folderId, deleting)) throw new HttpError("protected_folder");
+        const { policySha256 } = this.agentSigning(body.policyRevision);
+        if (body.scopeRevision !== this.scopeRevision) throw new HttpError("stale_agent_scope");
+        const agent = {
+          ...base,
+          tokenId: this.options.tokenId,
+          folderId,
+          revision: body.policyRevision,
+          policySha256,
+          scopeRevision: body.scopeRevision,
+          createdAt: body.signedAt,
+        };
+        const encName = (body as { encName?: string }).encName;
+        const envelope: SignedEnvelopeFields = deleting
+          ? { type: "agent_folder_deleted", ...agent }
+          : moving
+            ? {
+                type: "agent_folder_moved",
+                ...agent,
+                ...(destination === null ? {} : { parentId: destination }),
+              }
+            : {
+                type: "agent_folder_renamed",
+                ...agent,
+                ciphertextSha256: ciphertextSha256(fromBase64Url(encName ?? "")),
+              };
+        this.verifyAgentOnce(envelope, body.signature);
+        this.requireDirect(touched);
+        if (moving && destination !== null && !this.liveFolder(destination)) {
+          throw new HttpError("not_found");
+        }
+        if (deleting && this.holdsContent(folderId)) throw new HttpError("not_empty");
+        this.checkCap(this.agentFolderChanges, this.agentFolderChangeDailyCap);
+        this.agentFolderChanges++;
+        const seq = this.changeFolder(folderId, {
+          action: deleting ? "deleted" : moving ? "moved" : "renamed",
+          parentId: moving ? destination : parentId,
+          encName: encName ?? folder.encName,
+          byAgent: true,
+          signed: { envelope, signature: body.signature },
+        });
+        if (deleting) return response(200, { workspaceVersion: seq });
+        return response(200, { folder: this.folderOf(folderId), workspaceVersion: seq });
+      }
+      default:
+        return undefined;
+    }
+  }
+
+  /**
+   * The owner replaces the agent token's scope, as `updateTokenScope` does: the token, the base
+   * revision (`scope_conflict`, unless it is the same signed revision again: then it succeeds),
+   * the body, the owner's `agent_scope` rebuilt and verified.
+   */
+  private async updateTokenScope(request: Request): Promise<FetchResponse> {
+    if (request.params["tokenId"] !== this.options.tokenId) throw new HttpError("not_found");
+    if (this.tokenRevoked) throw invalid(["params", "tokenId"], "This agent was disconnected");
+    const body = this.json(request) as {
+      baseRevision: number;
+      access: "read" | "read-write";
+      folderIds: FolderId[];
+      permissions: AgentPermission[];
+      signedAt: string;
+      signature: string;
+    };
+    const scope = { access: body.access, folderIds: body.folderIds, permissions: body.permissions };
+    const scopeSha256 = await agentScopeSha256(scope);
+    const next = body.baseRevision + 1;
+    // the same signed revision again (a lost answer): it stands, as stored
+    if (next === this.scopeRevision && scopeSha256 === this.scopeSha256) {
+      return response(200, { token: this.agentTokenInfo() });
+    }
+    if (body.baseRevision !== this.scopeRevision) {
+      throw new HttpError("scope_conflict", { currentRevision: this.scopeRevision });
+    }
+    const missing = body.folderIds.findIndex((folderId) => !this.liveFolder(folderId));
+    if (missing !== -1) {
+      throw invalid(["body", "folderIds", missing], "Not a folder of this workspace");
+    }
+    const envelope: SignedEnvelopeFields = {
+      type: "agent_scope",
+      accountId: this.options.ownerId,
+      workspaceId: this.options.workspaceId,
+      tokenId: this.options.tokenId,
+      revision: next,
+      scopeSha256,
+      createdAt: body.signedAt,
+    };
+    this.verify(envelope, body.signature);
+    this.applyScope(
+      { envelope, signature: body.signature, scope } as SignedAgentScope,
+      scopeSha256,
+    );
+    return response(200, { token: this.agentTokenInfo() });
+  }
+
+  /** Makes a verified signed scope the token's current one (and keeps it with the others). */
+  applyScope(signed: SignedAgentScope, scopeSha256: string): void {
+    this.agentAccess = signed.scope.access;
+    this.agentFolderIds = [...signed.scope.folderIds];
+    this.agentPermissions = [...signed.scope.permissions];
+    this.scopeRevision = signed.envelope.revision;
+    this.scopeSha256 = scopeSha256;
+    this.agentScopes.push(signed);
+  }
+
+  /** A new workspace entry in the feed (after the root folder marker changed). */
+  private announceWorkspace(): void {
+    this.recordChange("workspace", {
+      kind: "workspace",
+      seq: this.bump(),
+      at: new Date().toISOString(),
+      encName: this.options.encName,
+      keyGeneration: this.keyGeneration,
+      ...(this.agentPolicy.revision === 0
+        ? {}
+        : { agentPolicyRevision: this.agentPolicy.revision }),
+      ...(this.rootFolderId === null ? {} : { rootFolderId: this.rootFolderId }),
+    });
   }
 
   /**

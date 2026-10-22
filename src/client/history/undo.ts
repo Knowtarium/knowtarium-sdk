@@ -56,8 +56,42 @@ async function verifiedBefore(
 }
 
 /**
+ * What undoing an agent's version did: a write's result, or `folder_missing` when the version
+ * before an agent's delete or move sits in a folder deleted since (undo that first: revive it
+ * with `undoAgentFolderEvent`).
+ */
+export type UndoVersionResult =
+  WriteResult | { readonly status: "folder_missing"; readonly folderId: FolderId };
+
+/** Whether the server's refusal of a restore means its folder is gone. */
+function folderGone(context: SyncContext, folderId: FolderId): boolean {
+  return context.folders.get(folderId)?.deleted === true;
+}
+
+/**
+ * Whether `version` of a note is a delete marker: the note's own state for its current version,
+ * else the versions list.
+ */
+async function isDeleteMarker(
+  context: SyncContext,
+  noteId: NoteId,
+  version: number,
+  note: { readonly currentVersion: number; readonly deleted: boolean },
+): Promise<boolean> {
+  if (note.currentVersion === version) return note.deleted;
+  const { data } = await context.api.call(routes.listVersions, {
+    params: { workspaceId: context.workspaceId, noteId },
+    query: { since: version - 1, limit: 1 },
+  });
+  return data.versions.find((entry) => entry.version === version)?.deleted ?? false;
+}
+
+/**
  * A person undoes an agent's direct write (session): version `version` must be an agent's
- * (`agent_edited`, verified under its vouched key) and still the note's current one. The version
+ * (`agent_edited`, or in protocol 3 an `agent_deleted` delete marker, verified under its vouched
+ * key) and still the note's current one. Undoing a delete brings the version before it back the
+ * same way, in its own folder; when that folder was deleted since (as the engine's folders say,
+ * or the server's `not_found` for the write), it answers `folder_missing` and nothing changes. The version
  * before it comes back as a new person-signed version (`restoreVersion`: a signed `edited` plus a
  * signed `restored` event, the person as author), in that version's own folder, so undoing a move
  * moves the note back: pass `takenNames` as a function to get the names in that folder, and
@@ -86,7 +120,7 @@ export async function undoAgentVersion(
     readonly signedAt?: string;
     readonly verify?: RestoreVerify;
   },
-): Promise<WriteResult> {
+): Promise<UndoVersionResult> {
   const identity = requireIdentity(context, "undoAgentVersion");
   const { workspaceId } = context;
   const { data } = await context.api.call(routes.getNote, { params: { workspaceId, noteId } });
@@ -103,8 +137,13 @@ export async function undoAgentVersion(
   // the agent's version is meant to be the current one, never removed: a 410 for it then is a
   // lying server (`version_mismatch`); once superseded, it can be removed like any older version
   const read = note.currentVersion <= version ? readCurrentVersion : readNoteVersion;
-  const undone = await read(context, { noteId, version });
-  if (undone.event.signed?.envelope.type !== "agent_edited") {
+  const undone = await read(context, {
+    noteId,
+    version,
+    deleted: await isDeleteMarker(context, noteId, version, note),
+  });
+  const undoneType = undone.event.signed?.envelope.type;
+  if (undoneType !== "agent_edited" && undoneType !== "agent_deleted") {
     throw new RequestValidationError("undoAgentVersion", "params", ["version"]);
   }
   const before = version > 1 ? await verifiedBefore(context, noteId, version - 1) : null;
@@ -113,13 +152,28 @@ export async function undoAgentVersion(
     // the person never reviewed what an agent wrote: no `verified` entry for it, whatever
     // `verify` (`restoreVersion` drops the `human:` entries it carries, which no person signed)
     const verify = (await personWroteVersion(context, before)) ? options.verify : false;
-    return restoreVersion(context, noteId, version - 1, {
-      baseVersion: version,
-      folderId: before.folderId,
-      takenNames: typeof takenNames === "function" ? takenNames(before.folderId) : takenNames,
-      ...(options.signedAt === undefined ? {} : { signedAt: options.signedAt }),
-      ...(verify === undefined ? {} : { verify }),
-    });
+    if (folderGone(context, before.folderId)) {
+      return { status: "folder_missing", folderId: before.folderId };
+    }
+    try {
+      return await restoreVersion(context, noteId, version - 1, {
+        baseVersion: version,
+        folderId: before.folderId,
+        takenNames: typeof takenNames === "function" ? takenNames(before.folderId) : takenNames,
+        ...(options.signedAt === undefined ? {} : { signedAt: options.signedAt }),
+        ...(verify === undefined ? {} : { verify }),
+      });
+    } catch (error) {
+      // the folder the version comes back to is gone (deleted since, unknown to this engine)
+      if (isSyncApiError(error, "not_found")) {
+        return { status: "folder_missing", folderId: before.folderId };
+      }
+      throw error;
+    }
+  }
+  // an agent's delete always has a version with content before it
+  if (undoneType === "agent_deleted") {
+    throw new VaultError("untrusted_signature", "the version before the agent's delete is missing");
   }
   // the agent created the note (or brought a deleted one back): undoing it deletes it
   if (note.currentVersion === version + 1 && note.deleted) {

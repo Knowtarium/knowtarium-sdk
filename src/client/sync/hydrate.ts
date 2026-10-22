@@ -39,8 +39,13 @@ async function verifyCached(
     signer: context.verifier.owner,
   };
   if (note.deleted) {
-    verifyNoteDeletion(common);
-    return { content: null, agentRevoked: false };
+    // an agent's delete (protocol 3) verifies under its vouched key, as an agent's version does
+    const agentKeys =
+      note.event?.signed?.envelope.type === "agent_deleted"
+        ? (freshKeys ?? (await cachedAgentKeys(context, note)))
+        : [];
+    verifyNoteDeletion({ ...common, agentKeys });
+    return { content: null, agentRevoked: anyRevoked(agentKeys) };
   }
   const ciphertext = note.ciphertext;
   if (ciphertext === undefined) throw new VaultError("missing_signature", "the cache lost a blob");
@@ -63,7 +68,7 @@ async function cachedAgentKeys(
   note: CachedNote,
 ): Promise<readonly VerifiedAgentKey[]> {
   const fields = note.event?.signed?.envelope;
-  if (fields?.type !== "agent_edited") return [];
+  if (fields?.type !== "agent_edited" && fields?.type !== "agent_deleted") return [];
   if (note.agentKeys === undefined) return agentKeysFor(context.verifier, note.event);
   const keys = verifiedAgentKeys(
     { agentKeys: [...note.agentKeys], revocations: [...(note.agentRevocations ?? [])] },

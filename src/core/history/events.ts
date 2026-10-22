@@ -127,6 +127,20 @@ export type HistoryEvent =
       readonly revision: number;
       readonly policySha256: string;
     }
+  /**
+   * An agent's note delete (protocol 3), signed with its own key: the delete marker's version, the
+   * note's folder, the agent token, the agent policy revision it checked (with that revision's
+   * hash) and the scope revision it acted under.
+   */
+  | {
+      readonly type: "agent_deleted";
+      readonly version: number;
+      readonly folderId?: string;
+      readonly tokenId: string;
+      readonly revision: number;
+      readonly policySha256: string;
+      readonly scopeRevision: number;
+    }
   | { readonly type: "rejected"; readonly pendingId: string; readonly commentId?: string }
   | Exclude<EventRecord, { type: "checked" }>
   | (CheckFindings & { readonly type: "checked"; readonly version: number })
@@ -149,6 +163,8 @@ export interface SignedFields {
   readonly revision?: number;
   /** For `agent_edited`: that revision's hash. */
   readonly policySha256?: string;
+  /** For `agent_deleted`: the scope revision the agent acted under. */
+  readonly scopeRevision?: number;
 }
 
 /** What the client knows about one stored event, after decrypting and verifying it. */
@@ -186,6 +202,26 @@ function fromSigned(signed: SignedFields): HistoryEvent | null {
       policySha256,
     };
   }
+  if (type === "agent_deleted" && version !== undefined) {
+    const { tokenId, revision, policySha256, scopeRevision } = signed;
+    if (
+      tokenId === undefined ||
+      revision === undefined ||
+      policySha256 === undefined ||
+      scopeRevision === undefined
+    ) {
+      return null;
+    }
+    return {
+      type,
+      version,
+      ...(signed.folderId === undefined ? {} : { folderId: signed.folderId }),
+      tokenId,
+      revision,
+      policySha256,
+      scopeRevision,
+    };
+  }
   if (type === "approved" && version !== undefined && pendingId !== undefined) {
     return { type, version, pendingId };
   }
@@ -216,8 +252,9 @@ function parseRecord(record: unknown): HistoryEvent | null {
 /**
  * Types a stored event and says how far to trust it:
  *
- * - a signed write (`edited`, `deleted`, `approved`, `rejected`, an agent's `agent_edited`) is
- *   its envelope, and carries no record of its own: one that does is `invalid`;
+ * - a signed write (`edited`, `deleted`, `approved`, `rejected`, an agent's `agent_edited` or
+ *   `agent_deleted`) is its envelope, and carries no record of its own: one that does is
+ *   `invalid`;
  * - a record counts as a person's only under a valid `recorded` envelope whose signer is the
  *   person the record names (`actor` equal to `human:<the signer's account>`), else `invalid`;
  * - an unsigned record is an agent's (`unsigned`), unless it claims a person (a `human:` actor

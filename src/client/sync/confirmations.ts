@@ -193,7 +193,7 @@ export class Confirmations {
     event: { readonly signed: SignedEvent | null } | undefined,
   ): Confirmation[] {
     const type = event?.signed?.envelope.type;
-    if (type === "agent_edited") return [];
+    if (type === "agent_edited" || type === "agent_deleted") return [];
     if (type === "check_applied" && !this.personWroteBelow(noteId, version)) return [];
     return this.forNote(noteId, version);
   }

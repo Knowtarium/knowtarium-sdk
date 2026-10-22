@@ -88,6 +88,11 @@ export function prepareFolder(
     readonly name: string;
     /** The workspace's root folder, or null when it has none (required, so it isn't forgotten). */
     readonly rootFolderId: FolderId | null;
+    /**
+     * The ID of a deleted folder to revive (protocol 3): it comes back under its own ID, only
+     * under its stored parent (pass that as `parentId`). A fresh ID by default.
+     */
+    readonly folderId?: FolderId;
   } & SigningTime,
 ): CreateFolderRequest {
   const root = details.rootFolderId;
@@ -95,7 +100,7 @@ export function prepareFolder(
     throw new RequestValidationError("createFolder", "body", ["encName"]);
   }
   const parentId = details.parentId !== null && details.parentId === root ? null : details.parentId;
-  const folderId: FolderId = newId("fld");
+  const folderId: FolderId = details.folderId ?? newId("fld");
   const encName = encryptFolderName(
     key,
     { workspaceId: details.workspaceId, folderId },

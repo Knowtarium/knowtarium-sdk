@@ -100,15 +100,30 @@ export async function readNoteVersion(
 
   if (details.deleted === true) {
     const found = await eventFor((events) => findDeleteEvent(events, noteId, version));
+    // an agent's delete (protocol 3) verifies under its vouched key, kept with it in the cache
+    const agentKeys = await agentKeysFor(context.verifier, found);
     const event = verifyNoteDeletion({
       workspaceId,
       noteId,
       version,
       event: found,
       signer: context.verifier.owner,
+      agentKeys,
     });
-    const folder = folderId ?? (await currentFolder(context, noteId));
-    return { noteId, folderId: folder, version, name: null, text: null, createdAt, event };
+    const fields = event.signed?.envelope;
+    const folder =
+      folderId ??
+      (fields?.type === "agent_deleted" ? fields.folderId : await currentFolder(context, noteId));
+    return {
+      noteId,
+      folderId: folder,
+      version,
+      name: null,
+      text: null,
+      createdAt,
+      event,
+      ...(fields?.type === "agent_deleted" ? { agentKeys } : {}),
+    };
   }
   let ciphertext = details.ciphertext;
   if (ciphertext === undefined) {
@@ -172,7 +187,10 @@ export function checkStoredWrite(
     /** The uploaded envelope; absent for a delete. */
     readonly ciphertext?: Uint8Array;
   },
-  /** For an agent's own direct write: its own verified key, which must have signed it. */
+  /**
+   * For an agent's own direct write or delete: its own verified key, which must have signed it
+   * (`agent_edited`, or `agent_deleted` for a delete).
+   */
   agentKeys?: readonly VerifiedAgentKey[],
 ): void {
   const version = sent.baseVersion + 1;
@@ -194,12 +212,15 @@ export function checkStoredWrite(
     signer: context.verifier.owner,
   };
   const signedType = stored.event.signed?.envelope.type;
-  // a person's write must come back as a person's, an agent's as its own `agent_edited`
-  if ((agentKeys !== undefined) !== (signedType === "agent_edited")) {
+  // a person's write must come back as a person's, an agent's as its own `agent_edited` (or
+  // `agent_deleted` for a delete)
+  const agentType = deleted ? "agent_deleted" : "agent_edited";
+  if ((agentKeys !== undefined) !== (signedType === agentType)) {
     throw new VaultError("untrusted_signature", "the stored write carries another signature");
   }
-  if (sent.ciphertext === undefined) verifyNoteDeletion(common);
-  else {
+  if (sent.ciphertext === undefined) {
+    verifyNoteDeletion({ ...common, ...(agentKeys === undefined ? {} : { agentKeys }) });
+  } else {
     verifyNoteVersion({
       ...common,
       ciphertext: sent.ciphertext,

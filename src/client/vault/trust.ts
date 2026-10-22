@@ -507,6 +507,26 @@ export class TrustState {
     });
   }
 
+  /** The highest scope revision this device verified for an agent token (0 before any). */
+  async agentScopeRevision(tokenId: string): Promise<number> {
+    return (await this.read<number>(`token/${tokenId}/agent-scope`)) ?? 0;
+  }
+
+  /**
+   * Accepts a verified `agent_scope` revision of an agent token (protocol 3), refusing one below
+   * the highest this device verified (`rollback`): a server can't show an older scope of the
+   * token, nor a list of its revisions that stops below one seen. The same revision again is
+   * fine.
+   */
+  acceptAgentScopeRevision(tokenId: string, revision: number): Promise<void> {
+    return this.exclusive(async () => {
+      const key = `token/${tokenId}/agent-scope`;
+      const seen = (await this.read<number>(key)) ?? 0;
+      if (revision < seen) throw new VaultError("rollback", "an older agent scope than one seen");
+      if (revision > seen) await this.write(key, revision);
+    });
+  }
+
   /** The highest note version seen (0 before any). */
   async noteVersion(workspaceId: string, noteId: string): Promise<number> {
     return (await this.read<number>(`workspace/${workspaceId}/note/${noteId}`)) ?? 0;

@@ -8,6 +8,7 @@ import type { CommentRecord, SignatureStatus } from "../../core/history/index.js
 import type { NoteComment, NoteEvent } from "../../protocol/index.js";
 import {
   checkAgentEdited,
+  checkAgentSigned,
   toSignedEnvelope,
   type TrustedSigner,
   type VerifiedAgentKey,
@@ -32,8 +33,9 @@ function check(
  * `deleted`, `approved`) must be on a row for the same note and version and carry no ciphertext
  * of its own; a rejection must name the row's note and carry none either; a person's appended
  * record (`recorded`) must name the event, its note and the hash of its ciphertext. An agent's
- * direct write (`agent_edited`) is checked like a person's write, under a key in `agentKeys`
- * (the owner-vouched keys of the token it names), never the owner's.
+ * direct write (`agent_edited`) or note delete (`agent_deleted`) is checked like a person's
+ * write, under a key in `agentKeys` (the owner-vouched keys of the token it names), never the
+ * owner's.
  */
 export function eventSignatureValid(
   event: NoteEvent,
@@ -57,6 +59,20 @@ export function eventSignatureValid(
         event.ciphertext === null &&
         version !== null &&
         agentKeys.some((key) => checkAgentEdited(signed, key, expected).ok)
+      );
+    }
+    case "agent_deleted": {
+      // an agent's note delete (protocol 3): a delete marker, under its vouched key
+      const version = event.noteVersion;
+      const expected = {
+        ...common,
+        ...(version === null ? {} : { version }),
+        ...(signer.accountId === undefined ? {} : { accountId: signer.accountId }),
+      };
+      return (
+        event.ciphertext === null &&
+        version !== null &&
+        agentKeys.some((key) => checkAgentSigned(signed, key, expected).ok)
       );
     }
     case "edited":

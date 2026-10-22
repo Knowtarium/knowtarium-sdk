@@ -1,12 +1,18 @@
 import type {
   AgentPolicy,
+  Folder,
+  FolderId,
+  NoteEvent,
+  NoteId,
   AgentPolicyViewProblem,
   AgentWriteMode,
   NoteComment,
   PendingChange,
+  PendingKind,
 } from "../../protocol/index.js";
 import type { CheckedAgentPolicy } from "../vault/index.js";
 import type { NoteSnapshot } from "./events.js";
+import type { FolderEventEntry } from "./folder-events.js";
 
 /**
  * A write whose base version was no longer current (409): both sides, for the merge UI. `mine`
@@ -35,11 +41,16 @@ export type SubmitResult =
 /** A pending change, decrypted for review. */
 export interface PendingReview {
   readonly pending: PendingChange;
-  /** The agent's proposed note text. */
+  /**
+   * What it proposes (protocol 3): a new version of the note (`edit`), or its delete (`delete`,
+   * whose note is `base`, at the version it would delete).
+   */
+  readonly kind: PendingKind;
+  /** The agent's proposed note text; empty for a delete proposal. */
   readonly proposed: string;
   /**
-   * The proposed file name (always set: a proposal is a note file with its name). A name other
-   * than the base version's renames the note.
+   * The proposed file name (set for every edit: a proposal is a note file with its name; null for
+   * a delete proposal). A name other than the base version's renames the note.
    */
   readonly proposedName: string | null;
   /** The version it was based on, verified (null for a proposed new note). */
@@ -151,4 +162,89 @@ export type AgentWriteAudit =
       readonly status: "unverifiable";
       readonly revision: number;
       readonly problem: AgentPolicyViewProblem | "not_found";
+    };
+
+/**
+ * Why an agent's protocol 3 action (a note delete, a folder change) wasn't sent, or was refused
+ * in a way the caller handles: as for `writeAsAgent`, `approval_required` (the folders ask first,
+ * or the policy couldn't be verified, or a folder isn't known), `agent_key_required` and
+ * `rate_limited` (the daily caps: 200 note deletes, 200 folder changes). A note delete then
+ * becomes a proposal (`proposeDelete`); a folder change can't be proposed: tell the person.
+ */
+export type AgentActionRefusal = Exclude<
+  AgentWriteResult,
+  { readonly status: "saved" } | AgentWriteConflict
+>;
+
+/** An agent's folder change (protocol 3). */
+export type AgentFolderResult =
+  | {
+      readonly status: "saved";
+      readonly folder: Folder;
+      readonly workspaceVersion: number;
+      /** The agent policy revision it checked. */
+      readonly policyRevision: number;
+    }
+  | AgentActionRefusal;
+
+/**
+ * An agent's signed action of protocol 3, or its direct write, as `agentActions` lists them for
+ * a person (newest first), each verified under the agent's vouched key.
+ */
+export type AgentAction =
+  | {
+      /** A direct write (`agent_edited`), a note move included. */
+      readonly kind: "edited";
+      readonly tokenId: string;
+      readonly createdAt: string;
+      readonly noteId: NoteId;
+      readonly version: number;
+      readonly folderId: FolderId;
+      readonly event: NoteEvent;
+    }
+  | {
+      /** A note delete (`agent_deleted`): a delete marker at `version`. */
+      readonly kind: "deleted";
+      readonly tokenId: string;
+      readonly createdAt: string;
+      readonly noteId: NoteId;
+      readonly version: number;
+      readonly folderId: FolderId;
+      readonly event: NoteEvent;
+    }
+  | {
+      /** A folder change (`agent_folder_*`), with the state before and after. */
+      readonly kind: "folder";
+      readonly tokenId: string;
+      readonly createdAt: string;
+      readonly folderId: FolderId;
+      readonly entry: FolderEventEntry;
+    };
+
+/**
+ * What auditing an agent's protocol 3 action against the scope revisions the owner signed found
+ * (`auditAgentAction`), for display (the server enforces the scope):
+ *
+ * - `allowed`: the newest owner-signed revision signed before the action is the one the action
+ *   names, and its scope holds the permission and reaches the folders; the policy part checked as
+ *   for edits (`policy`, from `auditAgentVersion`'s rule);
+ * - `not_allowed`: it isn't (`reason`): flag it ("Not allowed by your settings");
+ * - `unchecked`: the revisions couldn't be read whole (a gap, below the device's floor), or the
+ *   folders aren't known: flag it.
+ */
+export type AgentActionAudit =
+  | {
+      readonly verdict: "allowed";
+      readonly scopeRevision: number;
+      readonly policy: AgentWriteAudit;
+    }
+  | {
+      readonly verdict: "not_allowed";
+      readonly scopeRevision: number;
+      readonly reason: "no_scope" | "other_revision" | "permission" | "folders" | "policy";
+      readonly policy?: AgentWriteAudit;
+    }
+  | {
+      readonly verdict: "unchecked";
+      readonly reason: "gap" | "below_floor" | "unknown_folder" | "not_agent_action";
     };

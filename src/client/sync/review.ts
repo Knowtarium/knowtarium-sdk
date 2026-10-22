@@ -20,7 +20,7 @@ import {
 import { requireIdentity, type SyncContext, withCurrentKey, withKeys } from "./context.js";
 import { acceptNote, checkStoredWrite, readNoteVersion, snapshotOf } from "./notes.js";
 import type { ApproveResult, PendingReview, RejectResult, SubmitResult } from "./results.js";
-import { conflictResult, type NoteWrite } from "./writes.js";
+import { conflictResult, deleteNote, type NoteWrite } from "./writes.js";
 
 /**
  * An agent proposes a new version: the whole note, encrypted as a pending change, with its base
@@ -75,8 +75,17 @@ export async function readPending(
   const { workspaceId } = context;
   const params = { workspaceId, pendingId };
   const { data } = await context.api.call(routes.getPending, { params });
-  const { data: blob } = await context.api.call(routes.getPendingBlob, { params });
   const { pending } = data;
+  if (pending.kind === "delete") {
+    // a delete proposal has no blob: what it would delete is its base version
+    const base = await readNoteVersion(context, {
+      noteId: pending.noteId,
+      folderId: pending.folderId,
+      version: pending.baseVersion,
+    });
+    return { pending, kind: "delete", proposed: "", proposedName: null, base: snapshotOf(base) };
+  }
+  const { data: blob } = await context.api.call(routes.getPendingBlob, { params });
   const proposed = await withKeys(context, (keys) =>
     decryptPendingNote(
       keys,
@@ -100,6 +109,7 @@ export async function readPending(
         });
   return {
     pending,
+    kind: "edit",
     proposed: proposed.text,
     proposedName: proposed.name,
     base: base === null ? null : snapshotOf(base),
@@ -120,6 +130,10 @@ export async function approvePending(
   options: { readonly takenNames: readonly string[]; readonly signedAt?: string },
 ): Promise<ApproveResult> {
   const identity = requireIdentity(context, "approvePending");
+  // a delete proposal is approved with the person's own signed delete (`approveDelete`)
+  if (pending.kind === "delete") {
+    throw new RequestValidationError("approvePending", "params", ["pendingId"]);
+  }
   const { workspaceId } = context;
   const approved = {
     name: uniqueName(normalizeNoteName(proposal.name), options.takenNames, pending.noteId),
@@ -177,6 +191,39 @@ export async function approvePending(
       text: approved.text,
     });
   }
+}
+
+/**
+ * Approves an agent's delete proposal (protocol 3, session): the person's own signed `deleted` of
+ * the note at the proposal's base version, naming the proposal (`Knowtarium-Pending-Id`), which
+ * the server closes as approved with the delete. If the note moved past that version, returns
+ * both sides as a conflict instead, and nothing is deleted.
+ */
+export async function approveDelete(
+  context: SyncContext,
+  pending: PendingChange,
+  options: { readonly signedAt?: string } = {},
+): Promise<ApproveResult> {
+  requireIdentity(context, "deleteNote");
+  if (pending.kind !== "delete") {
+    throw new RequestValidationError("deleteNote", "headers", ["knowtarium-pending-id"]);
+  }
+  const result = await deleteNote(context, {
+    noteId: pending.noteId,
+    baseVersion: pending.baseVersion,
+    pendingId: pending.id,
+    ...(options.signedAt === undefined ? {} : { signedAt: options.signedAt }),
+  });
+  if (result.status !== "saved") return result;
+  const { data } = await context.api.call(routes.getPending, {
+    params: { workspaceId: context.workspaceId, pendingId: pending.id },
+  });
+  return {
+    status: "approved",
+    pending: data.pending,
+    note: result.note,
+    workspaceVersion: result.workspaceVersion,
+  };
 }
 
 /**
