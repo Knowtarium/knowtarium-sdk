@@ -135,25 +135,28 @@ fields in `SIGNED_ENVELOPE_OPTIONAL`, which are signed when present (`SIGNED_ENV
 lists the ones that come as a pair). The server rebuilds each envelope from the request, so any
 other field is refused, as are unknown types. `knowtarium/protocol` has the same table.
 
-| Type             | Requires (optional in parentheses)                                                                                     |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `edited`         | `noteId`, `version`, `folderId`, `ciphertextSha256`                                                                    |
-| `deleted`        | `noteId`, `version`                                                                                                    |
-| `approved`       | `noteId`, `pendingId`, `version`, `folderId`, `ciphertextSha256`                                                       |
-| `rejected`       | `noteId`, `pendingId` (`commentId` with the comment's hash, both or none)                                              |
-| `commented`      | `commentId`, `revision`, `ciphertextSha256` (`noteId`)                                                                 |
-| `recorded`       | `eventId`, `ciphertextSha256` (`noteId`)                                                                               |
-| `wrapped_key`    | `recipient` (X25519 public key, base64url), `holder` (`"account"` or the token id), `generation`, `ciphertextSha256`   |
-| `key_generation` | `generation`, `recipientsHash`, `keyCommitment`                                                                        |
-| `token_revoked`  | `recipient` (the token's X25519 public key), `tokenId`                                                                 |
-| `check_applied`  | `noteId`, `version`, `folderId`, `ciphertextSha256`, `checkId` (a write that applies an agent's passing check)         |
-| `folder_created` | `folderId`, `ciphertextSha256` of the encrypted name (`parentId`)                                                      |
-| `folder_moved`   | `folderId` (`parentId`, the destination)                                                                               |
-| `agent_policy`   | `revision`, `policySha256` (the owner set the agent policy; protocol 2)                                                |
-| `agent_key`      | `tokenId`, `signPublicKey`, `policyRevision` (the owner vouches for an agent's Ed25519 key and its policy floor)       |
-| `agent_edited`   | `tokenId`, `noteId`, `version`, `folderId`, `ciphertextSha256`, `revision`, `policySha256` (signed by the agent's key) |
-| `inbox_key`      | `revision`, `generation`, `publicKey` (the derived inbox X25519 key, base64url), `folderId` (the web clipper)          |
-| `extension_key`  | `extensionId` (an `ext_` id), `signPublicKey` (the owner vouches for a paired extension's Ed25519 key)                 |
+| Type             | Requires (optional in parentheses)                                                                                                                                             |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `edited`         | `noteId`, `version`, `folderId`, `ciphertextSha256`                                                                                                                            |
+| `deleted`        | `noteId`, `version`                                                                                                                                                            |
+| `approved`       | `noteId`, `pendingId`, `version`, `folderId`, `ciphertextSha256`                                                                                                               |
+| `rejected`       | `noteId`, `pendingId` (`commentId` with the comment's hash, both or none)                                                                                                      |
+| `commented`      | `commentId`, `revision`, `ciphertextSha256` (`noteId`)                                                                                                                         |
+| `recorded`       | `eventId`, `ciphertextSha256` (`noteId`)                                                                                                                                       |
+| `wrapped_key`    | `recipient` (X25519 public key, base64url), `holder` (`"account"` or the token id), `generation`, `ciphertextSha256`                                                           |
+| `key_generation` | `generation`, `recipientsHash`, `keyCommitment`                                                                                                                                |
+| `token_revoked`  | `recipient` (the token's X25519 public key), `tokenId`                                                                                                                         |
+| `check_applied`  | `noteId`, `version`, `folderId`, `ciphertextSha256`, `checkId` (a write that applies an agent's passing check)                                                                 |
+| `folder_created` | `folderId`, `ciphertextSha256` of the encrypted name (`parentId`)                                                                                                              |
+| `folder_moved`   | `folderId` (`parentId`, the destination)                                                                                                                                       |
+| `agent_policy`   | `revision`, `policySha256` (the owner set the agent policy; protocol 2)                                                                                                        |
+| `agent_key`      | `tokenId`, `signPublicKey`, `policyRevision` (the owner vouches for an agent's Ed25519 key and its policy floor)                                                               |
+| `agent_edited`   | `tokenId`, `noteId`, `version`, `folderId`, `ciphertextSha256`, `revision`, `policySha256` (signed by the agent's key)                                                         |
+| `inbox_key`      | `revision`, `generation`, `publicKey` (the derived inbox X25519 key, base64url), `folderId` (the web clipper)                                                                  |
+| `extension_key`  | `extensionId` (an `ext_` id), `signPublicKey` (the owner vouches for a paired extension's Ed25519 key)                                                                         |
+| `agent_scope`    | `tokenId`, `revision`, `scopeSha256` (the owner signs an agent token's access, folders and permissions; protocol 3)                                                            |
+| `agent_deleted`  | `tokenId`, `noteId`, `version`, `folderId`, `revision`, `policySha256`, `scopeRevision` (an agent's note delete)                                                               |
+| `agent_folder_*` | `tokenId`, `folderId`, `revision`, `policySha256`, `scopeRevision`, plus `ciphertextSha256` of the new name for `created` and `renamed` (`parentId` for `created` and `moved`) |
 
 A folder at the workspace root has no `parentId` (never an empty or null one), so a signed
 move always says where the folder goes.
@@ -164,7 +167,14 @@ a key an owner-signed `agent_key` vouches for, for the same `tokenId`. Its `acco
 workspace owner's account, and `revision` and `policySha256` are the agent policy revision the
 agent checked and its hash. `agent_key`'s `policyRevision` is the policy revision when the agent
 connected: the agent never accepts a policy below it (nor below the highest one it has seen).
-`agent_policy`, `agent_key` and `agent_edited` are protocol 2 types.
+`agent_policy`, `agent_key` and `agent_edited` are protocol 2 types. Protocol 3 adds the owner's
+`agent_scope` (`scopeSha256` is `agentScopeSha256()` in `knowtarium/protocol`: the lowercase hex
+SHA-256 of the tag `knowtarium-agent-scope-v1\n` followed by the canonical JSON of
+`{access, folderIds, permissions}`, the folders sorted and deduplicated, the permissions in
+`AgentPermission` order) and the agent's own `agent_deleted`, `agent_folder_created`,
+`agent_folder_renamed`, `agent_folder_moved` and `agent_folder_deleted`, signed like
+`agent_edited` with the scope revision the agent acted under (`scopeRevision`; the API requires 1
+or more). `envelope-vectors.json` has their vectors and `agentScopeHashes`.
 `policySha256` is `agentPolicySha256()` in `knowtarium/protocol` (Web Crypto, async): the
 lowercase hex SHA-256 of the tag `knowtarium-agent-policy-v1\n` followed by the canonical JSON of
 `{default, folders}`, where `folders` is the sorted list of every override's own hash (SHA-256 of
@@ -426,12 +436,36 @@ canonicalizer. `pnpm test` runs the crypto tests in Node and again under happy-d
   `direct`. It answers `agent_key_required` (a token without a vouched key) or
   `approval_required` (the folder is `review`), and the CLI proposes instead; or
   `stale_agent_policy` (the policy changed), and the CLI fetches the policy, checks the mode again
-  and retries. Agents never delete notes. A version 1 caller gets `unsupported_protocol` instead
-  of a page holding an `agent_edited` event (`envelopeProtocolVersion`).
+  and retries. A version 1 caller got `unsupported_protocol` instead of a page holding an
+  `agent_edited` event (`envelopeProtocolVersion`).
+- **Agent permissions (protocol 3)**: `AgentPermission` (`notes.move`, `notes.delete`,
+  `folders.create`, `folders.rename`, `folders.move`, `folders.delete`), only with `read-write`,
+  none by default; moving a note needs `notes.move` too, directly or as a proposal
+  (`permission_required`). A token carries `permissions`, `scopeRevision`, `scopeSha256` and the
+  owner's signed `scope` (`SignedAgentScope`: the `agent_scope` envelope and the scope it hashes;
+  null at revision 0, a token from before). `approveConnect` takes `permissions` with the owner's
+  revision 1 (`scopeSignedAt`, `scopeSignature`); `updateTokenScope` (`PUT /tokens/:tokenId/scope`,
+  the owner) replaces access, folders and permissions on `baseRevision`, signed as
+  `baseRevision + 1` (409 `scope_conflict` with `currentRevision` for a stale base; the same signed
+  revision sent again succeeds); `listTokenScopes` serves every revision. The agent's routes:
+  `deleteNoteAsAgent` (`DELETE .../notes/:noteId/agent-version`), `proposeNoteDelete` (a delete
+  proposal, `PendingChange.kind` `delete`, approved by the person's own `deleteNote` with
+  `Knowtarium-Pending-Id`, never `approvePending`), and `createFolderAsAgent`,
+  `renameFolderAsAgent`, `moveFolderAsAgent`, `deleteFolderAsAgent` (under `/agent-folders`), each
+  signed by the agent with its policy and scope revisions (`Knowtarium-Agent-Scope-Revision` on
+  the two deletes). Folder changes are refused, never proposed, where a folder asks first. New
+  codes: `permission_required`, `protected_folder` (any connected agent's scope folders, the root
+  folder, the inbox for deletes), `stale_agent_scope` (the token's scope changed under a request:
+  read the token again, retry once) and `scope_conflict`. `listFolderEvents` serves every folder
+  change with who made it and the state before and after (`FolderEvent`); `createFolder` with a
+  deleted folder's ID revives it where it was; `setRootFolder` names the workspace root folder once
+  (409 `already_exists` after), and the changes feed's `workspace` entry carries it as
+  `rootFolderId`. The live `scope_changed` ping tells an agent to read its token again.
 - **Deploy order for protocol changes**: the sync API first (it accepts the old and the new
   version), then the web app, then the npm release of the CLI, so no client ever speaks a version
   the server doesn't accept yet.
-- **Headers**: every request sends `Knowtarium-Protocol-Version: 2` (the API also accepts 1),
+- **Headers**: every request sends `Knowtarium-Protocol-Version: 3` (the API also accepts 2; the
+  web clipper extension stays on 2),
   and every request that isn't a GET also sends `Knowtarium-Request: 1` (a CSRF guard). A
   person's write that applies an agent's passing check also sends `Knowtarium-Check-Id` (signed
   as `check_applied`, which makes the version but never confirms a person's entry; the server
@@ -709,9 +743,30 @@ How the engine behaves:
   folder; for a note the agent created, or a verified delete marker before it, a signed delete;
   a conflict when the note moved past it; the version before must verify, else
   `untrusted_signature`, whatever the versions list says).
+- **Agent permissions** (protocol 3): `verifyAgentScope` checks a token's signed scope under the
+  owner's key at or above a floor (`rollback` below it, or none after one); `prepareConnectScope`
+  signs revision 1 for `approveConnect`; `updateTokenScope(api, { signer, trust }, change)` signs
+  `baseRevision + 1`, answers `conflict` with `currentRevision`, and accepts the stored revision
+  only with this hash under the owner's key; `fetchTokenScopes` verifies every revision and says
+  `gap` or `below_floor` (`TrustState.acceptAgentScopeRevision` keeps a floor per token). A delete
+  marker signed `agent_deleted` verifies under the agent's vouched key wherever `deleted` does
+  (reads, the cache, history). The agent's engine calls (`deleteAsAgent`, `proposeDelete`,
+  `createFolderAsAgent`, `renameFolderAsAgent`, `moveFolderAsAgent`, `deleteFolderAsAgent`) take
+  the `scopeRevision` the caller verified and check the key and the policy as `writeAsAgent` does
+  (every folder whose contents change must be `direct`; the top level reads the default),
+  returning `approval_required`, `agent_key_required` or `rate_limited` and throwing the server's
+  other refusals (`permission_required`, `stale_agent_scope`, `protected_folder`, `not_empty`).
+  The person's side: `approveDelete`, `readFolderEvents` (`fetchFolderEvents`, signed rows
+  verified, names decrypted), `agentActions({ sinceMs })` (an agent's writes, deletes and folder
+  changes, newest first), `auditAgentAction` (allowed only under the newest owner-signed revision
+  signed before the action, naming it, holding the permission and reaching the folders; a gap or a
+  list below the floor is `unchecked`), `undoAgentVersion` for a delete (`folder_missing` when its
+  folder is gone) and `undoAgentFolderEvent` (`saved`, `moved_on`, `not_empty`,
+  `parent_missing`). `SyncEngine.rootFolderId` is the root marker the feed named, and `reset`
+  drops the local copy for a scope whose reach changed.
 - **Workspace events**: the `workspace` event from the feed carries `agentPolicyRevision` when the
   server sent one; the one `load` reports from the cache never does (absent is not 0: read the
-  policy to know).
+  policy to know). It carries `rootFolderId` when the owner set the root folder marker.
 
 ## The CLI: `knowtarium`
 
@@ -962,15 +1017,17 @@ that works clears it. Notes reach the tools only after the sync
 engine verified the owner's signature on their version. The tools (names from the MCP
 architecture doc):
 
-| Tool                                                                    | What it does                                                         |
-| ----------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `get_conventions`                                                       | The conventions skill (SKILL.md), for every client, connected or not |
-| `list_workspaces`, `list_folders`, `list_notes`                         | What is in scope, with titles, descriptions, types and states        |
-| `search_notes`, `read_note`, `resolve_link`, `related_notes`            | Full-text search, a note with its version and links, link targets    |
-| `note_history`, `list_comments`, `list_stale`                           | Versions, signed events, comment threads, stale and expiring notes   |
-| `propose_edit`, `create_note`, `my_pending_changes`                     | Changes (written directly, or proposed) and proposals' outcome       |
-| `list_pending_checks`, `record_check`, `flag_conflict`, `reply_comment` | The consistency check of a person's edits, conflicts and replies     |
-| `list_inbox`                                                            | The web clipper's saved links, newest first, and what still waits    |
+| Tool                                                                    | What it does                                                          |
+| ----------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `get_conventions`                                                       | The conventions skill (SKILL.md), for every client, connected or not  |
+| `list_workspaces`, `list_folders`, `list_notes`                         | What is in scope, with titles, descriptions, types and states         |
+| `search_notes`, `read_note`, `resolve_link`, `related_notes`            | Full-text search, a note with its version and links, link targets     |
+| `note_history`, `list_comments`, `list_stale`                           | Versions, signed events, comment threads, stale and expiring notes    |
+| `propose_edit`, `create_note`, `my_pending_changes`                     | Changes (written directly, or proposed) and proposals' outcome        |
+| `delete_note`, `move_note`                                              | A note's delete or move (with `notes.delete`, `notes.move`)           |
+| `create_folder`, `rename_folder`, `move_folder`, `delete_folder`        | Folder changes (each with its `folders.*` permission), never proposed |
+| `list_pending_checks`, `record_check`, `flag_conflict`, `reply_comment` | The consistency check of a person's edits, conflicts and replies      |
+| `list_inbox`                                                            | The web clipper's saved links, newest first, and what still waits     |
 
 Lists are paged (`offset`, `limit`, with `total`, `truncated` and `next_offset`); `read_note`
 returns long notes in parts (`max_chars`, `offset`), and comments and diffs are capped. The
@@ -1027,8 +1084,22 @@ says to mention reconnecting to the person once). Results say which: `{mode: "wr
 ...}` (with the agent's own open proposals on that note, if any) or `{mode: "proposed", pendingId,
 status, reason}`. `propose_edit` requires `base_version` (the version the agent read); a stale base
 (or a 409 from either path) is refused with a message to read the note again and redo the change. A
-direct write that can't reach Knowtarium says it may not have been saved. Agents can't delete notes:
-there is no tool for it.
+direct write that can't reach Knowtarium says it may not have been saved.
+
+**Permissions (protocol 3).** Every writing tool is registered once at start and listed only while
+some session's verified scope allows it: today's with `read-write`, `delete_note`, `move_note` and
+the four folder tools (`mcp/tools/organize.ts`) each with its permission too; `enable` and
+`disable` send `notifications/tools/list_changed`, and the catalog's stand-in holds every
+permission. `WorkspaceSession.refreshScope()` reads `getCurrentToken` at start, on `scope_changed`
+and after `scope_denied`, `permission_required` or `stale_agent_scope` (that one retried once),
+verifies the owner's `agent_scope` under the pinned key at or above the floor kept in
+`agent-scopes.enc` (`credentials.enc` and `agent-keys.enc` stay as older CLIs read them), and drops
+the local copy and pulls from version 0 only when access or folders changed (`SyncEngine.reset`).
+A note delete or move is written or proposed like an edit (a move keeps the text, with no new
+`generated` stamp); a folder change is written or refused with the reason. The CLI refuses the
+root folder (the marker when the feed names one), its own scope folders, the inbox for deletes and
+a folder outside its scope before calling. `list_workspaces` and `status` show `permissions`,
+`scopeRevision` and whether the scope verified.
 
 The read-only uses of the policy (what `list_workspaces`, `read_note`, `list_notes`, `search_notes`
 and `list_pending_checks` show, and which guards apply) go through `WorkspaceSession.agentPolicy()`:
@@ -1044,7 +1115,8 @@ the token's own folders, and `status` shows it per connection (online with the c
 offline it is unknown).
 
 `record_check` and `flag_conflict` refuse notes that don't exist, and `create_note` says notes live
-in folders, not the root. Writing tools are hidden for read-only tokens, and a folder-scoped token
+in folders, not the root (and points at `create_folder` when the agent may make folders). Writing
+tools are hidden for read-only tokens, and a folder-scoped token
 sees and writes only its folders, on top of the server's own refusal. The agent's actor
 (`claude-code/2.1.0`) comes from the MCP client's handshake, or `--actor`. The tools show workspace
 paths built from the folder names and each note's file name (core's `buildWorkspacePaths`);

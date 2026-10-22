@@ -103,14 +103,18 @@ your agents at the new version. Then restart them.
 - **Keys stay local.** The connection is stored encrypted, with its key in the OS keychain (macOS
   Keychain, Windows Credential Manager or the Secret Service on Linux). Where there is no keychain,
   the key goes in a file only you can read, and `status` says so.
-  The agent's signing key for direct changes is sealed in a file of its own (`agent-keys.enc`), so
-  an agent still set up with an older `knowtarium` keeps reading its connections. Connecting a
+  The agent's signing key for direct changes is sealed in a file of its own (`agent-keys.enc`), and
+  the highest scope the workspace owner signed for it in another (`agent-scopes.enc`), so an agent
+  still set up with an older `knowtarium` keeps reading its connections. Connecting a
   workspace again revokes the token it replaces.
 - **People stay in charge.** By default an agent's change is saved at once, signed with a key made
   on this computer that the workspace owner vouched for when approving it; the web app shows it as
   the agent's, and a person can undo it. Where a workspace or folder asks for approval, the change
-  is a proposal a person approves first. Agents can't delete notes or mark a note as checked by a
-  person, and a note reaches them only after its version's signature is checked against the
+  is a proposal a person approves first. An agent can move or delete notes, or create, rename,
+  move or delete folders, only with the permissions you give it when connecting it (or later, in
+  the workspace's agent settings), each signed by you and checked by the agent; every such change
+  is signed with its own key and can be undone. Agents can't delete files or mark a note as checked
+  by a person, and a note reaches them only after its version's signature is checked against the
   workspace owner's key.
 - **Limited access.** You can connect an agent read-only or only to some folders. `disconnect`, or
   the web app's settings, revokes access at any time.
