@@ -23,8 +23,11 @@ export interface SyncContext {
   readonly verifier: VersionVerifier;
   /** The person's signing key, for the session routes that need a signature. */
   readonly identity: Signer | undefined;
-  /** The agent's own signing key, for its direct writes (an agent connection only). */
-  readonly agent: AgentConnection | undefined;
+  /**
+   * The agent's own signing key, for its direct writes (an agent connection only); its folders
+   * change with its verified scope (`SyncEngine.setAgentFolderIds`).
+   */
+  agent: AgentConnection | undefined;
   /** The folders the engine has seen (the feed and the cache), for the agent policy. */
   readonly folders: Map<string, AgentPolicyFolderInfo>;
   /** Each note's folder as last reported, so an agent's move checks the folder it leaves. */

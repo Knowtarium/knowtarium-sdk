@@ -46,6 +46,13 @@ export class Quarantine {
     await this.save();
   }
 
+  /** Forgets every quarantined note (a reset: the local copy is read again from the start). */
+  clear(): void {
+    if (this.notes.size === 0) return;
+    this.notes.clear();
+    this.report();
+  }
+
   /** Releases a note once a verified version of it was accepted. */
   async release(noteId: NoteId): Promise<void> {
     if (!this.notes.delete(noteId)) return;

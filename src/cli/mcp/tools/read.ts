@@ -129,7 +129,7 @@ async function agentChangesOf(session: WorkspaceSession) {
     .sort((a, b) => a.path.localeCompare(b.path));
   const review = folders.filter((folder) => folder.mode === "review").length;
   const mode =
-    session.connection.folderIds.length === 0 || folders.length === 0
+    session.scope.folderIds.length === 0 || folders.length === 0
       ? policy.rules.default
       : review > folders.length - review
         ? "review"
@@ -199,7 +199,7 @@ async function waitingClips(
   if (!state.mayFile && inboxId !== undefined && state.problem === null) {
     // a connection that sees the whole workspace and not the inbox folder: it was deleted;
     // otherwise it can't file here (read-only, no vouched key, or the inbox outside its folders)
-    const gone = !session.view.folders.has(inboxId) && session.connection.folderIds.length === 0;
+    const gone = !session.view.folders.has(inboxId) && session.scope.folderIds.length === 0;
     reasons.add(gone ? "inbox_folder_missing" : "scope");
   }
   // the queue's size shows only to a read-write connection whose folders cover the inbox
@@ -216,7 +216,7 @@ export function registerReadTools(server: McpServer, context: ToolContext): void
     {
       title: "List workspaces",
       description:
-        "The workspaces this agent may use, with their folders, access (read or read-write), how your changes land (`agentChanges`: saved at once or proposed for approval, with the folders that differ from its `default`), how long older versions of notes are kept (`history`) and whether the local copy is up to date. A workspace whose access was revoked shows `status` `revoked`, and its `problem` says how the person removes it. Start here, then read the workspace's conventions in the root or folder `index.md` (and `log.md`) where there is one.",
+        "The workspaces this agent may use, with their folders, access (read or read-write), its permissions beyond read-write (`permissions`: moving and deleting notes, creating, renaming, moving and deleting folders; `scopeVerified` says whether the person's signed settings were checked), how your changes land (`agentChanges`: saved at once or proposed for approval, with the folders that differ from its `default`), how long older versions of notes are kept (`history`) and whether the local copy is up to date. A workspace whose access was revoked shows `status` `revoked`, and its `problem` says how the person removes it. Start here, then read the workspace's conventions in the root or folder `index.md` (and `log.md`) where there is one.",
       annotations: readOnly,
     },
     () =>
@@ -231,11 +231,16 @@ export function registerReadTools(server: McpServer, context: ToolContext): void
           context.sessions.map(async (session) => ({
             id: session.workspaceId,
             name: session.view.name,
-            access: session.connection.access,
+            access: session.scope.access,
+            // what this connection may do beyond read-write, by its owner-signed scope
+            permissions: session.permissions,
+            scopeRevision: session.scope.revision,
+            scopeVerified: session.scope.verified,
+            ...(session.scope.problem === null ? {} : { scopeProblem: session.scope.problem }),
             folders:
-              session.connection.folderIds.length === 0
+              session.scope.folderIds.length === 0
                 ? "all"
-                : session.connection.folderIds.map((id) => session.view.folderPath(id)),
+                : session.scope.folderIds.map((id) => session.view.folderPath(id)),
             notes: session.loaded ? session.view.workspace().notes.size : null,
             agentChanges: await agentChangesOf(session),
             history: historyOf(await session.historyRetention()),

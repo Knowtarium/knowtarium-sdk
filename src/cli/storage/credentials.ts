@@ -10,6 +10,7 @@ import {
   FolderId,
   PublicKey,
   SignedAgentKey,
+  SignedAgentScope,
   TokenAccess,
   TokenId,
   WorkspaceId,
@@ -56,6 +57,27 @@ const AgentSigning = z.strictObject({
 });
 type AgentSigning = z.infer<typeof AgentSigning>;
 
+/**
+ * The highest agent scope revision this computer verified for a connection's token (protocol 3),
+ * with that signed scope, kept in its own sealed file (`agent-scopes.enc`) that released CLIs
+ * never read: a lower revision later, or none, is a rollback, and an offline start knows the
+ * scope. `credentials.enc` keeps the access and folders of connect time for older CLIs on the
+ * same computer; the server enforces the real scope.
+ */
+export const AgentScopeFloor = z.strictObject({
+  workspaceId: WorkspaceId,
+  tokenId: TokenId,
+  revision: z.int().positive(),
+  signed: SignedAgentScope,
+});
+export type AgentScopeFloor = z.infer<typeof AgentScopeFloor>;
+
+/** Where a session keeps its token's scope floor (`Credentials`, or memory in tests). */
+export interface ScopeFloorStore {
+  scopeFloor(workspaceId: string, tokenId: string): Promise<AgentScopeFloor | undefined>;
+  putScopeFloor(floor: AgentScopeFloor): Promise<void>;
+}
+
 /** One connected workspace: what the CLI needs to act for the agent. */
 export const Connection = StoredConnection.extend({
   /** Absent from connections made before direct writes: those only propose. */
@@ -79,7 +101,15 @@ export function agentSigningKeyPair(connection: Connection): SigningKeyPair | nu
  * proposal.
  */
 export function writesDirectly(connection: Connection): boolean {
-  if (connection.access !== "read-write" || connection.agentKey === undefined) return false;
+  return connection.access === "read-write" && hasVouchedKey(connection);
+}
+
+/**
+ * Whether a connection has its own signing key and the owner's `agent_key` naming exactly that
+ * key (whatever its access, which its verified scope may have changed since connect).
+ */
+export function hasVouchedKey(connection: Connection): boolean {
+  if (connection.agentKey === undefined) return false;
   const own = agentSigningKeyPair(connection);
   return (
     own !== null &&
@@ -99,6 +129,10 @@ const CredentialsFile = z.looseObject({
 const AgentKeysFile = z.looseObject({
   version: z.literal(1),
   agents: z.array(z.looseObject(AgentSigning.shape)),
+});
+const AgentScopesFile = z.looseObject({
+  version: z.literal(1),
+  scopes: z.array(z.looseObject(AgentScopeFloor.shape)),
 });
 
 /** What `status --offline` shows about a connection: nothing secret (IDs, scope, URLs, times). */
@@ -129,25 +163,30 @@ const FILE_KEY = "credentials-key";
 const FORMAT = 1;
 const CREDENTIALS_AD = new TextEncoder().encode("knowtarium-cli-credentials-v1");
 const AGENT_KEYS_AD = new TextEncoder().encode("knowtarium-cli-agent-keys-v1");
+const AGENT_SCOPES_AD = new TextEncoder().encode("knowtarium-cli-agent-scopes-v1");
 
 type Loose<T> = T & Record<string, unknown>;
 
-/** Both files' records as read (unknown keys kept). */
+/** The files' records as read (unknown keys kept). */
 interface Records {
   readonly connections: Loose<z.infer<typeof StoredConnection>>[];
   readonly agents: Loose<AgentSigning>[];
+  readonly scopes: Loose<AgentScopeFloor>[];
 }
 
 /**
  * The connections, encrypted with XChaCha20-Poly1305 (libsodium) under a random key kept in the
  * `SecretStore` (the OS keychain where there is one), in two files: `credentials.enc` in the
  * format every CLI version reads, and `agent-keys.enc` (same key, its own associated data) with
- * each connection's signing key for direct writes. The files can sit in a backup or a synced
- * folder: without the keychain entry they can't be read. Needs `await ready()` first.
+ * each connection's signing key for direct writes, and `agent-scopes.enc` (its own associated
+ * data too) with each token's verified scope floor (`AgentScopeFloor`). The files can sit in a
+ * backup or a synced folder: without the keychain entry they can't be read. Needs
+ * `await ready()` first.
  */
-export class Credentials {
+export class Credentials implements ScopeFloorStore {
   private readonly path: string;
   private readonly agentKeysPath: string;
+  private readonly agentScopesPath: string;
   private readonly summaryPath: string;
 
   constructor(
@@ -156,6 +195,7 @@ export class Credentials {
   ) {
     this.path = join(home, "credentials.enc");
     this.agentKeysPath = join(home, "agent-keys.enc");
+    this.agentScopesPath = join(home, "agent-scopes.enc");
     this.summaryPath = join(home, "connections.json");
   }
 
@@ -204,7 +244,7 @@ export class Credentials {
 
   private async records(): Promise<Records> {
     const sealed = await readIfExists(this.path);
-    if (sealed === null) return { connections: [], agents: [] };
+    if (sealed === null) return { connections: [], agents: [], scopes: [] };
     const key = await this.fileKey(true);
     if (sealed[0] !== FORMAT) throw new CredentialsLockedError(this.path);
     const { connections } = CredentialsFile.parse(Credentials.open(sealed, key, CREDENTIALS_AD));
@@ -218,7 +258,16 @@ export class Credentials {
         // again): its keys are unusable, so the connections only propose until reconnected
       }
     }
-    return { connections, agents };
+    let scopes: Loose<AgentScopeFloor>[] = [];
+    const floors = await readIfExists(this.agentScopesPath);
+    if (floors?.[0] === FORMAT) {
+      try {
+        scopes = AgentScopesFile.parse(Credentials.open(floors, key, AGENT_SCOPES_AD)).scopes;
+      } catch {
+        // left behind under an older key: the floors are read again from the server
+      }
+    }
+    return { connections, agents, scopes };
   }
 
   /** Every connection; none when nothing was saved. Throws `CredentialsLockedError` without the key. */
@@ -245,13 +294,14 @@ export class Credentials {
 
   private async save(records: Records): Promise<void> {
     const key = await this.fileKey((await readIfExists(this.path)) !== null);
-    // keep only signing keys whose connection is still there
-    const agents = records.agents.filter((entry) =>
+    // keep only signing keys and scope floors whose connection is still there
+    const connected = (entry: { workspaceId: string; tokenId: string }) =>
       records.connections.some(
         (connection) =>
           connection.workspaceId === entry.workspaceId && connection.tokenId === entry.tokenId,
-      ),
-    );
+      );
+    const agents = records.agents.filter(connected);
+    const scopes = records.scopes.filter(connected);
     await writePrivateFile(
       this.path,
       Credentials.seal({ version: 1, connections: records.connections }, key, CREDENTIALS_AD),
@@ -263,6 +313,14 @@ export class Credentials {
       );
     } else {
       await removeFile(this.agentKeysPath);
+    }
+    if (scopes.length > 0) {
+      await writePrivateFile(
+        this.agentScopesPath,
+        Credentials.seal({ version: 1, scopes }, key, AGENT_SCOPES_AD),
+      );
+    } else {
+      await removeFile(this.agentScopesPath);
     }
     // only the known, non-secret fields: an unknown one may be a newer version's secret
     const summaries = records.connections.map((connection) =>
@@ -306,8 +364,41 @@ export class Credentials {
                 }),
               ]),
         ],
+        scopes: records.scopes,
       });
       return replaced;
+    });
+  }
+
+  /** The scope floor this computer keeps for a connection's token, if any. */
+  async scopeFloor(workspaceId: string, tokenId: string): Promise<AgentScopeFloor | undefined> {
+    const { scopes } = await this.records();
+    const stored = scopes.find(
+      (entry) => entry.workspaceId === workspaceId && entry.tokenId === tokenId,
+    );
+    const parsed = AgentScopeFloor.safeParse(
+      stored === undefined
+        ? undefined
+        : Object.fromEntries(Object.keys(AgentScopeFloor.shape).map((key) => [key, stored[key]])),
+    );
+    return parsed.success ? parsed.data : undefined;
+  }
+
+  /**
+   * Keeps a token's verified scope as its floor (under the file's lock), unless one of a higher
+   * revision is kept already. Only for a saved connection of that token.
+   */
+  putScopeFloor(floor: AgentScopeFloor): Promise<void> {
+    return withFileLock(this.path, async () => {
+      const records = await this.records();
+      const others = (entry: { workspaceId: string; tokenId: string }) =>
+        entry.workspaceId !== floor.workspaceId || entry.tokenId !== floor.tokenId;
+      const kept = records.scopes.find((entry) => !others(entry));
+      if (kept !== undefined && kept.revision >= floor.revision) return;
+      await this.save({
+        ...records,
+        scopes: [...records.scopes.filter(others), AgentScopeFloor.parse(floor)],
+      });
     });
   }
 
@@ -321,11 +412,16 @@ export class Credentials {
       const others = (entry: { workspaceId: string }) => entry.workspaceId !== workspaceId;
       const rest = records.connections.filter(others);
       if (rest.length > 0) {
-        await this.save({ connections: rest, agents: records.agents.filter(others) });
+        await this.save({
+          connections: rest,
+          agents: records.agents.filter(others),
+          scopes: records.scopes.filter(others),
+        });
         return;
       }
       await removeFile(this.path);
       await removeFile(this.agentKeysPath);
+      await removeFile(this.agentScopesPath);
       await removeFile(this.summaryPath);
       await this.secrets.delete(FILE_KEY);
     });

@@ -1,8 +1,10 @@
 import { type Actor, type CheckRecordSignal, parseNote, setGenerated } from "../../core/index.js";
 import { boxKeyPairFromPrivateKey, fromBase64Url } from "../../crypto/index.js";
 import {
+  type AgentPermission,
   type AgentPolicyFolderLookup,
   type AgentPolicyViewResult,
+  agentScopeAllows,
   type AgentWriteMode,
   agentPolicyAncestry,
   effectiveMode,
@@ -10,9 +12,11 @@ import {
   type NoteId,
   routes,
   type SignedInboxKey,
+  type TokenAccess,
   type WorkspaceId,
 } from "../../protocol/index.js";
 import {
+  type AgentScopeProblem,
   type ApiClient,
   type CacheAdapter,
   type ClipFolder,
@@ -30,8 +34,15 @@ import {
   type SocketFactory,
   SyncEngine,
   type TrustState,
+  verifyAgentScope,
 } from "../../client/index.js";
-import { agentSigningKeyPair, type Connection, writesDirectly } from "../storage/credentials.js";
+import {
+  agentSigningKeyPair,
+  type AgentScopeFloor,
+  type Connection,
+  hasVouchedKey,
+  type ScopeFloorStore,
+} from "../storage/credentials.js";
 import { mcpUpdateMessage } from "../update.js";
 import { cachedKeyProvider, isUnreachable } from "./key-cache.js";
 import { describePlanLimit } from "./plan-limits.js";
@@ -74,6 +85,63 @@ export interface SessionDeps {
   readonly actor?: () => Actor;
   /** The API client's retry policy (tests make it one attempt). */
   readonly apiRetry?: Parameters<typeof createApiClient>[0]["retry"];
+  /**
+   * Where the token's verified scope floor is kept (`agent-scopes.enc`, through `Credentials`);
+   * without it, only in memory.
+   */
+  readonly scopes?: ScopeFloorStore;
+}
+
+/**
+ * The token's scope as a session acts on it (protocol 3): its access, folders and permissions,
+ * from the owner's signed `agent_scope` once it verified under the pinned owner key, else (a
+ * token at revision 0, connected before scopes were signed) the access and folders saved at
+ * connect, with no permissions.
+ */
+export interface SessionScope {
+  /** The scope revision (0: never signed). */
+  readonly revision: number;
+  readonly access: TokenAccess;
+  /** Empty: the whole workspace. */
+  readonly folderIds: readonly FolderId[];
+  readonly permissions: readonly AgentPermission[];
+  /** Whether it comes from the owner's signed scope, verified. */
+  readonly verified: boolean;
+  /**
+   * Why the scope the server served was refused (the last verified one stays in force): a
+   * rollback below the floor, a bad signature and the like. Null when it was accepted.
+   */
+  readonly problem: AgentScopeProblem | null;
+}
+
+/** A connection's scope from what it saved at connect: revision 0, no permissions. */
+function connectScope(connection: Connection): SessionScope {
+  return {
+    revision: 0,
+    access: connection.access,
+    folderIds: connection.folderIds,
+    permissions: [],
+    verified: false,
+    problem: null,
+  };
+}
+
+/** A session scope from a verified signed scope. */
+function verifiedScope(floor: Pick<AgentScopeFloor, "revision" | "signed">): SessionScope {
+  return {
+    revision: floor.revision,
+    access: floor.signed.scope.access,
+    folderIds: floor.signed.scope.folderIds,
+    permissions: floor.signed.scope.permissions,
+    verified: true,
+    problem: null,
+  };
+}
+
+/** Whether two scopes reach different notes (access or folders), so the local copy must go. */
+function reachChanged(a: SessionScope, b: SessionScope): boolean {
+  const folders = (scope: SessionScope) => [...new Set(scope.folderIds)].sort().join(",");
+  return a.access !== b.access || folders(a) !== folders(b);
 }
 
 /** How long a verified agent policy answers the read-only tools without a new request. */
@@ -171,12 +239,21 @@ export class WorkspaceSession {
   private fileAgain = false;
   /** The last inbox state read while ready, for answers when no fresh one can be had. */
   private lastInbox: InboxState = NO_INBOX_STATE;
+  /** The token's scope this session acts on (see `SessionScope`). */
+  private currentScope: SessionScope;
+  /** The scope read running now, if any (concurrent callers share it). */
+  private scopeRead: Promise<void> | undefined;
+  /** Who wants to know when the scope changes (the MCP server's tool list). */
+  private readonly scopeListeners = new Set<() => void>();
 
   private constructor(
     readonly connection: Connection,
     private readonly deps: SessionDeps,
     private readonly ownerKey: Uint8Array,
+    floor: AgentScopeFloor | undefined,
   ) {
+    this.currentScope = floor === undefined ? connectScope(connection) : verifiedScope(floor);
+    const scopeFolders = this.currentScope.folderIds;
     const workspaceId = connection.workspaceId;
     const client = (options: Partial<Parameters<typeof createApiClient>[0]> = {}) =>
       createApiClient({
@@ -226,9 +303,9 @@ export class WorkspaceSession {
       // a connection made before direct writes has no key of its own: it only proposes
       ...(signing === null
         ? {}
-        : { agent: { tokenId: connection.tokenId, signing, folderIds: connection.folderIds } }),
+        : { agent: { tokenId: connection.tokenId, signing, folderIds: scopeFolders } }),
     });
-    this.view = new WorkspaceView(this.engine, connection.folderIds, connection.ownerId);
+    this.view = new WorkspaceView(this.engine, scopeFolders, connection.ownerId);
     // the feed announces a new policy revision: read it again on the next use
     this.engine.subscribe((event) => {
       if (
@@ -242,33 +319,159 @@ export class WorkspaceSession {
     this.engine.on("revoked", () => {
       this.settle("revoked", revokedProblem(workspaceId));
     });
+    // the owner changed this token's scope: read it again (and pull again if its reach moved)
+    this.engine.on("scope_changed", () => {
+      void this.refreshScope({ pull: true });
+    });
   }
 
-  /** A session for a saved connection; the owner key is the pinned one, never the server's. */
+  /**
+   * A session for a saved connection; the owner key is the pinned one, never the server's. The
+   * token's scope floor (`agent-scopes.enc`) is verified again under that key before it counts.
+   */
   static async open(connection: Connection, deps: SessionDeps): Promise<WorkspaceSession> {
     const pinned = await deps.trust.ownerKey(connection.workspaceId);
-    return new WorkspaceSession(
-      connection,
-      deps,
-      pinned ?? fromBase64Url(connection.ownerSignPublicKey),
-    );
+    const ownerKey = pinned ?? fromBase64Url(connection.ownerSignPublicKey);
+    let floor: AgentScopeFloor | undefined;
+    try {
+      floor = await deps.scopes?.scopeFloor(connection.workspaceId, connection.tokenId);
+    } catch {
+      floor = undefined;
+    }
+    if (floor !== undefined) {
+      const checked = await verifyAgentScope(floor.signed, {
+        ownerSigningPublicKey: ownerKey,
+        accountId: connection.ownerId,
+        workspaceId: connection.workspaceId,
+        tokenId: connection.tokenId,
+      });
+      if (!checked.ok || checked.revision !== floor.revision) floor = undefined;
+    }
+    return new WorkspaceSession(connection, deps, ownerKey, floor);
+  }
+
+  /** The token's scope this session acts on (see `SessionScope`). */
+  get scope(): SessionScope {
+    return this.currentScope;
+  }
+
+  /** The token's permissions, from its verified scope (none at revision 0). */
+  get permissions(): readonly AgentPermission[] {
+    return this.currentScope.permissions;
+  }
+
+  /** Whether the verified scope holds a permission, with `read-write`. */
+  allows(permission: AgentPermission): boolean {
+    return agentScopeAllows(this.currentScope, permission);
+  }
+
+  /** Calls `listener` whenever the scope changes; returns the function that stops it. */
+  onScopeChange(listener: () => void): () => void {
+    this.scopeListeners.add(listener);
+    return () => {
+      this.scopeListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Reads the token again (`getCurrentToken`, one short attempt) and verifies its signed scope
+   * under the pinned owner key, at or above the floor (the highest revision verified before, kept
+   * in `agent-scopes.enc`): a verified one becomes the scope and the floor; a refused one keeps
+   * the last verified scope (`problem` says why); a token at revision 0 keeps the access and
+   * folders saved at connect. Only when the access or folders changed is the local copy dropped
+   * (`SyncEngine.reset`), and pulled again from version 0 when `pull` (else the next sync does);
+   * a change of permissions alone needs no pull. `credentials.enc` stays as written at connect.
+   * Runs at start, on `scope_changed` and once after `scope_denied`, `permission_required` or
+   * `stale_agent_scope`. Never rejects.
+   */
+  refreshScope(options: { readonly pull?: boolean } = {}): Promise<void> {
+    this.scopeRead ??= this.readScope(options.pull === true).finally(() => {
+      this.scopeRead = undefined;
+    });
+    return this.scopeRead;
+  }
+
+  private async readScope(pull: boolean): Promise<void> {
+    if (this.ended) return;
+    let token;
+    try {
+      ({
+        data: { token },
+      } = await this.policyApi.call(routes.getCurrentToken));
+    } catch {
+      // offline or refused: the last verified scope stays; the sync says why
+      return;
+    }
+    const before = this.currentScope;
+    const floor = before.verified ? before.revision : 0;
+    const checked = await verifyAgentScope(token.scope, {
+      ownerSigningPublicKey: this.ownerKey,
+      accountId: this.connection.ownerId,
+      workspaceId: this.workspaceId,
+      tokenId: this.connection.tokenId,
+      minRevision: floor,
+    });
+    if (!checked.ok) {
+      this.setScope({ ...before, problem: checked.problem });
+      return;
+    }
+    const verified = checked.verified;
+    const next =
+      verified === null
+        ? connectScope(this.connection)
+        : verifiedScope({ revision: verified.revision, signed: verified.signed });
+    if (verified !== null) {
+      await this.deps.scopes
+        ?.putScopeFloor({
+          workspaceId: this.workspaceId,
+          tokenId: this.connection.tokenId,
+          revision: verified.revision,
+          signed: verified.signed,
+        })
+        .catch(() => undefined);
+    }
+    const moved = reachChanged(before, next);
+    this.setScope(next);
+    if (!moved) return;
+    this.engine.setAgentFolderIds(next.folderIds);
+    this.view.setScope(next.folderIds);
+    this.lastPolicyAt = Number.NEGATIVE_INFINITY;
+    try {
+      await this.engine.reset();
+      this.loaded = false;
+    } catch {
+      // the engine stopped (revoked): nothing to pull
+      return;
+    }
+    if (pull) await this.sync();
+  }
+
+  private setScope(scope: SessionScope): void {
+    this.currentScope = scope;
+    for (const listener of [...this.scopeListeners]) {
+      try {
+        listener();
+      } catch {
+        // a broken listener must not break the session
+      }
+    }
   }
 
   get workspaceId(): WorkspaceId {
     return this.connection.workspaceId;
   }
 
-  /** Whether the token may change notes (propose, or write directly). */
+  /** Whether the token may change notes (propose, or write directly), by its verified scope. */
   get writable(): boolean {
-    return this.connection.access === "read-write";
+    return this.currentScope.access === "read-write";
   }
 
   /**
-   * Whether this connection may write directly where the workspace allows it: it has its own
-   * signing key and the owner vouched for it at connect. Otherwise it only proposes.
+   * Whether this connection may write directly where the workspace allows it: it may write, has
+   * its own signing key and the owner vouched for it at connect. Otherwise it only proposes.
    */
   get writesDirectly(): boolean {
-    return writesDirectly(this.connection);
+    return this.writable && hasVouchedKey(this.connection);
   }
 
   /** The lowest agent policy revision this connection accepts: its `agent_key`'s. */
@@ -336,7 +539,7 @@ export class WorkspaceSession {
         ownerAccountId: this.connection.ownerId,
         trust: this.deps.trust,
         visibleFolderIds: [...this.view.folders.keys()],
-        scopeFolderIds: this.connection.folderIds,
+        scopeFolderIds: this.currentScope.folderIds,
         view: true,
         minRevision: this.policyFloor,
       });
@@ -461,6 +664,8 @@ export class WorkspaceSession {
         this.fail(error);
         if (this.ended) return;
       }
+      // the token's scope first: a reach that changed drops the copy before the pull
+      await this.refreshScope();
       await this.sync();
     })();
     return this.started;
@@ -735,6 +940,14 @@ export class WorkspaceSession {
   stop(): void {
     clearTimeout(this.retry);
     this.engine.stop();
+  }
+
+  /**
+   * The clipper's inbox folder as the last verified inbox key named it (agents may not delete
+   * it); null when none was read.
+   */
+  get inboxFolderId(): FolderId | null {
+    return this.lastInbox.inboxKey?.envelope.folderId ?? null;
   }
 
   /** Whether a folder is inside the token's scope. */

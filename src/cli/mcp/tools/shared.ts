@@ -2,7 +2,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
 import { type Actor, deriveVerification, fileNameOf } from "../../../core/index.js";
-import type { NoteSnapshot } from "../../../client/index.js";
+import { isSyncApiError, type NoteSnapshot } from "../../../client/index.js";
 import type { AgentPolicyViewResult } from "../../../protocol/index.js";
 import { isUnreachable } from "../key-cache.js";
 import { describeFailure, disconnectCommandFor, type WorkspaceSession } from "../session.js";
@@ -156,6 +156,32 @@ export function guardedWrite(
       throw error;
     }
   });
+}
+
+/**
+ * Runs a writing call with the scope kept fresh (protocol 3): a `stale_agent_scope` answer reads the token
+ * again and tries once more; `scope_denied` and `permission_required` read it again (so the tools
+ * follow) and say why.
+ */
+export async function withScope<T>(session: WorkspaceSession, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    if (isSyncApiError(error, "stale_agent_scope")) {
+      await session.refreshScope({ pull: true });
+      return run();
+    }
+    if (isSyncApiError(error, "permission_required")) {
+      await session.refreshScope({ pull: true });
+      throw new ToolError(
+        "This agent's permissions don't include this any more: the person changed them in Knowtarium. Tell the person, or ask them to allow it in the workspace's agent settings.",
+      );
+    }
+    if (isSyncApiError(error, "scope_denied")) {
+      await session.refreshScope({ pull: true });
+    }
+    throw error;
+  }
 }
 
 /** Why a session can't answer at all, or null when it can (perhaps from a partial copy). */

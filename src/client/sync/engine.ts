@@ -209,6 +209,34 @@ export class SyncEngine {
   }
 
   /**
+   * The agent token's folders changed (protocol 3: the owner changed its scope, as its verified
+   * `agent_scope` says): the policy view's `ancestors` may name only these from now on. Call
+   * `reset` too when access or folders changed, so the local copy holds exactly what is in scope.
+   */
+  setAgentFolderIds(folderIds: readonly string[]): void {
+    const agent = this.context.agent;
+    if (agent !== undefined) this.context.agent = { ...agent, folderIds: [...folderIds] };
+  }
+
+  /**
+   * Drops the local copy (the encrypted cache of this workspace, the cursor, what the engine
+   * knows of folders and notes) and reports `reset`, so the next pull reads everything in scope
+   * from version 0: the changes feed after a cursor never returns older objects in folders that
+   * just became visible, and what left the scope must leave the copy. The device's rollback marks
+   * stay.
+   */
+  reset(): Promise<void> {
+    return this.run(async () => {
+      await this.context.cache?.clearWorkspace(this.context.workspaceId);
+      this.cursorValue = 0;
+      this.context.folders.clear();
+      this.context.noteFolders.clear();
+      this.context.quarantine.clear();
+      this.context.emitter.emit({ type: "reset" });
+    });
+  }
+
+  /**
    * The workspace root folder marker as the feed (or the cache) last named it (protocol 3); null
    * while none is known. Pass it to `buildWorkspacePaths` as `rootFolderId`.
    */

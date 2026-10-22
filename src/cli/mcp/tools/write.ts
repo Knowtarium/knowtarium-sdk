@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer, RegisteredTool } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
@@ -51,6 +51,7 @@ import {
   summaryOf,
   type ToolContext,
   ToolError,
+  withScope,
   workspaceArg as workspace,
 } from "./shared.js";
 
@@ -67,7 +68,7 @@ const DIFF_MAX_CHARS = 8_000;
 const PRUNED_BEFORE =
   "The version before this edit was removed after the workspace's history period, so there is no diff: read the note with read_note and check it as a whole.";
 
-async function writableSession(
+export async function writableSession(
   context: ToolContext,
   name: string | undefined,
 ): Promise<WorkspaceSession> {
@@ -92,7 +93,7 @@ function noteIdsOf(session: WorkspaceSession, references: readonly string[]): No
  * A note file name an agent gives: normalized with the workspace path rules, a `.md` file, and
  * not taken by another note in the folder.
  */
-function fileName(
+export function fileName(
   session: WorkspaceSession,
   folderId: FolderId,
   name: string,
@@ -159,7 +160,7 @@ function frontmatterKeys(text: string | null): string[] {
 }
 
 /** The refusal for an edit based on an old version. */
-function staleBase(base: number, current: number): ToolError {
+export function staleBase(base: number, current: number): ToolError {
   return new ToolError(
     `This note is at version ${String(current)} now, but your edit is based on version ${String(base)}. Read it again with read_note, redo your change on the current text, and send it again with base_version ${String(current)}.`,
   );
@@ -209,7 +210,7 @@ function stamped(note: ParsedNote, context: ToolContext, mode: "written" | "prop
 }
 
 /** Appends the agent's encrypted `proposed` event (unsigned, as agents' events are). */
-async function recordProposal(
+export async function recordProposal(
   session: WorkspaceSession,
   details: {
     noteId: NoteId;
@@ -252,7 +253,7 @@ interface Change {
 type AgentChange = Omit<Change, "text"> & { note: ParsedNote };
 
 /** Why a change was proposed rather than written, as the result tells the agent. */
-const PROPOSED_BECAUSE = {
+export const PROPOSED_BECAUSE = {
   review: "This folder asks for the person's approval of agent changes.",
   reconnect: `This connection can only propose: it was made before agents could write directly, or the workspace owner didn't vouch for its signing key. ${RECONNECT_ADVICE}`,
   unverified:
@@ -268,7 +269,7 @@ const PROPOSED_BECAUSE = {
  * (the session's client for direct writes waits out a `Retry-After` of a few seconds at most,
  * then answers), so a wait longer than a minute is the daily cap.
  */
-const PER_MINUTE_RETRY_MAX_SECONDS = 60;
+export const PER_MINUTE_RETRY_MAX_SECONDS = 60;
 
 /**
  * Makes an agent's change: written directly (`writeAsAgent`, signed with the connection's own
@@ -406,7 +407,7 @@ async function submit(
 }
 
 /** This agent's open proposals for a note, by ID. */
-async function openProposals(session: WorkspaceSession, noteId: NoteId): Promise<string[]> {
+export async function openProposals(session: WorkspaceSession, noteId: NoteId): Promise<string[]> {
   const open = await fetchPending(session, {
     submittedBy: session.connection.tokenId,
     status: "open",
@@ -496,12 +497,19 @@ async function proposalDetails(
 }
 
 /**
- * The writing tools: hidden for read-only tokens. A change is written directly where the folder's
+ * The writing tools: registered once, and listed only while some connected session may write
+ * (server.ts switches them; hidden, not just refused, for read-only tokens). A change is written directly where the folder's
  * policy lets agents apply changes and this connection has a key the owner vouched for, and is a
  * proposal a person approves everywhere else (`commit`).
  */
-export function registerWriteTools(server: McpServer, context: ToolContext): void {
-  server.registerTool(
+export function registerWriteTools(server: McpServer, context: ToolContext): RegisteredTool[] {
+  const tools: RegisteredTool[] = [];
+  const register: McpServer["registerTool"] = (...args) => {
+    const tool = server.registerTool(...args);
+    tools.push(tool);
+    return tool;
+  };
+  register(
     "propose_edit",
     {
       title: "Edit a note",
@@ -558,41 +566,43 @@ export function registerWriteTools(server: McpServer, context: ToolContext): voi
             : fileName(session, note.folderId, args.name, note.noteId);
         if (args.base_version !== note.version) throw staleBase(args.base_version, note.version);
         const checked = checkedText(args.text, note.text);
-        return commit(
-          session,
-          context,
-          {
-            noteId: note.noteId,
-            folderId: note.folderId,
-            baseVersion: args.base_version,
-            name,
-            note: checked,
-            ...(args.summary === undefined ? {} : { summary: args.summary }),
-          },
-          {
-            outcome,
-            // only where the change becomes a proposal
-            beforeProposing: async () => {
-              // a person's edit waits for a check only where the folder asks for review
-              const due = summaryOf(session, note, context.now(), await session.agentPolicy());
-              if (due.checkState === "agent-check-pending") {
-                throw new ToolError(
-                  `A person's edit of ${current.path} (version ${String(note.version)}) is waiting for a check. Check it first (list_pending_checks, then record_check or flag_conflict), then propose your change.`,
-                );
-              }
-              const open = await openProposals(session, note.noteId);
-              if (open.length > 0 && args.allow_duplicate !== true) {
-                throw new ToolError(
-                  `You have an open proposal for this note already (${open.join(", ")}); wait for the person to decide it (my_pending_changes), or pass allow_duplicate: true to propose another.`,
-                );
-              }
+        return withScope(session, () =>
+          commit(
+            session,
+            context,
+            {
+              noteId: note.noteId,
+              folderId: note.folderId,
+              baseVersion: args.base_version,
+              name,
+              note: checked,
+              ...(args.summary === undefined ? {} : { summary: args.summary }),
             },
-          },
+            {
+              outcome,
+              // only where the change becomes a proposal
+              beforeProposing: async () => {
+                // a person's edit waits for a check only where the folder asks for review
+                const due = summaryOf(session, note, context.now(), await session.agentPolicy());
+                if (due.checkState === "agent-check-pending") {
+                  throw new ToolError(
+                    `A person's edit of ${current.path} (version ${String(note.version)}) is waiting for a check. Check it first (list_pending_checks, then record_check or flag_conflict), then propose your change.`,
+                  );
+                }
+                const open = await openProposals(session, note.noteId);
+                if (open.length > 0 && args.allow_duplicate !== true) {
+                  throw new ToolError(
+                    `You have an open proposal for this note already (${open.join(", ")}); wait for the person to decide it (my_pending_changes), or pass allow_duplicate: true to propose another.`,
+                  );
+                }
+              },
+            },
+          ),
         );
       }),
   );
 
-  server.registerTool(
+  register(
     "create_note",
     {
       title: "Create a note",
@@ -633,7 +643,9 @@ export function registerWriteTools(server: McpServer, context: ToolContext): voi
           throw new ToolError(
             args.folder.replace(/^\/+|\/+$/g, "") === ""
               ? "This workspace has no root folder, so notes live in folders. Pick one from list_folders."
-              : `No folder ${args.folder}; agents can't create folders, so pick one from list_folders.`,
+              : session.allows("folders.create")
+                ? `No folder ${args.folder}; create it first with create_folder (when the person asked for it or the workspace's conventions call for it), or pick one from list_folders.`
+                : `No folder ${args.folder}; this agent can't create folders, so pick one from list_folders.`,
           );
         }
         if (!session.inScope(folderId))
@@ -648,23 +660,25 @@ export function registerWriteTools(server: McpServer, context: ToolContext): voi
           args.name ?? defaultNoteName(session, folderId, args.title),
         );
         const checked = checkedText(note.text, null);
-        return commit(
-          session,
-          context,
-          {
-            noteId: newId("note"),
-            folderId,
-            baseVersion: 0,
-            name,
-            note: checked,
-            ...(args.summary === undefined ? {} : { summary: args.summary }),
-          },
-          { outcome, beforeProposing: () => Promise.resolve() },
+        return withScope(session, () =>
+          commit(
+            session,
+            context,
+            {
+              noteId: newId("note"),
+              folderId,
+              baseVersion: 0,
+              name,
+              note: checked,
+              ...(args.summary === undefined ? {} : { summary: args.summary }),
+            },
+            { outcome, beforeProposing: () => Promise.resolve() },
+          ),
         );
       }),
   );
 
-  server.registerTool(
+  register(
     "my_pending_changes",
     {
       title: "My pending changes",
@@ -726,7 +740,7 @@ export function registerWriteTools(server: McpServer, context: ToolContext): voi
       }),
   );
 
-  server.registerTool(
+  register(
     "list_pending_checks",
     {
       title: "Notes waiting for a check",
@@ -785,7 +799,7 @@ export function registerWriteTools(server: McpServer, context: ToolContext): voi
       }),
   );
 
-  server.registerTool(
+  register(
     "record_check",
     {
       title: "Record a check",
@@ -899,7 +913,7 @@ export function registerWriteTools(server: McpServer, context: ToolContext): voi
       }),
   );
 
-  server.registerTool(
+  register(
     "flag_conflict",
     {
       title: "Flag a conflict",
@@ -933,7 +947,7 @@ export function registerWriteTools(server: McpServer, context: ToolContext): voi
       }),
   );
 
-  server.registerTool(
+  register(
     "reply_comment",
     {
       title: "Reply to a comment",
@@ -969,4 +983,5 @@ export function registerWriteTools(server: McpServer, context: ToolContext): voi
         return json({ commentId: comment.id }, session);
       }),
   );
+  return tools;
 }

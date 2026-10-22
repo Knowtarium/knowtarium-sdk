@@ -14,14 +14,19 @@ export interface CatalogTool {
 }
 
 /**
- * Every tool the server can offer, in the order it lists them: the reading and writing tools of a
- * connection that may write, then `connect`, offered only while nothing is connected. Read from
+ * Every tool the server can offer, in the order it lists them: the reading, writing and organizing
+ * tools of a connection that may write and holds every permission, then `connect`, offered only while nothing is connected. Read from
  * the real tool definitions over an in-memory MCP exchange, so the Claude Desktop bundle's
  * manifest lists exactly these (scripts/build-extras.js builds this module and calls it). No tool
- * runs: the sessions are stand-ins that only say they may write.
+ * runs: the sessions are stand-ins that only say they may write and hold every permission.
  */
 export async function toolCatalog(): Promise<CatalogTool[]> {
-  const writer = { writable: true } as unknown as WorkspaceSession;
+  // a stand-in that may write and holds every permission, so every tool is listed
+  const writer = {
+    writable: true,
+    allows: () => true,
+    onScopeChange: () => () => undefined,
+  } as unknown as WorkspaceSession;
   const connected = await listTools(createKnowtariumServer([writer], { version: "0.0.0" }));
   const unconnected = await listTools(
     createKnowtariumServer([], {

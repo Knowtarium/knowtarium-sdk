@@ -138,6 +138,11 @@ export type SyncEvent =
    * again (`getCurrentToken`) and verify its scope.
    */
   | { readonly type: "scope_changed"; readonly revision: number }
+  /**
+   * The local copy was dropped (`SyncEngine.reset`): forget every note, folder and attachment
+   * reported so far; the next pull reports what is in scope again from the start.
+   */
+  | { readonly type: "reset" }
   /** Access is gone for good: the engine stopped (see `SyncEngine`). */
   | { readonly type: "revoked" }
   /** The notes whose newest version failed verification, each time the set changes. */

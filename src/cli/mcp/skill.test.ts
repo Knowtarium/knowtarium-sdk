@@ -27,6 +27,7 @@ import {
 } from "../../client/index.js";
 import { World } from "../../client/testing/world.js";
 import type { Connection } from "../storage/credentials.js";
+import { toolCatalog } from "./catalog.js";
 import { createKnowtariumServer } from "./server.js";
 import { WorkspaceSession } from "./session.js";
 
@@ -141,7 +142,11 @@ describe("the conventions skill", () => {
     const skill = await readFile(SKILL, "utf8");
     const { world } = await fixtureWorkspace();
     const { client } = await mcpClient(world);
-    const tools = new Set((await client.listTools()).tools.map((tool) => tool.name));
+    // the organizing tools are listed only with their permissions: the catalog holds every one
+    const tools = new Set([
+      ...(await client.listTools()).tools.map((tool) => tool.name),
+      ...(await toolCatalog()).map((tool) => tool.name),
+    ]);
     const named = new Set(
       [...skill.matchAll(/`([a-z]+(?:_[a-z]+)+)`/g)]
         .map((match) => match[1] ?? "")

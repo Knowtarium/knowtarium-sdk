@@ -1,0 +1,457 @@
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
+
+import { ready, toBase64Url } from "../../crypto/index.js";
+import {
+  type AgentPermission,
+  type FolderId,
+  PROTOCOL_HEADER,
+  routes,
+} from "../../protocol/index.js";
+import {
+  EncryptedCache,
+  MemoryTrustStorage,
+  newId,
+  prepareFolder,
+  TrustState,
+} from "../../client/index.js";
+import { World } from "../../client/testing/world.js";
+import { FileCacheAdapter } from "../storage/file-cache.js";
+import type { AgentScopeFloor, Connection, ScopeFloorStore } from "../storage/credentials.js";
+import { temporaryFolder } from "../testing/context.js";
+import { GuardedCacheAdapter } from "./guarded-cache.js";
+import { createKnowtariumServer } from "./server.js";
+import { WorkspaceSession } from "./session.js";
+import { FOLDER_CHANGES_ASK_FIRST } from "./tools/organize.js";
+
+beforeAll(ready);
+
+let cleanups: (() => Promise<void>)[] = [];
+afterEach(async () => {
+  for (const cleanup of cleanups.reverse()) await cleanup();
+  cleanups = [];
+});
+
+const note = (title: string) =>
+  `---\ntype: Note\ntitle: ${title}\ngenerated: { by: claude-code/2.0, at: 2026-09-01T10:00:00Z }\n---\n${title} body.\n`;
+
+const ORGANIZE = [
+  "create_folder",
+  "delete_folder",
+  "delete_note",
+  "move_folder",
+  "move_note",
+  "rename_folder",
+];
+
+/** A workspace with two folders (Research, Archive) and a note in Research. */
+async function seeded() {
+  const world = new World();
+  const web = world.web();
+  const folder = async (name: string, parentId: FolderId | null = null): Promise<FolderId> => {
+    const request = prepareFolder(world.signer, world.key, {
+      workspaceId: world.workspaceId,
+      parentId,
+      name,
+      rootFolderId: null,
+    });
+    await web.api.call(routes.createFolder, {
+      params: { workspaceId: world.workspaceId },
+      body: request,
+    });
+    return request.id;
+  };
+  const research = await folder("Research");
+  const archive = await folder("Archive");
+  const pricing = newId("note");
+  await web.engine.writeNote({
+    noteId: pricing,
+    folderId: research,
+    baseVersion: 0,
+    name: "pricing.md",
+    text: note("Pricing"),
+  });
+  return { world, web, folder, research, archive, pricing };
+}
+
+/** A scope floor kept in memory, as `agent-scopes.enc` keeps it. */
+function memoryFloors(): ScopeFloorStore & { floors: AgentScopeFloor[] } {
+  const floors: AgentScopeFloor[] = [];
+  return {
+    floors,
+    scopeFloor: (workspaceId, tokenId) =>
+      Promise.resolve(
+        floors
+          .filter((floor) => floor.workspaceId === workspaceId && floor.tokenId === tokenId)
+          .at(-1),
+      ),
+    putScopeFloor: (floor) => {
+      floors.push(floor);
+      return Promise.resolve();
+    },
+  };
+}
+
+/** The CLI side over a connection saved at connect, an MCP server and a client. */
+async function connect(
+  world: World,
+  options: {
+    access?: "read" | "read-write";
+    folderIds?: FolderId[];
+    scopes?: ScopeFloorStore;
+  } = {},
+) {
+  const dir = await temporaryFolder();
+  cleanups.push(dir.cleanup);
+  const connection: Connection = {
+    apiUrl: "https://api.test",
+    workspaceId: world.workspaceId,
+    tokenId: world.tokenId,
+    tokenSecret: world.agentToken,
+    access: options.access ?? "read-write",
+    folderIds: options.folderIds ?? [],
+    agentPrivateKey: toBase64Url(world.agent.privateKey),
+    ownerId: world.accountId,
+    ownerSignPublicKey: toBase64Url(world.account.signing.publicKey),
+    connectedAt: new Date().toISOString(),
+    agentSignPrivateKey: toBase64Url(world.agentSigning.privateKey),
+  };
+  const [vouched] = world.server.agentKeyRecords;
+  if (vouched !== undefined) connection.agentKey = vouched.signed;
+  const adapter = new GuardedCacheAdapter(new FileCacheAdapter(dir.path));
+  const session = await WorkspaceSession.open(connection, {
+    fetch: world.server.fetch,
+    trust: new TrustState(new MemoryTrustStorage()),
+    cache: new EncryptedCache(adapter),
+    adapter,
+    log: () => undefined,
+    actor: () => "claude-code/2.1.0",
+    retryAfterMs: 3_600_000,
+    apiRetry: { maxAttempts: 1 },
+    ...(options.scopes === undefined ? {} : { scopes: options.scopes }),
+  });
+  await session.start();
+  cleanups.push(() => {
+    session.stop();
+    return Promise.resolve();
+  });
+  const server = createKnowtariumServer([session], { version: "0.0.0" });
+  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverSide);
+  const client = new Client({ name: "claude-code", version: "2.1.0" });
+  let listChanged = 0;
+  client.fallbackNotificationHandler = (notification) => {
+    if (notification.method === "notifications/tools/list_changed") listChanged++;
+    return Promise.resolve();
+  };
+  await client.connect(clientSide);
+  cleanups.push(() => client.close());
+  const call = async (name: string, args: Record<string, unknown> = {}) => {
+    const result = await client.callTool({ name, arguments: args });
+    const [content] = result.content as { type: string; text: string }[];
+    return {
+      error: result.isError === true,
+      text: content?.text ?? "",
+      json: () => JSON.parse(content?.text ?? "null") as Record<string, unknown>,
+    };
+  };
+  const tools = async () => (await client.listTools()).tools.map((tool) => tool.name);
+  return { session, client, call, tools, listChanged: () => listChanged };
+}
+
+/** The owner changes the agent's scope in the web app, and the agent reads it again. */
+async function grant(
+  world: World,
+  session: WorkspaceSession,
+  permissions: readonly AgentPermission[],
+  scope: { access?: "read" | "read-write"; folderIds?: FolderId[] } = {},
+) {
+  const result = await world.grantScope({ permissions, ...scope });
+  expect(result.status).toBe("saved");
+  await session.refreshScope({ pull: true });
+}
+
+describe("organizing tools", () => {
+  it("lists each tool only while the verified scope holds its permission, and says so", async () => {
+    const { world } = await seeded();
+    const { session, tools, call, listChanged } = await connect(world);
+    expect((await tools()).filter((name) => ORGANIZE.includes(name))).toEqual([]);
+    const [before] = (await call("list_workspaces")).json() as unknown as Record<string, unknown>[];
+    expect(before).toMatchObject({ permissions: [], scopeRevision: 0, scopeVerified: false });
+    await grant(world, session, ["notes.delete", "folders.create"]);
+    expect((await tools()).filter((name) => ORGANIZE.includes(name)).sort()).toEqual([
+      "create_folder",
+      "delete_note",
+    ]);
+    expect(listChanged()).toBeGreaterThan(0);
+    const [after] = (await call("list_workspaces")).json() as unknown as Record<string, unknown>[];
+    expect(after).toMatchObject({
+      permissions: ["notes.delete", "folders.create"],
+      scopeRevision: 1,
+      scopeVerified: true,
+    });
+    // taken away again
+    await grant(world, session, []);
+    expect((await tools()).filter((name) => ORGANIZE.includes(name))).toEqual([]);
+  });
+
+  it("shows today's writing tools when a read token becomes read-write, and hides them again", async () => {
+    const { world } = await seeded();
+    world.server.agentAccess = "read";
+    const { session, tools } = await connect(world, { access: "read" });
+    expect(await tools()).not.toContain("propose_edit");
+    await grant(world, session, [], { access: "read-write" });
+    expect(await tools()).toContain("propose_edit");
+    expect(await tools()).toContain("create_note");
+    await grant(world, session, [], { access: "read" });
+    expect(await tools()).not.toContain("propose_edit");
+  });
+
+  it("refuses a scope the owner didn't sign, keeping the one it verified", async () => {
+    const { world } = await seeded();
+    const floors = memoryFloors();
+    const { session } = await connect(world, { scopes: floors });
+    await grant(world, session, ["notes.delete"]);
+    expect(floors.floors.map((floor) => floor.revision)).toEqual([1]);
+    // a server serving an older scope, or none, after one was verified: a rollback
+    const signed = world.server.agentScopes.splice(0);
+    world.server.scopeRevision = 0;
+    await session.refreshScope();
+    expect(session.scope).toMatchObject({ revision: 1, problem: "rollback" });
+    expect(session.allows("notes.delete")).toBe(true);
+    world.server.agentScopes.push(...signed);
+    world.server.scopeRevision = 1;
+    // a restart picks the floor up from agent-scopes.enc, verified again
+    const again = await connect(world, { scopes: floors });
+    expect(again.session.scope).toMatchObject({ revision: 1, verified: true });
+  });
+
+  it("drops the local copy and pulls again only when access or folders change", async () => {
+    const { world, research, archive } = await seeded();
+    const { session } = await connect(world, { folderIds: [research] });
+    world.server.agentFolderIds = [research];
+    await session.sync();
+    const fromZero = () =>
+      world.server.requests.filter((request) => request.url.includes("/changes?since=0&")).length;
+    const pulls = fromZero();
+    // a permission alone: no pull from 0
+    await grant(world, session, ["notes.delete"], { folderIds: [research] });
+    expect(fromZero()).toBe(pulls);
+    // another folder: the copy goes and comes back from 0, with the folder newly in scope
+    const archived = newId("note");
+    await world.web().engine.writeNote({
+      noteId: archived,
+      folderId: archive,
+      baseVersion: 0,
+      name: "old.md",
+      text: note("Old"),
+    });
+    await grant(world, session, ["notes.delete"], { folderIds: [research, archive] });
+    expect(fromZero()).toBe(pulls + 1);
+    expect(session.view.notes.has(archived)).toBe(true);
+    expect(session.scope.folderIds).toEqual([research, archive]);
+  });
+
+  it("sends protocol 3 on every request", async () => {
+    const { world } = await seeded();
+    await connect(world);
+    const versions = new Set(
+      world.server.requests.map((request) => request.init.headers[PROTOCOL_HEADER]),
+    );
+    expect([...versions]).toEqual(["3"]);
+  });
+});
+
+describe("delete_note and move_note", () => {
+  it("deletes a note directly, with the summary in the agent's record", async () => {
+    const { world, pricing } = await seeded();
+    const { session, call } = await connect(world);
+    await grant(world, session, ["notes.delete"]);
+    const answer = await call("delete_note", {
+      note: "Research/pricing.md",
+      base_version: 1,
+      summary: "Superseded by the price list",
+    });
+    expect(answer.error).toBe(false);
+    expect(answer.json()).toMatchObject({ mode: "written", noteId: pricing, version: 2 });
+    expect(world.server.notes.get(pricing)?.versions.at(-1)?.deleted).toBe(true);
+    expect(session.view.notes.has(pricing)).toBe(false);
+    const wrote = world.server.events.filter(
+      (event) => event.noteId === pricing && event.ciphertext !== null,
+    );
+    expect(wrote).toHaveLength(1);
+  });
+
+  it("proposes the delete where the folder asks first", async () => {
+    const { world, web, research, pricing } = await seeded();
+    await web.engine.setAgentPolicy({
+      default: "direct",
+      folders: [{ folderId: research, mode: "review" }],
+      baseRevision: 0,
+    });
+    const { session, call } = await connect(world);
+    await grant(world, session, ["notes.delete"]);
+    const answer = await call("delete_note", { note: "Research/pricing.md", base_version: 1 });
+    expect(answer.json()).toMatchObject({ mode: "proposed", noteId: pricing });
+    expect(answer.text).toContain("asks for the person's approval");
+    expect([...world.server.pending.values()].map((entry) => entry.change.kind)).toEqual([
+      "delete",
+    ]);
+  });
+
+  it("refuses without the permission, outside the scope, and on a stale base", async () => {
+    const { world, research, archive } = await seeded();
+    const { session, call } = await connect(world, { folderIds: [archive] });
+    world.server.agentFolderIds = [archive];
+    // the tool isn't listed; called anyway, the client is refused
+    const hidden = await call("delete_note", { note: "Research/pricing.md", base_version: 1 });
+    expect(hidden.error).toBe(true);
+    await grant(world, session, ["notes.delete"], { folderIds: [archive] });
+    const outside = await call("delete_note", { note: "Research/pricing.md", base_version: 1 });
+    expect(outside.error).toBe(true);
+    expect(outside.text).toMatch(/No note/);
+    expect(research).not.toBe(archive);
+  });
+
+  it("moves a note directly with its text unchanged, and needs notes.move", async () => {
+    const { world, pricing } = await seeded();
+    const { session, call, tools } = await connect(world);
+    expect(await tools()).not.toContain("move_note");
+    await grant(world, session, ["notes.move"]);
+    const answer = await call("move_note", {
+      note: "Research/pricing.md",
+      folder: "Archive",
+      base_version: 1,
+    });
+    expect(answer.json()).toMatchObject({ mode: "written", path: "Archive/pricing.md" });
+    expect(session.view.notes.get(pricing)?.text).toBe(note("Pricing"));
+    const same = await call("move_note", {
+      note: "Archive/pricing.md",
+      folder: "Archive",
+      base_version: 2,
+    });
+    expect(same.error).toBe(true);
+  });
+
+  it("proposes a move out of a folder that asks first", async () => {
+    const { world, web, research } = await seeded();
+    await web.engine.setAgentPolicy({
+      default: "direct",
+      folders: [{ folderId: research, mode: "review" }],
+      baseRevision: 0,
+    });
+    const { session, call } = await connect(world);
+    await grant(world, session, ["notes.move"]);
+    const answer = await call("move_note", {
+      note: "Research/pricing.md",
+      folder: "Archive",
+      base_version: 1,
+    });
+    expect(answer.json()).toMatchObject({ mode: "proposed" });
+  });
+
+  it("reads the token again and retries once when its scope moved on in between", async () => {
+    const { world, pricing } = await seeded();
+    const { session, call } = await connect(world);
+    await grant(world, session, ["notes.delete"]);
+    // the owner changes the scope again; the session hasn't seen it yet
+    await world.grantScope({ permissions: ["notes.delete", "notes.move"] });
+    expect(session.scope.revision).toBe(1);
+    const answer = await call("delete_note", { note: "Research/pricing.md", base_version: 1 });
+    expect(answer.json()).toMatchObject({ mode: "written", noteId: pricing });
+    expect(session.scope.revision).toBe(2);
+  });
+});
+
+describe("folder tools", () => {
+  const all: AgentPermission[] = [
+    "folders.create",
+    "folders.rename",
+    "folders.move",
+    "folders.delete",
+  ];
+
+  it("creates, renames, moves and deletes a folder directly", async () => {
+    const { world } = await seeded();
+    const { session, call } = await connect(world);
+    await grant(world, session, all);
+    const created = await call("create_folder", { parent: "Research", name: "Drafts" });
+    expect(created.json()).toMatchObject({ mode: "written", path: "Research/Drafts" });
+    const twice = await call("create_folder", { parent: "Research", name: "drafts" });
+    expect(twice.error).toBe(true);
+    expect(twice.text).toMatch(/already/);
+    expect(
+      (await call("rename_folder", { folder: "Research/Drafts", name: "Old drafts" })).json(),
+    ).toMatchObject({ path: "Research/Old drafts" });
+    expect(
+      (await call("move_folder", { folder: "Research/Old drafts", parent: "Archive" })).json(),
+    ).toMatchObject({ path: "Archive/Old drafts" });
+    expect(
+      (await call("move_folder", { folder: "Archive", parent: "Archive/Old drafts" })).error,
+    ).toBe(true);
+    expect((await call("delete_folder", { folder: "Archive/Old drafts" })).json()).toMatchObject({
+      mode: "written",
+    });
+    const notEmpty = await call("delete_folder", { folder: "Research" });
+    expect(notEmpty.error).toBe(true);
+    expect(notEmpty.text).toMatch(/isn't empty/);
+  });
+
+  it("refuses its own scope folders, the root folder, and the top level for a scoped token", async () => {
+    const { world, web, folder, research } = await seeded();
+    const root = await folder("");
+    await web.api.call(routes.setRootFolder, {
+      params: { workspaceId: world.workspaceId },
+      body: { folderId: root },
+    });
+    const whole = await connect(world);
+    await grant(world, whole.session, all);
+    const rootRename = await whole.call("rename_folder", { folder: root, name: "Top" });
+    expect(rootRename.error).toBe(true);
+    expect(rootRename.text).toMatch(/root folder/);
+
+    const scoped = await connect(world, { folderIds: [research] });
+    await grant(world, scoped.session, all, { folderIds: [research] });
+    const own = await scoped.call("rename_folder", { folder: "Research", name: "Mine" });
+    expect(own.error).toBe(true);
+    expect(own.text).toMatch(/folders this agent was given/);
+    const top = await scoped.call("create_folder", { parent: "", name: "New" });
+    expect(top.error).toBe(true);
+    expect(top.text).toMatch(/top level/);
+    // inside its scope it may make one
+    expect((await scoped.call("create_folder", { parent: "Research", name: "Sub" })).error).toBe(
+      false,
+    );
+  });
+
+  it("refuses a folder change where the folder asks first, saying to tell the person", async () => {
+    const { world, web } = await seeded();
+    await web.engine.setAgentPolicy({ default: "review", folders: [], baseRevision: 0 });
+    const { session, call } = await connect(world);
+    await grant(world, session, all);
+    const answer = await call("create_folder", { parent: "Research", name: "Drafts" });
+    expect(answer.error).toBe(true);
+    expect(answer.text).toBe(FOLDER_CHANGES_ASK_FIRST);
+  });
+
+  it("explains another agent's protected folder", async () => {
+    const { world, archive } = await seeded();
+    const { session, call } = await connect(world);
+    await grant(world, session, all);
+    world.server.otherScopeFolderIds = [archive];
+    const answer = await call("rename_folder", { folder: "Archive", name: "Old" });
+    expect(answer.error).toBe(true);
+    expect(answer.text).toMatch(/Agents can't rename, move or delete that folder/);
+  });
+
+  it("points create_note at create_folder when the agent may make folders", async () => {
+    const { world } = await seeded();
+    const { session, call } = await connect(world);
+    const without = await call("create_note", { folder: "Nowhere", title: "X", text: "x" });
+    expect(without.text).toMatch(/can't create folders/);
+    await grant(world, session, ["folders.create"]);
+    const with_ = await call("create_note", { folder: "Nowhere", title: "X", text: "x" });
+    expect(with_.text).toMatch(/create_folder/);
+  });
+});

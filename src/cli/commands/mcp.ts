@@ -14,7 +14,11 @@ import { startConnectAttempt } from "../mcp/connect-attempt.js";
 import { GuardedCacheAdapter } from "../mcp/guarded-cache.js";
 import { type ConnectAttempt, createKnowtariumServer } from "../mcp/server.js";
 import { WorkspaceSession } from "../mcp/session.js";
-import { type Connection, readConnectionSummaries } from "../storage/credentials.js";
+import {
+  type Connection,
+  readConnectionSummaries,
+  type ScopeFloorStore,
+} from "../storage/credentials.js";
 import { FileCacheAdapter } from "../storage/file-cache.js";
 
 /**
@@ -53,9 +57,18 @@ export async function mcpCommand(context: CliContext, argv: readonly string[]): 
     .WebSocket;
   // the clips a session files in the background name the agent the MCP client says it is
   let actor = (): Actor => agentActor(undefined, context.version, values.actor);
+  // each token's verified scope floor, in agent-scopes.enc (never credentials.enc)
+  const scopes: ScopeFloorStore = {
+    scopeFloor: async (workspaceId, tokenId) =>
+      (await context.credentials()).scopeFloor(workspaceId, tokenId),
+    putScopeFloor: async (floor) => {
+      await (await context.credentials()).putScopeFloor(floor);
+    },
+  };
   const open = (connection: Connection) =>
     WorkspaceSession.open(connection, {
       actor: () => actor(),
+      scopes,
       fetch: context.fetch,
       trust: context.trust,
       cache,

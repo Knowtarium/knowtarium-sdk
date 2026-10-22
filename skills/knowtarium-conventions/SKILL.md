@@ -20,7 +20,8 @@ agent's consistency check, so both sides verify each other.
   couldn't be verified, or today's limit of direct changes was reached). `list_workspaces` shows it
   for each workspace (`agentChanges`, with the folders that differ from its `default`) and
   `read_note` for each note (`agentChanges`). Tell the person whether you saved or proposed each
-  change. You can't delete notes.
+  change. You can delete or move notes and change folders only when this connection's permissions
+  allow it (`list_workspaces` shows them as `permissions`; see Deleting and organizing).
 - **Be conservative where changes are saved at once.** A written change is the note's current
   version right away. Change only what you were asked to: don't reformat, reorder or rewrite the
   rest of the note, and don't touch notes you weren't asked about. Ask the person first before a
@@ -42,8 +43,10 @@ agent's consistency check, so both sides verify each other.
 
 ## Getting oriented
 
-1. `list_workspaces`: what you may use, with your access (`read` or `read-write`), how your changes
-   land (`agentChanges`), how long older versions of notes are kept (`history`) and status.
+1. `list_workspaces`: what you may use, with your access (`read` or `read-write`), your
+   `permissions` beyond that (moving and deleting notes, creating, renaming, moving and deleting
+   folders), how your changes land (`agentChanges`), how long older versions of notes are kept
+   (`history`) and status.
 2. Read the workspace's own conventions where it has them: the root `index.md` and the
    `index.md` of each folder you work in, if there is one (`read_note`; `list_notes` shows what a
    folder holds). They say what belongs where and how notes are written. A `log.md`, if there is
@@ -73,7 +76,8 @@ agent's consistency check, so both sides verify each other.
   named after its title, or in lowercase with dashes when every note in the folder is named that
   way. A name already used in that folder is refused.
 - Put a note where the folder's `index.md` says it belongs, or else next to the notes like it.
-  Agents can't create folders; if no folder fits, ask the person.
+  If no folder fits, ask the person; make one with `create_folder` only when this connection may
+  (`folders.create`) and the person asked or the workspace's conventions call for it.
 - To rename, pass a new `name` to `propose_edit`.
 - When you add a note to a folder whose `index.md` lists its notes, also edit that `index.md`
   (`propose_edit`) so it lists the new note, in the same style as the entries already there. A
@@ -144,6 +148,28 @@ the person approves, the note is fully verified.
 `my_pending_changes` lists your proposals and what became of them. Read the reviewer's comment on a
 rejection before trying again, and change what they asked for; don't resubmit the same change.
 
+## Deleting and organizing
+
+The person decides what each connection may do beyond editing: `move_note`, `delete_note`,
+`create_folder`, `rename_folder`, `move_folder` and `delete_folder` are there only when its
+permissions allow them (`list_workspaces` shows `permissions`), and they change when the person
+changes them.
+
+- **Only when asked.** Delete, move or reorganize only when the person asked, or the workspace's
+  own conventions (an `index.md`) say where things go; never to tidy up on your own.
+- **Before deleting a note,** read it and check `related_notes`, and tell the person which links
+  will break. When unsure, prefer moving to deleting.
+- **Folders the person set up are theirs:** rename or move one only when asked. The folders this
+  connection was given, the workspace root folder and the clipper's inbox can't be renamed, moved
+  or deleted by agents.
+- **You can't delete files** (attachments), so a folder with a file in it stays; delete or move
+  its notes and subfolders first, and tell the person about the files.
+- **How they land:** a note delete or move is saved at once (`mode: written`) or proposed for the
+  person's approval (`mode: proposed`), like an edit. A folder change is made at once, or refused
+  where the folder asks for approval (folder changes can't be proposed): then tell the person what
+  you would change, so they can do it in Knowtarium.
+- **Tell the person what you did,** and that they can undo it in Knowtarium.
+
 ## The consistency check
 
 In folders that ask for review, a person's edit counts as fully verified only after an agent
@@ -186,7 +212,8 @@ own note, if any, as the body.
   web app can create (`new_category`), a missing inbox folder, or a key this connection doesn't
   have (`old_generation`). The web app files those when the person opens it.
 - Suggest one action for each clip from what it says: read later, summarize into a note, link it
-  to existing notes, move it to a folder, or mark it done. Open a clip's link (with your own tools,
+  to existing notes, move it to a folder (`move_note`, where this connection may move notes), or
+  mark it done. Open a clip's link (with your own tools,
   if you have them) only when the person asks about that clip, never on your own while listing.
 - Change, move or summarize a clip only after the person agrees; then set `status: done`
   (`propose_edit`), or move it out of the inbox.

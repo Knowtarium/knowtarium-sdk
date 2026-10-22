@@ -25,6 +25,8 @@ interface FolderEntry {
  */
 export class WorkspaceView {
   name: string | null = null;
+  /** The workspace root folder marker, when the feed named one (protocol 3). */
+  rootFolderId: FolderId | null = null;
   readonly notes = new Map<NoteId, NoteSnapshot>();
   readonly folders = new Map<FolderId, FolderEntry>();
   private built: { workspace: Workspace; layout: WorkspaceLayout } | undefined;
@@ -33,10 +35,17 @@ export class WorkspaceView {
   constructor(
     engine: SyncEngine,
     /** The token's folders (and their subfolders); empty means the whole workspace. */
-    private readonly scope: readonly FolderId[],
+    private scope: readonly FolderId[],
     private readonly ownerId: string,
   ) {
     engine.subscribe((event) => {
+      if (event.type === "reset") {
+        this.notes.clear();
+        this.folders.clear();
+        this.index = undefined;
+        this.built = undefined;
+        return;
+      }
       if (event.type === "note") {
         if (event.note.text === null) this.notes.delete(event.note.noteId);
         else this.notes.set(event.note.noteId, event.note);
@@ -50,8 +59,10 @@ export class WorkspaceView {
             createdAt: event.folder.createdAt,
           });
         }
-      } else if (event.type === "workspace") this.name = event.name;
-      else return;
+      } else if (event.type === "workspace") {
+        this.name = event.name;
+        if (event.rootFolderId !== undefined) this.rootFolderId = event.rootFolderId;
+      } else return;
       this.built = undefined;
     });
   }
@@ -81,7 +92,8 @@ export class WorkspaceView {
         createdAt: note.createdAt,
         text: note.text ?? "",
       }));
-    const layout = buildWorkspacePaths(folders, notes);
+    // the root folder marker is the root whenever the feed names one (protocol 3)
+    const layout = buildWorkspacePaths(folders, notes, { rootFolderId: this.rootFolderId });
     const workspace = createWorkspace(
       notes.map((note) => ({
         id: note.id,
@@ -97,6 +109,25 @@ export class WorkspaceView {
     );
     this.built = { workspace, layout };
     return this.built;
+  }
+
+  /** The token's folders (empty: the whole workspace), as its verified scope names them. */
+  get ownScopeFolders(): readonly FolderId[] {
+    return this.scope;
+  }
+
+  /** Takes the token's folders from its verified scope (protocol 3). */
+  setScope(folderIds: readonly FolderId[]): void {
+    this.scope = [...folderIds];
+    this.built = undefined;
+  }
+
+  /**
+   * Whether a folder is the workspace root folder: the marked one when the feed names one, else
+   * the layout's guess (the oldest top-level folder with an empty name).
+   */
+  isRoot(folderId: FolderId): boolean {
+    return this.build().layout.root === folderId;
   }
 
   /** A folder's path (`""` for the root folder, its ID for a folder not synced yet). */

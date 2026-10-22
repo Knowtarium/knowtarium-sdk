@@ -138,6 +138,71 @@ describe("credentials", () => {
     expect(await readdir(home)).toEqual([]);
   });
 
+  it("keeps the scope floor in agent-scopes.enc, leaving credentials.enc and agent-keys.enc as they were", async () => {
+    const home = await folder();
+    const secrets = new MemorySecretStore();
+    const credentials = new Credentials(home, secrets);
+    const signing = createAgentSigningKeyPair();
+    const withKey: Connection = {
+      ...connection,
+      agentSignPrivateKey: toBase64Url(signing.privateKey),
+    };
+    await credentials.put(withKey);
+    const key = fromBase64Url(secrets.values.get("credentials-key") ?? "");
+    const before = {
+      main: openSealed(await readFile(join(home, "credentials.enc")), key, CREDENTIALS_AD),
+      keys: openSealed(await readFile(join(home, "agent-keys.enc")), key, AGENT_KEYS_AD),
+    };
+    const floor = (revision: number) => ({
+      workspaceId: connection.workspaceId,
+      tokenId: connection.tokenId,
+      revision,
+      signed: {
+        envelope: {
+          type: "agent_scope" as const,
+          accountId: connection.ownerId,
+          workspaceId: connection.workspaceId,
+          createdAt: "2026-10-22T10:00:00.000Z",
+          tokenId: connection.tokenId,
+          revision,
+          scopeSha256: "0".repeat(64),
+        },
+        signature: "A".repeat(86),
+        scope: {
+          access: "read-write" as const,
+          folderIds: [],
+          permissions: ["notes.delete" as const],
+        },
+      },
+    });
+    expect(
+      await credentials.scopeFloor(connection.workspaceId, connection.tokenId),
+    ).toBeUndefined();
+    await credentials.putScopeFloor(floor(2));
+    // a lower revision never replaces a higher one
+    await credentials.putScopeFloor(floor(1));
+    expect(
+      (await credentials.scopeFloor(connection.workspaceId, connection.tokenId))?.revision,
+    ).toBe(2);
+    // the files older CLIs read are exactly as they were, and still parse as they parse them
+    const main = openSealed(await readFile(join(home, "credentials.enc")), key, CREDENTIALS_AD);
+    expect(main).toEqual(before.main);
+    expect(OlderCredentialsFile.safeParse(main).success).toBe(true);
+    expect(openSealed(await readFile(join(home, "agent-keys.enc")), key, AGENT_KEYS_AD)).toEqual(
+      before.keys,
+    );
+    const floors = openSealed(await readFile(join(home, "agent-scopes.enc")), key, AGENT_SCOPES_AD);
+    expect(JSON.stringify(floors)).toContain("notes.delete");
+    expect(await credentials.list()).toEqual([withKey]);
+    // another token for the workspace (connected again): the old floor doesn't count
+    await credentials.put({ ...withKey, tokenId: "tok_00000000000000000000000002" });
+    expect(
+      await credentials.scopeFloor(connection.workspaceId, connection.tokenId),
+    ).toBeUndefined();
+    await credentials.remove(connection.workspaceId);
+    expect(await readdir(home)).toEqual([]);
+  });
+
   it("keeps fields a newer CLI added when it rewrites the files", async () => {
     const home = await folder();
     const secrets = new MemorySecretStore();
@@ -162,6 +227,7 @@ describe("credentials", () => {
 
 const CREDENTIALS_AD = new TextEncoder().encode("knowtarium-cli-credentials-v1");
 const AGENT_KEYS_AD = new TextEncoder().encode("knowtarium-cli-agent-keys-v1");
+const AGENT_SCOPES_AD = new TextEncoder().encode("knowtarium-cli-agent-scopes-v1");
 
 /** credentials.enc as the CLI versions before direct writes parse it. */
 const OlderCredentialsFile = z.strictObject({
