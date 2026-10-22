@@ -187,7 +187,12 @@ export async function hydrate(context: SyncContext): Promise<number> {
       const name = await withKeys(context, (keys) =>
         decryptWorkspaceName(keys, workspaceId, workspace.encName),
       );
-      emitter.emit({ type: "workspace", name, keyGeneration: workspace.keyGeneration });
+      emitter.emit({
+        type: "workspace",
+        name,
+        keyGeneration: workspace.keyGeneration,
+        ...(workspace.rootFolderId === undefined ? {} : { rootFolderId: workspace.rootFolderId }),
+      });
     });
   }
   for (const folder of await cache.listFolders(workspaceId)) {

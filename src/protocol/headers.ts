@@ -64,6 +64,21 @@ export const SIGNED_AT_HEADER = "Knowtarium-Signed-At";
 export const AGENT_POLICY_REVISION_HEADER = "Knowtarium-Agent-Policy-Revision";
 
 /**
+ * On an agent's signed action of protocol 3 (`deleteNoteAsAgent`, `deleteFolderAsAgent`; the
+ * other agent folder routes carry it in the body as `scopeRevision`): the scope revision the
+ * agent acted under (`AgentToken.scopeRevision`, as its verified `agent_scope` says). It is signed
+ * into the envelope as `scopeRevision`, and the server refuses it with `stale_agent_scope`
+ * unless it is the token's current revision.
+ */
+export const AGENT_SCOPE_REVISION_HEADER = "Knowtarium-Agent-Scope-Revision";
+
+/**
+ * On a person's note delete that approves an agent's delete proposal (`deleteNote`): the pending
+ * change's ID. The server closes the proposal as approved together with the delete.
+ */
+export const PENDING_ID_HEADER = "Knowtarium-Pending-Id";
+
+/**
  * On a person's note write that applies an agent's passing check: the check record's ID. The
  * server then rebuilds the signature as `check_applied` (with that ID) instead of `edited`, and
  * marks the record applied with the new version.
@@ -94,6 +109,8 @@ export const REQUEST_HEADERS = [
   SIGNED_AT_HEADER,
   CHECK_ID_HEADER,
   AGENT_POLICY_REVISION_HEADER,
+  AGENT_SCOPE_REVISION_HEADER,
+  PENDING_ID_HEADER,
   AUTHORIZATION_HEADER,
   "Content-Type",
 ] as const;

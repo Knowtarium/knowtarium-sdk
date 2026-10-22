@@ -22,6 +22,10 @@ import { ready } from "./crypto/sodium.js";
 import {
   AGENT_POLICY_FOLDER_HASH_TAG,
   AGENT_POLICY_HASH_TAG,
+  AGENT_SCOPE_HASH_TAG,
+  AgentScopeRevisionHeader,
+  agentScopeSha256,
+  agentScopeText,
   type AgentPolicyFolder,
   agentPolicyFolderHash,
   agentPolicyFolderText,
@@ -33,6 +37,7 @@ import {
   canonicalJson,
   ENVELOPE_SIGNING_PREFIX,
   envelopeSigningText,
+  SignedAgentScope,
   SignedEnvelope,
   SignedInboxKey,
 } from "./protocol/index.js";
@@ -237,16 +242,37 @@ describe("knowtarium/protocol against envelope-vectors.json", () => {
     expect(SignedEnvelope.safeParse(fields).success).toBe(false);
   });
 
-  // valid envelopes the sync API still refuses by a rule of its own, as the stored record's
-  // schema does (an inbox_key's revision is the last one + 1, so never 0)
+  // valid envelopes the sync API still refuses by a rule of its own, as the stored record's or
+  // the request's schema does (an inbox_key's and an agent_scope's revision is the last one + 1,
+  // so never 0; an agent acts under a scope revision of 1 or more)
   it.each(vectors.serverRefusedEnvelopes)("accepts $name as an envelope only", (vector) => {
     expect(SignedEnvelope.safeParse(vector.fields).success).toBe(true);
     expect(canonicalJson(vector.fields as FlatRecord)).toBe(vector.canonical);
     const record = { envelope: vector.fields, signature: vector.signature };
-    expect(SignedInboxKey.safeParse(record).success).toBe(false);
-    expect(
-      SignedInboxKey.safeParse({ ...record, envelope: { ...vector.fields, revision: 1 } }).success,
-    ).toBe(true);
+    const fields = vector.fields as FlatRecord;
+    switch (fields["type"]) {
+      case "inbox_key":
+        expect(SignedInboxKey.safeParse(record).success).toBe(false);
+        expect(
+          SignedInboxKey.safeParse({ ...record, envelope: { ...fields, revision: 1 } }).success,
+        ).toBe(true);
+        return;
+      case "agent_scope": {
+        const scope = { access: "read", folderIds: [], permissions: [] };
+        expect(SignedAgentScope.safeParse({ ...record, scope }).success).toBe(false);
+        expect(
+          SignedAgentScope.safeParse({ ...record, scope, envelope: { ...fields, revision: 1 } })
+            .success,
+        ).toBe(true);
+        return;
+      }
+      default:
+        expect(fields["scopeRevision"]).toBe(0);
+        expect(AgentScopeRevisionHeader.safeParse(String(fields["scopeRevision"])).success).toBe(
+          false,
+        );
+        expect(AgentScopeRevisionHeader.parse("1")).toBe(1);
+    }
   });
 });
 
@@ -359,15 +385,26 @@ describe("agent policy hashes", () => {
     expect(missing?.policySha256).toBe(MISSING_AGENT_POLICY_SHA256);
   });
 
-  it("vouches in agent_key for the key that signs agent_edited", () => {
+  it("vouches in agent_key for the key that signs agent_edited and the protocol 3 actions", () => {
     const key = vectors.signedEnvelopes.find((vector) => vector.fields.type === "agent_key");
-    const edited = vectors.signedEnvelopes.find((vector) => vector.fields.type === "agent_edited");
     const vouched = (key?.fields as Record<string, unknown>)["signPublicKey"] as string;
-    expect(toHex(fromBase64Url(vouched))).toBe(edited?.publicKey);
-    expect(edited?.publicKey).not.toBe(key?.publicKey);
-    expect((edited?.fields as Record<string, unknown>)["tokenId"]).toBe(
-      (key?.fields as Record<string, unknown>)["tokenId"],
+    const policy = vectors.signedEnvelopes.find((vector) => vector.fields.type === "agent_policy");
+    const signedByAgent = vectors.signedEnvelopes.filter(
+      (vector) =>
+        vector.fields.type === "agent_edited" ||
+        vector.fields.type === "agent_deleted" ||
+        vector.fields.type.startsWith("agent_folder_"),
     );
+    expect(signedByAgent.length).toBe(8);
+    for (const signed of signedByAgent) {
+      const fields = signed.fields as Record<string, unknown>;
+      expect(toHex(fromBase64Url(vouched)), signed.name).toBe(signed.publicKey);
+      expect(signed.publicKey).not.toBe(key?.publicKey);
+      expect(fields["tokenId"]).toBe((key?.fields as Record<string, unknown>)["tokenId"]);
+      expect(fields["policySha256"]).toBe(
+        (policy?.fields as Record<string, unknown>)["policySha256"],
+      );
+    }
   });
 
   it("refuses a malformed input instead of hashing it", () => {
@@ -375,5 +412,50 @@ describe("agent policy hashes", () => {
     expect(() => agentPolicyText("sometimes" as AgentWriteMode, [])).toThrow(TypeError);
     expect(() => agentPolicyText("direct", ["A".repeat(64)])).toThrow(TypeError);
     expect(() => agentPolicyText("direct", [hash, hash])).toThrow(TypeError);
+  });
+});
+
+describe("agent scope hashes", () => {
+  beforeAll(ready);
+
+  it("uses the tag the vectors pin", () => {
+    expect(AGENT_SCOPE_HASH_TAG).toBe(vectors.agentScopeTag);
+  });
+
+  it.each(vectors.agentScopeHashes)("hashes $name", async (vector) => {
+    const scope = {
+      access: vector.access,
+      folderIds: vector.folderIds,
+      permissions: vector.permissions,
+    };
+    expect(agentScopeText(scope)).toBe(vector.text);
+    expect(ciphertextSha256(utf8(vector.text))).toBe(vector.scopeSha256);
+    expect(await agentScopeSha256(scope)).toBe(vector.scopeSha256);
+    // the order of the folders and permissions doesn't matter
+    expect(
+      await agentScopeSha256({
+        ...scope,
+        folderIds: [...scope.folderIds].reverse(),
+        permissions: [...scope.permissions].reverse(),
+      }),
+    ).toBe(vector.scopeSha256);
+    // protocol's text is crypto's canonical JSON (RFC 8785) behind the tag
+    const json = vector.text.slice(vectors.agentScopeTag.length);
+    expect(cryptoCanonicalJson(JSON.parse(json) as JsonValue)).toBe(json);
+  });
+
+  it("is what the agent_scope vector signs", () => {
+    const signed = vectors.signedEnvelopes.find((vector) => vector.fields.type === "agent_scope");
+    expect(vectors.agentScopeHashes.map((vector) => vector.scopeSha256)).toContain(
+      (signed?.fields as Record<string, unknown>)["scopeSha256"],
+    );
+  });
+
+  it("refuses a malformed input instead of hashing it", async () => {
+    const scope = { access: "read-write", folderIds: [], permissions: [] };
+    expect(() => agentScopeText({ ...scope, access: "admin" })).toThrow(TypeError);
+    expect(() => agentScopeText({ ...scope, permissions: ["notes.purge"] })).toThrow(TypeError);
+    expect(() => agentScopeText({ ...scope, folderIds: ["Research"] })).toThrow(TypeError);
+    await expect(agentScopeSha256({ ...scope, permissions: ["*"] })).rejects.toThrow(TypeError);
   });
 });

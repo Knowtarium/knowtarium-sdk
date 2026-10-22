@@ -81,10 +81,12 @@ describe("protocol version", () => {
   });
 
   it("accepts the current version and the previous one", () => {
-    expect(PROTOCOL_VERSION).toBe(2);
+    expect(PROTOCOL_VERSION).toBe(3);
     expect(isSupportedProtocolVersion(String(PROTOCOL_VERSION))).toBe(true);
-    expect(isSupportedProtocolVersion("1")).toBe(true);
-    expect(isSupportedProtocolVersion("3")).toBe(false);
+    expect(isSupportedProtocolVersion("2")).toBe(true);
+    // protocol 1 was never released, so the rule of the current and the previous drops it
+    expect(isSupportedProtocolVersion("1")).toBe(false);
+    expect(isSupportedProtocolVersion("4")).toBe(false);
     expect(isSupportedProtocolVersion(undefined)).toBe(false);
   });
 });

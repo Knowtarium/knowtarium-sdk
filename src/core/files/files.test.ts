@@ -101,6 +101,28 @@ describe("workspace paths", () => {
     ]);
   });
 
+  it("takes the root from the marker whenever it names a known folder, not the guess", () => {
+    const notes: StoredNote[] = [
+      { id: "note_1", folderId: "fld_root", name: "index.md", text: "" },
+      { id: "note_2", folderId: "fld_zz", name: "index.md", text: "" },
+    ];
+    // another top-level folder with an empty name: the guess picks the first by age, then ID
+    const withAnother: StoredFolder[] = [...folders, { id: "fld_zz", parentId: null, name: "" }];
+    const guessed = buildWorkspacePaths(withAnother, notes);
+    expect(guessed.root).toBe("fld_root");
+    const marked = buildWorkspacePaths(withAnother, notes, { rootFolderId: "fld_zz" });
+    expect(marked.root).toBe("fld_zz");
+    expect(marked.folders.get("fld_zz")).toBe("");
+    expect(marked.notes.get("note_2")).toBe("index.md");
+    // the guessed folder is an ordinary folder then, shown under a name of its own
+    expect(marked.notes.get("note_1")).not.toBe("index.md");
+    // a marked folder with a name is the root too
+    expect(buildWorkspacePaths(folders, notes, { rootFolderId: "fld_a" }).root).toBe("fld_a");
+    // a marker naming no known folder (deleted, or not synced yet) falls back to the guess
+    expect(buildWorkspacePaths(folders, notes, { rootFolderId: "fld_gone" }).root).toBe("fld_root");
+    expect(buildWorkspacePaths(folders, notes, { rootFolderId: null }).root).toBe("fld_root");
+  });
+
   it("names legacy notes after their titles and tells duplicates apart", () => {
     const layout = buildWorkspacePaths(folders, [
       { id: "note_9", folderId: "fld_a", name: null, text: "---\ntitle: Pricing\n---\n" },

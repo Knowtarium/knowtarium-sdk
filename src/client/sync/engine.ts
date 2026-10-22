@@ -6,6 +6,7 @@ import {
   CHANGES_PAGE_MAX,
   type ClipSummaryResponse,
   type ExtensionId,
+  type FolderId,
   type NoteId,
   type PendingChange,
   type PendingId,
@@ -144,6 +145,7 @@ export class SyncEngine {
   private queuedPull: Promise<number> | undefined;
   private live: LiveConnection | undefined;
   private stopped: SyncStoppedError | undefined;
+  private rootFolder: FolderId | null = null;
 
   constructor(options: SyncEngineOptions) {
     const base = {
@@ -176,6 +178,17 @@ export class SyncEngine {
     this.context.emitter.on("note", ({ note }) => {
       this.context.noteFolders.set(note.noteId, note.folderId);
     });
+    this.context.emitter.on("workspace", (event) => {
+      if (event.rootFolderId !== undefined) this.rootFolder = event.rootFolderId;
+    });
+  }
+
+  /**
+   * The workspace root folder marker as the feed (or the cache) last named it (protocol 3); null
+   * while none is known. Pass it to `buildWorkspacePaths` as `rootFolderId`.
+   */
+  get rootFolderId(): FolderId | null {
+    return this.rootFolder;
   }
 
   /** The workspace version the local state is at. */

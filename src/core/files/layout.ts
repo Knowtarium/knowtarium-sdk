@@ -241,13 +241,19 @@ export function rootFolderOf(folders: readonly StoredFolder[]): StoredFolder | n
  * the oldest (first signed write, then ID) keeps a contested name, so a new duplicate never takes
  * an existing note's path; the others get `uniqueName` and are reported. A folder whose parent
  * isn't known shows under the parent's ID.
+ *
+ * `rootFolderId` is the workspace's root folder marker (protocol 3: the changes feed's
+ * `rootFolderId`, which the owner set): whenever it names one of `folders`, that folder is the
+ * root, whatever its stored name, and `rootFolderOf`'s guess is used only without one.
  */
 export function buildWorkspacePaths(
   folders: readonly StoredFolder[],
   notes: readonly StoredNote[],
+  options: { readonly rootFolderId?: string | null | undefined } = {},
 ): WorkspaceLayout {
   const byId = new Map(folders.map((folder) => [folder.id, folder]));
-  const root = rootFolderOf(folders)?.id ?? null;
+  const marked = options.rootFolderId ?? null;
+  const root = marked !== null && byId.has(marked) ? marked : (rootFolderOf(folders)?.id ?? null);
   const folderPaths = new Map<string, string>();
   const taken = new Map<string, Set<string>>();
   const renamed: WorkspaceLayout["renamed"][number][] = [];

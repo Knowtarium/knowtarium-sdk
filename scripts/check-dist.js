@@ -101,7 +101,7 @@ assert.deepEqual(
 assert.ok(pkg.files.includes("npm-shrinkwrap.json"), "package.json files must ship the shrinkwrap");
 
 const protocolEntry = await import("knowtarium/protocol");
-assert.equal(protocolEntry.PROTOCOL_VERSION, 2);
+assert.equal(protocolEntry.PROTOCOL_VERSION, 3);
 assert.equal(protocolEntry.PROTOCOL_HEADER, "Knowtarium-Protocol-Version");
 assert.equal(protocolEntry.routes.health.path, "/health");
 assert.equal(protocolEntry.isJitless(), true, "knowtarium/protocol makes zod jitless on load");

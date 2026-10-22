@@ -83,7 +83,7 @@ describe("requests", () => {
       redirect: "error",
       credentials: "include",
     });
-    expect(header(call, "Knowtarium-Protocol-Version")).toBe("2");
+    expect(header(call, "Knowtarium-Protocol-Version")).toBe("3");
     expect(header(call, "Knowtarium-Request")).toBeUndefined();
     expect(header(call, "Authorization")).toBeUndefined();
   });
@@ -124,7 +124,7 @@ describe("requests", () => {
     const headers = calls[0]?.init.headers ?? {};
     expect(headers).toEqual({
       "User-Agent": "knowtarium-cli/1",
-      "Knowtarium-Protocol-Version": "2",
+      "Knowtarium-Protocol-Version": "3",
       "Knowtarium-Request": "1",
       Authorization: `Bearer ${token}`,
     });

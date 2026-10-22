@@ -922,6 +922,9 @@ export class FakeServer {
       createdAt: new Date().toISOString(),
       lastUsedAt: null,
       revokedAt: this.tokenRevoked ? new Date().toISOString() : null,
+      permissions: [],
+      scopeRevision: 0,
+      scope: null,
     };
   }
 
@@ -1567,6 +1570,7 @@ export class FakeServer {
           resultingVersion: null,
           rejectionCommentId: null,
           seq,
+          kind: "edit",
         };
         this.pending.set(change.id, { change, blob });
         this.recordChange(`pending:${change.id}`, {

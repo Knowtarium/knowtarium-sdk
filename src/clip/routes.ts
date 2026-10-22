@@ -7,7 +7,10 @@ import type { SignedInboxKey } from "./keys.js";
 // that isn't a GET also `Knowtarium-Request: 1`; the extension routes take the token as
 // `Authorization: Bearer kte_...`.
 
-/** The protocol version the extension speaks, and the headers every request carries. */
+/**
+ * The protocol version the extension speaks, and the headers every request carries. It stays on
+ * 2: none of its routes changed in protocol 3, and the API accepts both.
+ */
 export const EXTENSION_PROTOCOL = {
   version: 2,
   versionHeader: "Knowtarium-Protocol-Version",

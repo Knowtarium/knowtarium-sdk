@@ -30,6 +30,7 @@ export * from "./history.js";
 export * from "./attachments.js";
 export * from "./pending.js";
 export * from "./agent-policy.js";
+export * from "./agent-scope.js";
 export * from "./events.js";
 export * from "./comments.js";
 export * from "./checks.js";

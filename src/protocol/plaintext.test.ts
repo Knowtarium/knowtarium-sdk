@@ -67,6 +67,8 @@ const SAFE_STRINGS = new Set<z.ZodType>([
   protocol.KeyCommitment,
   protocol.AgentPolicySha256,
   protocol.AgentPolicyRevisionHeader,
+  protocol.AgentScopeSha256,
+  protocol.AgentScopeRevisionHeader,
   protocol.Salt,
   protocol.LoopbackSecret,
   protocol.RecoveryGrant,

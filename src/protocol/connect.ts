@@ -11,6 +11,7 @@ import {
   requiredSigningFields,
   Sha256,
 } from "./signatures.js";
+import { AgentPermission } from "./agent-scope.js";
 import { AgentToken, TokenAccess } from "./tokens.js";
 
 /*
@@ -125,6 +126,12 @@ export type ConnectRequestResponse = z.infer<typeof ConnectRequestResponse>;
  * as the token's `signPublicKey` and returns the signed record in `listKeys` (`agentKeys`) and in
  * the delivery. All three fields or none: without them (an older CLI) the token has no signing
  * key and can only propose.
+ *
+ * Protocol 3: `permissions` (none by default; only with `read-write`) and the owner's
+ * `agent_scope` at revision 1 over the access, folders and permissions chosen
+ * (`scopeSignedAt`, `scopeSignature`; both or neither). The server stores the token at scope
+ * revision 1 with that signature. Without them (an older web tab) the token is stored at
+ * revision 0 with no permissions, and permissions without a signature are refused.
  */
 export const ApproveConnectRequest = z
   .strictObject({
@@ -145,7 +152,23 @@ export const ApproveConnectRequest = z
      */
     ...keyGenerationSigningFields,
     ...agentKeySigningFields,
+    /** What the agent may do on top of `read-write`, each once (protocol 3). */
+    permissions: z.array(AgentPermission).optional(),
+    /** The owner's `agent_scope` at revision 1 (protocol 3). */
+    scopeSignedAt: SignedTimestamp.optional(),
+    scopeSignature: Signature.optional(),
   })
+  .refine((value) => (value.scopeSignedAt === undefined) === (value.scopeSignature === undefined), {
+    error: "Send scopeSignedAt and scopeSignature together, or neither",
+  })
+  .refine(
+    (value) =>
+      (value.permissions ?? []).length === 0 ||
+      (value.access === "read-write" &&
+        value.scopeSignature !== undefined &&
+        new Set(value.permissions).size === value.permissions?.length),
+    { error: "Permissions need read-write access and a signed scope, each once" },
+  )
   .refine(
     (value) => {
       const present = [value.signPublicKey, value.agentKeySignedAt, value.agentKeySignature];

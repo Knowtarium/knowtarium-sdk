@@ -63,6 +63,12 @@ export const ServerMessage = z.discriminatedUnion("type", [
    * them. Older clients drop it, like any message type they don't know.
    */
   z.object({ type: z.literal("clip_added"), pending: z.int().nonnegative() }),
+  /**
+   * The owner changed this agent token's scope (protocol 3): its access, folders or permissions,
+   * now at `revision`. Sent to the token's own sockets, which the server then closes (4000): read
+   * the token again (`getCurrentToken`). Older clients drop it and reconnect on the close.
+   */
+  z.object({ type: z.literal("scope_changed"), revision: z.int().positive() }),
   /** A new key generation: fetch the wrapped keys again. */
   z.object({ type: z.literal("keys_rotated"), keyGeneration: KeyGeneration }),
   /** The token or session lost access; the server closes the socket after this. */

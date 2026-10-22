@@ -117,6 +117,12 @@ export type SyncEvent =
        * and while the workspace has none): a new one means read the policy again.
        */
       readonly agentPolicyRevision?: number;
+      /**
+       * The workspace root folder marker (protocol 3), when the owner set one: lay the workspace
+       * out with it as the root (`buildWorkspacePaths`' `rootFolderId`). Absent from older
+       * servers and while none is set.
+       */
+      readonly rootFolderId?: FolderId;
     }
   | { readonly type: "change"; readonly change: RecordChange }
   | { readonly type: "synced"; readonly cursor: number }

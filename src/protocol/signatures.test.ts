@@ -9,6 +9,8 @@ import {
   parseResponseVersionTag,
   parseVersionTag,
   PROTOCOL_2_ENVELOPE_TYPES,
+  PROTOCOL_3_ENVELOPE_TYPES,
+  isAgentSigned,
   PROTOCOL_VERSION,
   SignedAgentKey,
   SignedAgentPolicy,
@@ -347,7 +349,7 @@ describe("signed envelopes", () => {
 });
 
 describe("envelope protocol versions", () => {
-  it("marks the agent envelopes as protocol 2, the rest as 1", () => {
+  it("marks the agent permission envelopes as protocol 3, the other agent ones as 2, the rest as 1", () => {
     // the web clipper's two came to protocol 2 without a bump: only its new routes serve them
     expect([...PROTOCOL_2_ENVELOPE_TYPES].sort()).toEqual([
       "agent_edited",
@@ -356,14 +358,34 @@ describe("envelope protocol versions", () => {
       "extension_key",
       "inbox_key",
     ]);
+    expect([...PROTOCOL_3_ENVELOPE_TYPES].sort()).toEqual([
+      "agent_deleted",
+      "agent_folder_created",
+      "agent_folder_deleted",
+      "agent_folder_moved",
+      "agent_folder_renamed",
+      "agent_scope",
+    ]);
     const clipper = ["inbox_key", "extension_key"];
     for (const option of SignedEnvelope.options) {
       const type = option.shape.type.value;
-      expect(envelopeProtocolVersion(type), type).toBe(
-        type.startsWith("agent_") || clipper.includes(type) ? 2 : 1,
-      );
+      const expected = (PROTOCOL_3_ENVELOPE_TYPES as readonly string[]).includes(type)
+        ? 3
+        : type.startsWith("agent_") || clipper.includes(type)
+          ? 2
+          : 1;
+      expect(envelopeProtocolVersion(type), type).toBe(expected);
       expect(envelopeProtocolVersion(type)).toBeLessThanOrEqual(PROTOCOL_VERSION);
     }
+  });
+
+  it("tells the agent-signed types from the owner's", () => {
+    expect(isAgentSigned("agent_edited")).toBe(true);
+    expect(isAgentSigned("agent_deleted")).toBe(true);
+    expect(isAgentSigned("agent_folder_moved")).toBe(true);
+    expect(isAgentSigned("agent_scope")).toBe(false);
+    expect(isAgentSigned("agent_key")).toBe(false);
+    expect(isAgentSigned("deleted")).toBe(false);
   });
 
   it("carries the owner's agent_policy and agent_key records with their own schemas", () => {

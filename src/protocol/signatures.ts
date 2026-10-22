@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { AgentScopeBody, AgentScopeSha256 } from "./agent-scope.js";
 import { canonicalJson } from "./canonical.js";
 import { PublicKey, Signature } from "./ciphertext.js";
 import { SIGNATURE_HEADER, SIGNED_AT_HEADER, headerKey } from "./headers.js";
@@ -33,8 +34,10 @@ import {
  * A request carries only `signedAt` and `signature` (headers on raw routes, body fields on JSON
  * routes). The server builds the envelope from the request and its own records and verifies
  * against that. A person (session) signs everything except one route: the server refuses signing
- * fields from an agent (Bearer) caller, except on the route marked `agentSigns`
- * (`writeNoteAsAgent`), where the agent signs `agent_edited` with its own Ed25519 key.
+ * fields from an agent (Bearer) caller, except on the routes marked `agentSigns`
+ * (`writeNoteAsAgent`, and in protocol 3 `deleteNoteAsAgent` and the four agent folder routes),
+ * where the agent signs `agent_edited` (or an `agent_deleted` and `agent_folder_*` envelope) with
+ * its own Ed25519 key.
  *
  * Agent keys (protocol 2): at connect time the CLI makes an Ed25519 key pair next to its X25519
  * one and puts the public half in the fragment (`signPublicKey`). The owner vouches for it with an
@@ -95,6 +98,26 @@ import {
  * | approveExtensionConnect   | `extension_key`  | extensionId, signPublicKey (the extension's    |
  * |                           |                  | Ed25519 key from the pairing link); signed     |
  * |                           |                  | with `keySignedAt` and `keySignature`          |
+ * | approveConnect (with      | `agent_scope`    | tokenId, revision (1 at connect, then          |
+ * | `scopeSignature`),        |                  | baseRevision + 1), scopeSha256                 |
+ * | updateTokenScope          |                  | (`agentScopeSha256` of the access, folders and |
+ * |                           |                  | permissions); at connect signed with           |
+ * |                           |                  | `scopeSignedAt` and `scopeSignature`           |
+ * | deleteNoteAsAgent (the    | `agent_deleted`  | tokenId, noteId, version = base + 1, folderId  |
+ * | AGENT's key)              |                  | (the note's), revision and policySha256 (as    |
+ * |                           |                  | `agent_edited`), scopeRevision (the scope      |
+ * |                           |                  | revision header)                               |
+ * | createFolderAsAgent       | `agent_folder_   | tokenId, folderId, parentId (absent at the top |
+ * | (the AGENT's key)         | created`         | level), hash of the decoded `encName`,         |
+ * |                           |                  | revision, policySha256, scopeRevision          |
+ * | renameFolderAsAgent       | `agent_folder_   | tokenId, folderId, hash of the new decoded     |
+ * | (the AGENT's key)         | renamed`         | `encName`, revision, policySha256,             |
+ * |                           |                  | scopeRevision                                  |
+ * | moveFolderAsAgent (the    | `agent_folder_   | tokenId, folderId, parentId (the destination;  |
+ * | AGENT's key)              | moved`           | absent at the top level), revision,            |
+ * |                           |                  | policySha256, scopeRevision                    |
+ * | deleteFolderAsAgent (the  | `agent_folder_   | tokenId, folderId, revision, policySha256,     |
+ * | AGENT's key)              | deleted`         | scopeRevision                                  |
  *
  * The common fields: `type`, `accountId` (the signer, the session's account), `workspaceId`, and
  * `createdAt` (the `signedAt` sent, in milliseconds, within `SIGNATURE_MAX_SKEW_SECONDS` of the
@@ -103,8 +126,9 @@ import {
  * fields, and optional ones are signed when present: `noteId` on `commented` and `recorded` (the
  * note the comment or event is on; every comment and event in this API is on a note, so the server
  * always includes it), `parentId` on the folder types (a folder at the root has no `parentId`,
- * never a null one), and `commentId` with `ciphertextSha256` on `rejected` (both or neither).
- * `version` and `revision` are 0 or more, `generation` 1 or more. `knowtarium/crypto`
+ * never a null one; the same on `agent_folder_created` and `agent_folder_moved`), and `commentId`
+ * with `ciphertextSha256` on `rejected` (both or neither). `version`, `revision` and
+ * `scopeRevision` are 0 or more, `generation` 1 or more. `knowtarium/crypto`
  * (SIGNED_ENVELOPE_TYPES) has the same table, and the shared vectors test
  * (src/crypto/envelope-vectors.json) keeps the two identical. The signed bytes are
  * `envelopeSigningText(envelope)` in UTF-8 (all ASCII).
@@ -287,6 +311,92 @@ export const ExtensionKeyEnvelope = z.strictObject({
 });
 export type ExtensionKeyEnvelope = z.infer<typeof ExtensionKeyEnvelope>;
 
+/**
+ * The owner's word on an agent token's scope (protocol 3): its revision (1 at connect, then +1 per
+ * change) and `agentScopeSha256` of its access, folders and permissions. The CLI checks the scope
+ * it reads against it (`verifyAgentScope` in knowtarium/client), so a server can't widen what the
+ * agent believes it may do; clients audit each agent action against the revision it names.
+ */
+export const AgentScopeEnvelope = z.strictObject({
+  type: z.literal("agent_scope"),
+  ...base,
+  tokenId: TokenId,
+  /** 1 at connect, then +1 per change (the envelope rules allow 0; the API not). */
+  revision: Version,
+  scopeSha256: AgentScopeSha256,
+});
+export type AgentScopeEnvelope = z.infer<typeof AgentScopeEnvelope>;
+
+/**
+ * The fields every agent action of protocol 3 signs besides its own: the agent token, the agent
+ * policy revision it checked with that revision's hash (as `agent_edited`), and the scope
+ * revision it acted under.
+ */
+const agentAction = {
+  tokenId: TokenId,
+  /** The agent policy revision the agent checked (0: no policy yet). */
+  revision: Version,
+  /** `agentPolicySha256` of that revision (`MISSING_AGENT_POLICY_SHA256` at revision 0). */
+  policySha256: AgentPolicySha256,
+  /** The scope revision the agent acted under (the API requires 1 or more). */
+  scopeRevision: Version,
+};
+
+/**
+ * An agent's note delete (`deleteNoteAsAgent`), signed with its own key: a delete marker at the
+ * base version + 1 of the note in `folderId` (the note's folder).
+ */
+export const AgentDeletedEnvelope = z.strictObject({
+  type: z.literal("agent_deleted"),
+  ...base,
+  ...agentAction,
+  noteId: NoteId,
+  version: Version,
+  folderId: FolderId,
+});
+export type AgentDeletedEnvelope = z.infer<typeof AgentDeletedEnvelope>;
+
+/** An agent creates (or revives) a folder; `parentId` absent at the top level. */
+export const AgentFolderCreatedEnvelope = z.strictObject({
+  type: z.literal("agent_folder_created"),
+  ...base,
+  ...agentAction,
+  folderId: FolderId,
+  parentId: FolderId.optional(),
+  /** The hash of the encrypted folder name. */
+  ciphertextSha256: CiphertextSha256,
+});
+export type AgentFolderCreatedEnvelope = z.infer<typeof AgentFolderCreatedEnvelope>;
+
+/** An agent renames a folder: the hash of the new encrypted name. */
+export const AgentFolderRenamedEnvelope = z.strictObject({
+  type: z.literal("agent_folder_renamed"),
+  ...base,
+  ...agentAction,
+  folderId: FolderId,
+  ciphertextSha256: CiphertextSha256,
+});
+export type AgentFolderRenamedEnvelope = z.infer<typeof AgentFolderRenamedEnvelope>;
+
+/** An agent moves a folder under `parentId` (absent: to the top level). */
+export const AgentFolderMovedEnvelope = z.strictObject({
+  type: z.literal("agent_folder_moved"),
+  ...base,
+  ...agentAction,
+  folderId: FolderId,
+  parentId: FolderId.optional(),
+});
+export type AgentFolderMovedEnvelope = z.infer<typeof AgentFolderMovedEnvelope>;
+
+/** An agent deletes an empty folder. */
+export const AgentFolderDeletedEnvelope = z.strictObject({
+  type: z.literal("agent_folder_deleted"),
+  ...base,
+  ...agentAction,
+  folderId: FolderId,
+});
+export type AgentFolderDeletedEnvelope = z.infer<typeof AgentFolderDeletedEnvelope>;
+
 export const SignedEnvelope = z.discriminatedUnion("type", [
   z.strictObject({
     type: z.literal("edited"),
@@ -373,6 +483,12 @@ export const SignedEnvelope = z.discriminatedUnion("type", [
   AgentEditedEnvelope,
   InboxKeyEnvelope,
   ExtensionKeyEnvelope,
+  AgentScopeEnvelope,
+  AgentDeletedEnvelope,
+  AgentFolderCreatedEnvelope,
+  AgentFolderRenamedEnvelope,
+  AgentFolderMovedEnvelope,
+  AgentFolderDeletedEnvelope,
 ]);
 export type SignedEnvelope = z.infer<typeof SignedEnvelope>;
 export type SignedAction = SignedEnvelope["type"];
@@ -394,9 +510,44 @@ export const PROTOCOL_2_ENVELOPE_TYPES = [
   "extension_key",
 ] as const satisfies readonly SignedAction[];
 
-/** The lowest protocol version that knows an envelope type: 2 for the agent types, else 1. */
-export function envelopeProtocolVersion(type: SignedAction): 1 | 2 {
+/**
+ * The envelope types protocol 3 added (agent permissions). Only `agent_deleted` reaches a caller
+ * that parses envelopes with a strict union (`listEvents`, an agent's note delete), so a protocol
+ * 2 caller gets `unsupported_protocol` there; `agent_scope` comes only with tokens (a field older
+ * clients strip) and `listTokenScopes`, the `agent_folder_*` ones only from `listFolderEvents`,
+ * which older clients never call.
+ */
+export const PROTOCOL_3_ENVELOPE_TYPES = [
+  "agent_scope",
+  "agent_deleted",
+  "agent_folder_created",
+  "agent_folder_renamed",
+  "agent_folder_moved",
+  "agent_folder_deleted",
+] as const satisfies readonly SignedAction[];
+
+/**
+ * The lowest protocol version that knows an envelope type: 3 for the agent permission types, 2
+ * for the agent and clipper types, else 1.
+ */
+export function envelopeProtocolVersion(type: SignedAction): 1 | 2 | 3 {
+  if ((PROTOCOL_3_ENVELOPE_TYPES as readonly SignedAction[]).includes(type)) return 3;
   return (PROTOCOL_2_ENVELOPE_TYPES as readonly SignedAction[]).includes(type) ? 2 : 1;
+}
+
+/** The agent-signed envelope types: each counts only under a key the owner vouched for. */
+export const AGENT_SIGNED_ENVELOPE_TYPES = [
+  "agent_edited",
+  "agent_deleted",
+  "agent_folder_created",
+  "agent_folder_renamed",
+  "agent_folder_moved",
+  "agent_folder_deleted",
+] as const satisfies readonly SignedAction[];
+
+/** Whether an envelope type is signed by an agent's own key rather than a person's. */
+export function isAgentSigned(type: string): type is (typeof AGENT_SIGNED_ENVELOPE_TYPES)[number] {
+  return (AGENT_SIGNED_ENVELOPE_TYPES as readonly string[]).includes(type);
 }
 
 /**
@@ -423,6 +574,19 @@ export const SignedInboxKey = z.object({
   signature: Signature,
 });
 export type SignedInboxKey = z.infer<typeof SignedInboxKey>;
+
+/**
+ * One revision of an agent token's scope, as the server stores it (every revision) and returns it
+ * with the token (`AgentToken.scope`) and in `listTokenScopes`: the owner's signed `agent_scope`
+ * and the scope it hashes. The API only ever stores revision 1 or more, so a stored one with
+ * revision 0 is refused here.
+ */
+export const SignedAgentScope = z.object({
+  envelope: AgentScopeEnvelope.extend({ revision: z.int().positive() }),
+  signature: Signature,
+  scope: AgentScopeBody,
+});
+export type SignedAgentScope = z.infer<typeof SignedAgentScope>;
 
 /** A signed `extension_key`, as the server stores it on the extension's row. */
 export const SignedExtensionKey = z.object({

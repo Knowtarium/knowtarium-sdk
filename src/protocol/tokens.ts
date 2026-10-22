@@ -1,10 +1,19 @@
 import { z } from "zod";
 
+import {
+  AGENT_SCOPE_FOLDERS_MAX,
+  AgentPermission,
+  AgentScopeSha256,
+  TokenAccess,
+} from "./agent-scope.js";
 import { EncName, PublicKey, Signature } from "./ciphertext.js";
 import { headerKey, SIGNATURE_HEADER, SIGNED_AT_HEADER } from "./headers.js";
 import { FolderId, TokenId, WorkspaceId } from "./ids.js";
-import { Ok, secretSchema, SignedTimestamp, Timestamp } from "./primitives.js";
+import { Ok, secretSchema, SignedTimestamp, Timestamp, Version } from "./primitives.js";
 import { defineRoute } from "./route.js";
+import { requiredSigningFields, SignedAgentScope } from "./signatures.js";
+
+export { TokenAccess } from "./agent-scope.js";
 
 /**
  * The secret an agent sends as `Authorization: Bearer kta_...`. The browser makes it at connect
@@ -13,12 +22,10 @@ import { defineRoute } from "./route.js";
 export const AgentTokenSecret = secretSchema("kta");
 export type AgentTokenSecret = z.infer<typeof AgentTokenSecret>;
 
-export const TokenAccess = z.enum(["read", "read-write"]);
-export type TokenAccess = z.infer<typeof TokenAccess>;
-
 /**
  * An agent token and its scope: one workspace, optionally some folders (and their subfolders),
- * read or read-write. `folderIds` empty means the whole workspace.
+ * read or read-write, and the permissions on top of read-write (protocol 3). `folderIds` empty
+ * means the whole workspace.
  */
 export const AgentToken = z.object({
   id: TokenId,
@@ -46,6 +53,25 @@ export const AgentToken = z.object({
   createdAt: Timestamp,
   lastUsedAt: Timestamp.nullable(),
   revokedAt: Timestamp.nullable(),
+  /**
+   * What the agent may do on top of `read-write` (protocol 3), in `AgentPermission` order; none
+   * for a token made before permissions, and from older servers.
+   */
+  permissions: z.array(AgentPermission).default([]),
+  /** The scope revision: 0 for a token whose scope the owner never signed, else 1 or more. */
+  scopeRevision: Version.default(0),
+  /**
+   * `agentScopeSha256` of the scope at `scopeRevision`, which the server keeps with the revision
+   * (a retry of the same signed revision is recognized by it); null at revision 0 and absent from
+   * older servers. The signed `scope` below carries the same hash.
+   */
+  scopeSha256: AgentScopeSha256.nullable().optional(),
+  /**
+   * The owner's signed `agent_scope` of the current revision with the scope it hashes; null at
+   * revision 0 and absent from older servers. Clients trust the scope only once it verifies
+   * (`verifyAgentScope` in knowtarium/client), never the fields above on their own.
+   */
+  scope: SignedAgentScope.nullable().optional(),
 });
 export type AgentToken = z.infer<typeof AgentToken>;
 
@@ -94,6 +120,40 @@ export const RevokeTokenHeaders = z
   );
 export type RevokeTokenHeaders = z.infer<typeof RevokeTokenHeaders>;
 
+const isUnique = (values: readonly string[]) => new Set(values).size === values.length;
+
+/**
+ * The owner replaces a token's access, folders and permissions together, signing the next scope
+ * revision (`agent_scope` with `revision` = `baseRevision + 1` and `agentScopeSha256` of this
+ * scope). The server answers, in this order: 404 `not_found` (an unknown token, or another
+ * account's); 400 `invalid_request` (a revoked token, or a bad body: a folder that isn't a live
+ * folder of the token's workspace, with `issues`); 409 `scope_conflict` with `currentRevision`
+ * (a stale `baseRevision`; a retry of the same signed revision succeeds instead, as the server
+ * keeps each revision's `scopeSha256`); 400 `invalid_signature`; 429 `rate_limited` (60 an hour
+ * per account). The new scope applies to the agent's very next request, and requests already in
+ * flight answer `stale_agent_scope`.
+ */
+export const UpdateTokenScopeRequest = z
+  .strictObject({
+    /** The token's current scope revision (0 for a token that never had a signed scope). */
+    baseRevision: Version,
+    access: TokenAccess,
+    /** Empty: the whole workspace. */
+    folderIds: z.array(FolderId).max(AGENT_SCOPE_FOLDERS_MAX),
+    permissions: z.array(AgentPermission),
+    ...requiredSigningFields,
+  })
+  .refine((value) => isUnique(value.folderIds), { error: "A folder appears once" })
+  .refine((value) => isUnique(value.permissions), { error: "A permission appears once" })
+  .refine((value) => value.access === "read-write" || value.permissions.length === 0, {
+    error: "Permissions need read-write access",
+  });
+export type UpdateTokenScopeRequest = z.infer<typeof UpdateTokenScopeRequest>;
+
+/** Every revision of a token's scope, oldest first. */
+export const ListTokenScopesResponse = z.object({ scopes: z.array(SignedAgentScope) });
+export type ListTokenScopesResponse = z.infer<typeof ListTokenScopesResponse>;
+
 export const tokenRoutes = {
   listTokens: defineRoute({
     method: "GET",
@@ -109,6 +169,23 @@ export const tokenRoutes = {
     auth: "agent",
     summary: "The calling agent's own token and scope (`knowtarium status`)",
     response: TokenResponse,
+  }),
+  updateTokenScope: defineRoute({
+    method: "PUT",
+    path: "/tokens/:tokenId/scope",
+    auth: "session",
+    summary:
+      "The owner replaces a token's access, folders and permissions, signed as its next scope revision",
+    body: UpdateTokenScopeRequest,
+    response: TokenResponse,
+  }),
+  listTokenScopes: defineRoute({
+    method: "GET",
+    path: "/tokens/:tokenId/scopes",
+    auth: "any",
+    summary:
+      "Every signed scope revision of a token, oldest first (its owner, or the agent itself)",
+    response: ListTokenScopesResponse,
   }),
   revokeToken: defineRoute({
     method: "DELETE",

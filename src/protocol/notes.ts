@@ -2,11 +2,13 @@ import { z } from "zod";
 
 import {
   AGENT_POLICY_REVISION_HEADER,
+  AGENT_SCOPE_REVISION_HEADER,
   CHECK_ID_HEADER,
   ETAG_HEADER,
   FOLDER_ID_HEADER,
   headerKey,
   IF_MATCH_HEADER,
+  PENDING_ID_HEADER,
   parseResponseVersionTag,
   parseVersionTag,
 } from "./headers.js";
@@ -28,7 +30,9 @@ import { SigningHeaders } from "./signatures.js";
  * versions directly, each write signed (see signatures.ts). An agent writes a version directly
  * only through `writeNoteAsAgent`, signed with its own key (`agent_edited`) and only where the
  * workspace's agent policy says `direct` (agent-policy.ts); elsewhere it sends pending changes.
- * Agents never delete notes: `deleteNote` is a person's route only.
+ * `deleteNote` is a person's route only; an agent whose scope holds `notes.delete` (protocol 3)
+ * deletes through `deleteNoteAsAgent`, signed with its own key (`agent_deleted`), where the
+ * note's folder is `direct`, and proposes a delete (`proposeNoteDelete`) elsewhere.
  */
 
 /** A version entity tag (`"3"`) in a header, parsed to the number. */
@@ -136,11 +140,54 @@ export const AgentNoteWriteHeaders = NoteUploadHeaders.extend(SigningHeaders.sha
 });
 export type AgentNoteWriteHeaders = z.infer<typeof AgentNoteWriteHeaders>;
 
-/** Headers of a note delete: the base version plus the signature (`deleted`). */
+/**
+ * The agent scope revision header's value (protocol 3): a revision of 1 or more (a token at
+ * revision 0 has no permissions, so nothing to act under).
+ */
+export const AgentScopeRevisionHeader = z
+  .string()
+  .regex(/^[1-9][0-9]{0,14}$/, { error: "Expected a scope revision" })
+  .transform(Number);
+
+/**
+ * Headers of a note delete: the base version plus the signature (`deleted`), and, when the person
+ * approves an agent's delete proposal (protocol 3), its pending change's ID. The server then also
+ * checks that the proposal is open (409 `pending_closed`, 404 when there is none) and is a delete
+ * of this note at this base (400 `invalid_request`), and closes it as approved with the delete.
+ */
 export const NoteDeleteHeaders = z
-  .object({ [headerKey(IF_MATCH_HEADER)]: VersionTag })
+  .object({
+    [headerKey(IF_MATCH_HEADER)]: VersionTag,
+    [headerKey(PENDING_ID_HEADER)]: PendingId.optional(),
+  })
   .extend(SigningHeaders.shape);
 export type NoteDeleteHeaders = z.infer<typeof NoteDeleteHeaders>;
+
+/**
+ * Headers of an agent's note delete (protocol 3): the base version, the signing headers (the
+ * agent's own signature on `agent_deleted`), the agent policy revision it checked and the scope
+ * revision it acted under.
+ *
+ * The server refuses, in this order: 401 for the token; 404 for another workspace; 403
+ * `scope_denied` (not `read-write`, or the note's folder outside its write scope); 403
+ * `permission_required` (no `notes.delete`); 404 `not_found` (no such note, or deleted already);
+ * 403 `agent_key_required` (the CLI proposes instead); 409 `stale_agent_policy`; 409
+ * `stale_agent_scope` (the scope revision isn't the token's current one: the CLI reads its token
+ * again and retries once); 400 `invalid_signature` (the rebuilt `agent_deleted`: base + 1, the
+ * note's current folder, the stored policy hash of that revision); 403 `approval_required` (the
+ * note's folder asks first: the CLI proposes the delete instead); 409 `conflict` with
+ * `currentVersion`; 429 `rate_limited` (200 note deletes per token a day, with `Retry-After`; the
+ * CLI then proposes). It then stores the delete marker, authored by the token, and the signed
+ * event.
+ */
+export const AgentNoteDeleteHeaders = z
+  .object({ [headerKey(IF_MATCH_HEADER)]: VersionTag })
+  .extend(SigningHeaders.shape)
+  .extend({
+    [headerKey(AGENT_POLICY_REVISION_HEADER)]: AgentPolicyRevisionHeader,
+    [headerKey(AGENT_SCOPE_REVISION_HEADER)]: AgentScopeRevisionHeader,
+  });
+export type AgentNoteDeleteHeaders = z.infer<typeof AgentNoteDeleteHeaders>;
 
 /** Headers of a raw note download and of a note write's response. */
 export const NoteVersionHeaders = z.object({ [headerKey(ETAG_HEADER)]: ResponseVersionTag });
@@ -252,8 +299,19 @@ export const noteRoutes = {
     method: "DELETE",
     path: "/workspaces/:workspaceId/notes/:noteId",
     auth: "session",
-    summary: "Delete a note as a new signed version, if the base version is still current",
+    summary:
+      "Delete a note as a new signed version, if the base version is still current (or approve an agent's delete proposal)",
     headers: NoteDeleteHeaders,
+    response: NoteWriteResponse,
+  }),
+  deleteNoteAsAgent: defineRoute({
+    method: "DELETE",
+    path: "/workspaces/:workspaceId/notes/:noteId/agent-version",
+    auth: "agent",
+    agentSigns: true,
+    summary:
+      "An agent with notes.delete deletes a note, signed with its own key, where the policy is direct",
+    headers: AgentNoteDeleteHeaders,
     response: NoteWriteResponse,
   }),
   listVersions: defineRoute({

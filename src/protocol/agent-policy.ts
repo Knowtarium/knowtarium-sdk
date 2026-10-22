@@ -4,6 +4,7 @@ import { canonicalJson } from "./canonical.js";
 import { AccountId, FolderId } from "./ids.js";
 import { QueryVersion, Timestamp, Version } from "./primitives.js";
 import { defineRoute } from "./route.js";
+import { sha256Hex } from "./sha256.js";
 import { AgentPolicySha256, requiredSigningFields, SignedAgentPolicy } from "./signatures.js";
 
 /*
@@ -538,25 +539,6 @@ export async function agentPolicySha256(rules: {
 }): Promise<string> {
   const own = await Promise.all(rules.folders.map(agentPolicyFolderHash));
   return sha256Hex(agentPolicyText(rules.default, [...own, ...(rules.otherFolderHashes ?? [])]));
-}
-
-// no DOM or Node types in the library: the one Web API this needs, typed here
-interface WebCrypto {
-  crypto?: { subtle?: { digest(algorithm: "SHA-256", data: Uint8Array): Promise<ArrayBuffer> } };
-}
-
-/** SHA-256 of ASCII text (the hash inputs above are all ASCII), as lowercase hex. */
-async function sha256Hex(text: string): Promise<string> {
-  const subtle = (globalThis as WebCrypto).crypto?.subtle;
-  if (subtle === undefined) throw new Error("Web Crypto (crypto.subtle) is not available");
-  const bytes = new Uint8Array(text.length);
-  for (let i = 0; i < text.length; i++) {
-    const code = text.charCodeAt(i);
-    if (code > 0x7f) throw new TypeError("agent policy hash input must be ASCII");
-    bytes[i] = code;
-  }
-  const digest = new Uint8Array(await subtle.digest("SHA-256", bytes));
-  return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 export const agentPolicyRoutes = {

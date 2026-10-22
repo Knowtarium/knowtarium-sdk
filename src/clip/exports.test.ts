@@ -49,7 +49,9 @@ describe("the knowtarium/clip entry", () => {
     for (const [code, status] of Object.entries(clip.EXTENSION_ERROR_STATUS)) {
       expect(protocol.ERROR_STATUS[code as protocol.ErrorCode], code).toBe(status);
     }
-    expect(clip.EXTENSION_PROTOCOL.version).toBe(protocol.PROTOCOL_VERSION);
+    // the extension stays on protocol 2 (none of its routes changed in 3), which the API accepts
+    expect(clip.EXTENSION_PROTOCOL.version).toBe(2);
+    expect(protocol.SUPPORTED_PROTOCOL_VERSIONS).toContain(clip.EXTENSION_PROTOCOL.version);
     expect(clip.EXTENSION_PROTOCOL.versionHeader).toBe(protocol.PROTOCOL_HEADER);
     expect(clip.EXTENSION_CONNECT_PAGE_PATH).toBe(protocol.EXTENSION_CONNECT_PAGE_PATH);
     expect(clip.CLIP_LIMITS.sealedBytes).toBe(protocol.CLIP_QUEUE_LIMITS.sealedClipBytes);

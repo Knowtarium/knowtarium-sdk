@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { EncKey, EncName, PublicKey } from "./ciphertext.js";
-import { AccountId, WorkspaceId } from "./ids.js";
+import { AccountId, FolderId, WorkspaceId } from "./ids.js";
 import { KeyGeneration, Ok, Timestamp, Version } from "./primitives.js";
 import { defineRoute } from "./route.js";
 import { keyGenerationSigningFields, requiredSigningFields } from "./signatures.js";
@@ -50,6 +50,19 @@ export type WorkspaceResponse = z.infer<typeof WorkspaceResponse>;
 export const ListWorkspacesResponse = z.object({ workspaces: z.array(Workspace) });
 export type ListWorkspacesResponse = z.infer<typeof ListWorkspacesResponse>;
 
+/**
+ * The owner tells the server which folder is the workspace root folder (protocol 3; core's
+ * `rootFolderOf`, a top-level folder with an empty name, which the server can't tell, as names
+ * are encrypted), so it refuses agents' renames, moves and deletes of it (`protected_folder`).
+ * Unsigned: it only says what to enforce. A live top-level folder (404 `not_found`, 400
+ * `invalid_request` for one with a parent). It is set once: 409 `already_exists` while the marker
+ * names a live folder. The web app sets it when it makes the root folder, and on open only while
+ * it is missing (never set, or its folder was deleted). Once set it is the root: the changes
+ * feed's `workspace` entry carries it (`rootFolderId`) and clients lay the workspace out with it.
+ */
+export const SetRootFolderRequest = z.strictObject({ folderId: FolderId });
+export type SetRootFolderRequest = z.infer<typeof SetRootFolderRequest>;
+
 export const workspaceRoutes = {
   listWorkspaces: defineRoute({
     method: "GET",
@@ -81,6 +94,15 @@ export const workspaceRoutes = {
     summary: "Replace the encrypted name",
     body: RenameWorkspaceRequest,
     response: WorkspaceResponse,
+  }),
+  setRootFolder: defineRoute({
+    method: "PUT",
+    path: "/workspaces/:workspaceId/root-folder",
+    auth: "session",
+    summary:
+      "The owner names the workspace root folder, which agents may not rename, move or delete",
+    body: SetRootFolderRequest,
+    response: Ok,
   }),
   deleteWorkspace: defineRoute({
     method: "DELETE",

@@ -52,6 +52,16 @@ export const ERROR_STATUS = {
    * before protocol 2): propose instead, or reconnect the agent.
    */
   agent_key_required: 403,
+  /**
+   * An agent's action that needs a permission its scope doesn't hold (protocol 3): a note delete
+   * (`notes.delete`), a note move, also as a proposal (`notes.move`), or a folder change.
+   */
+  permission_required: 403,
+  /**
+   * An agent may not rename, move or delete this folder (protocol 3): it bounds a connected
+   * agent's scope, it is the workspace root folder, or (for a delete) the clipper's inbox.
+   */
+  protected_folder: 403,
   email_not_verified: 403,
   not_found: 404,
   /**
@@ -67,6 +77,17 @@ export const ERROR_STATUS = {
    * policy (`getAgentPolicy`), check the mode again and retry.
    */
   stale_agent_policy: 409,
+  /**
+   * An agent's request named, or was authenticated under, a scope revision that is no longer
+   * its token's (protocol 3: the owner changed its access, folders or permissions meanwhile).
+   * Read the token again (`getCurrentToken`), check the scope and retry once.
+   */
+  stale_agent_scope: 409,
+  /**
+   * `updateTokenScope`'s `baseRevision` is no longer the token's scope revision;
+   * `currentRevision` says what is. Read the token again and sign the change anew.
+   */
+  scope_conflict: 409,
   /** The pending change was already approved or rejected. */
   pending_closed: 409,
   /** A folder that still holds folders or notes can't be deleted. */
@@ -135,6 +156,13 @@ const WorkspaceLimitError = z.object({
   usage: Usage,
 });
 
+/** A stale base of `updateTokenScope`, with the token's current scope revision. */
+const ScopeConflictError = z.object({
+  code: z.literal("scope_conflict"),
+  message,
+  currentRevision: Version,
+});
+
 /** Also sent as the `Retry-After` header. */
 const RateLimitedError = z.object({
   code: z.literal("rate_limited"),
@@ -175,6 +203,7 @@ const detailedCodes = [
   "unsupported_protocol",
   "invalid_request",
   "stale_inbox_key",
+  "scope_conflict",
 ] as const;
 
 type PlainCode = Exclude<ErrorCode, (typeof detailedCodes)[number]>;
@@ -193,6 +222,7 @@ export const ApiError = z.discriminatedUnion("code", [
   UnsupportedProtocolError,
   InvalidRequestError,
   StaleInboxKeyError,
+  ScopeConflictError,
   PlainError,
 ]);
 export type ApiError = z.infer<typeof ApiError>;

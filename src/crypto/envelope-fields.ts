@@ -35,7 +35,9 @@ type OptionalField =
   | "signPublicKey"
   | "policyRevision"
   | "publicKey"
-  | "extensionId";
+  | "extensionId"
+  | "scopeSha256"
+  | "scopeRevision";
 
 /**
  * The signed envelope types and the fields each requires on top of type, accountId, workspaceId
@@ -101,6 +103,48 @@ export const SIGNED_ENVELOPE_TYPES = {
   inbox_key: ["revision", "generation", "publicKey", "folderId"],
   /** The owner vouches for a paired extension's Ed25519 key (`signPublicKey`, base64url). */
   extension_key: ["extensionId", "signPublicKey"],
+  /**
+   * The owner signs an agent token's scope (protocol 3): its `revision` (1 at connect, then +1 per
+   * change; the API stores 1 or more) and `scopeSha256` (`agentScopeSha256` in
+   * knowtarium/protocol of the access, folders and permissions).
+   */
+  agent_scope: ["tokenId", "revision", "scopeSha256"],
+  /**
+   * An agent's note delete, signed with the AGENT's key like `agent_edited`: the delete marker's
+   * `version` (base + 1) of the note in `folderId`, the agent policy `revision` and
+   * `policySha256` it checked, and the `scopeRevision` it acted under.
+   */
+  agent_deleted: [
+    "tokenId",
+    "noteId",
+    "version",
+    "folderId",
+    "revision",
+    "policySha256",
+    "scopeRevision",
+  ],
+  /** An agent creates or revives a folder; `ciphertextSha256` is its encrypted name's hash. */
+  agent_folder_created: [
+    "tokenId",
+    "folderId",
+    "ciphertextSha256",
+    "revision",
+    "policySha256",
+    "scopeRevision",
+  ],
+  /** An agent renames a folder; `ciphertextSha256` is the new encrypted name's hash. */
+  agent_folder_renamed: [
+    "tokenId",
+    "folderId",
+    "ciphertextSha256",
+    "revision",
+    "policySha256",
+    "scopeRevision",
+  ],
+  /** An agent moves a folder (`parentId`, optional, is the destination). */
+  agent_folder_moved: ["tokenId", "folderId", "revision", "policySha256", "scopeRevision"],
+  /** An agent deletes an empty folder. */
+  agent_folder_deleted: ["tokenId", "folderId", "revision", "policySha256", "scopeRevision"],
 } as const satisfies Record<string, readonly OptionalField[]>;
 
 /**
@@ -118,6 +162,10 @@ export const SIGNED_ENVELOPE_OPTIONAL = {
   folder_created: ["parentId"],
   /** The destination parent folder; absent means the workspace root. */
   folder_moved: ["parentId"],
+  /** The parent folder; absent means the top level. */
+  agent_folder_created: ["parentId"],
+  /** The destination parent folder; absent means the top level. */
+  agent_folder_moved: ["parentId"],
 } as const satisfies Partial<Record<keyof typeof SIGNED_ENVELOPE_TYPES, readonly OptionalField[]>>;
 
 /** Optional fields that come together: each group is all present or all absent. */
@@ -142,7 +190,10 @@ export interface SignedEnvelopeFields {
   readonly workspaceId: string;
   readonly noteId?: string;
   readonly folderId?: string;
-  /** For "folder_created" and "folder_moved": the (destination) parent; absent is the root. */
+  /**
+   * For "folder_created", "folder_moved", "agent_folder_created" and "agent_folder_moved": the
+   * (destination) parent; absent is the root.
+   */
   readonly parentId?: string;
   /** The pending change an approval or rejection decides. */
   readonly pendingId?: string;
@@ -153,8 +204,8 @@ export interface SignedEnvelopeFields {
   /** The note version the action creates or refers to (0 or more). */
   readonly version?: number;
   /**
-   * A comment's revision, or the agent policy's for "agent_policy" and "agent_edited" (0 or
-   * more).
+   * A comment's revision, the agent policy's for "agent_policy", "agent_edited" and the agent
+   * actions of protocol 3, or the scope's for "agent_scope" (0 or more).
    */
   readonly revision?: number;
   /** For "wrapped_key", "key_generation" and "inbox_key": a key generation (1 or more). */
@@ -165,7 +216,7 @@ export interface SignedEnvelopeFields {
   readonly recipientsHash?: string;
   /** For "key_generation": `workspaceKeyCommitment()` of the generation's workspace key. */
   readonly keyCommitment?: string;
-  /** For "token_revoked", "agent_key" and "agent_edited": the agent token's id. */
+  /** For "token_revoked", "agent_key", "agent_scope" and the agent-signed types: the token's id. */
   readonly tokenId?: string;
   /**
    * For "wrapped_key": who holds the copy, `"account"` (`WRAPPED_KEY_ACCOUNT_HOLDER`) for the
@@ -174,7 +225,10 @@ export interface SignedEnvelopeFields {
   readonly holder?: string;
   /** For "check_applied": the check record (`chk_...`) the new version applies. */
   readonly checkId?: string;
-  /** For "agent_policy": `agentPolicySha256` of the policy's rules, lowercase hex. */
+  /**
+   * For "agent_policy" and the agent-signed types: `agentPolicySha256` of the policy's rules,
+   * lowercase hex.
+   */
   readonly policySha256?: string;
   /** For "agent_key" and "extension_key": an Ed25519 public key, base64url (32 bytes). */
   readonly signPublicKey?: string;
@@ -184,6 +238,10 @@ export interface SignedEnvelopeFields {
   readonly publicKey?: string;
   /** For "extension_key": the paired extension's id (`ext_...`). */
   readonly extensionId?: string;
+  /** For "agent_scope": `agentScopeSha256` of the token's scope, lowercase hex. */
+  readonly scopeSha256?: string;
+  /** For an agent's protocol 3 actions: the scope revision it acted under (0 or more). */
+  readonly scopeRevision?: number;
   /** When it was signed, as `Date.prototype.toISOString()` writes it (UTC, milliseconds). */
   readonly createdAt: string;
 }
@@ -204,6 +262,7 @@ const INTEGER_MINIMUMS: Partial<Record<string, number>> = {
   revision: 0,
   generation: 1,
   policyRevision: 0,
+  scopeRevision: 0,
 };
 const ISO_MILLISECONDS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const SHA256_HEX = /^[0-9a-f]{64}$/;
@@ -277,7 +336,8 @@ function fieldProblem(key: string, value: unknown): string | undefined {
     key === "ciphertextSha256" ||
     key === "recipientsHash" ||
     key === "keyCommitment" ||
-    key === "policySha256"
+    key === "policySha256" ||
+    key === "scopeSha256"
   ) {
     return typeof value === "string" && SHA256_HEX.test(value)
       ? undefined

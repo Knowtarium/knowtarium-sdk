@@ -4,7 +4,7 @@ import { Ciphertext } from "./ciphertext.js";
 import { NoteComment } from "./comments.js";
 import { NoteEvent } from "./events.js";
 import { CommentId, FolderId, NoteId, PendingId, TokenId, WorkspaceId } from "./ids.js";
-import { NoteMeta, NoteUploadHeaders, NoteVersionHeaders } from "./notes.js";
+import { NoteMeta, NoteUploadHeaders, NoteVersionHeaders, VersionTag } from "./notes.js";
 import {
   Base64Url,
   base64UrlLength,
@@ -14,7 +14,7 @@ import {
   Version,
 } from "./primitives.js";
 import { defineRoute, RAW_BYTES } from "./route.js";
-import { headerKey, PENDING_NONCE_HEADER } from "./headers.js";
+import { headerKey, IF_MATCH_HEADER, PENDING_NONCE_HEADER } from "./headers.js";
 import { requiredSigningFields, SigningHeaders } from "./signatures.js";
 
 /*
@@ -24,6 +24,12 @@ import { requiredSigningFields, SigningHeaders } from "./signatures.js";
  * with the signature of an `approved` envelope in headers. The server verifies the signature,
  * stores the ciphertext as the next version only if the note is still at the pending change's
  * base version (409 with the current version if not), and records the signed event, all at once.
+ *
+ * Protocol 3 adds delete proposals (`kind: "delete"`, `proposeNoteDelete`): an agent whose scope
+ * holds `notes.delete` proposes deleting a note where its folder asks first. A delete proposal has
+ * no blob (`getPendingBlob` answers 404, `sizeBytes` is 0) and `approvePending` refuses it (400
+ * `invalid_request`): the person approves it with their own signed `deleteNote`, naming it in
+ * `Knowtarium-Pending-Id`, and rejects it as any proposal. Protocol 2 callers never see one.
  */
 
 /** The agent's random nonce for one proposal: 16 bytes, base64url. */
@@ -35,6 +41,23 @@ export const PendingUploadHeaders = NoteUploadHeaders.extend({
   [headerKey(PENDING_NONCE_HEADER)]: PendingNonce,
 });
 export type PendingUploadHeaders = z.infer<typeof PendingUploadHeaders>;
+
+/**
+ * Headers of a delete proposal: the base version (the note's current version; the agent proposes
+ * deleting exactly that) and the agent's nonce. The server refuses: 403 `scope_denied`, 403
+ * `permission_required` (no `notes.delete`), 404 `not_found` (no such note, or deleted already),
+ * 409 `conflict` with `currentVersion`, 409 `already_exists` (this token has an open delete
+ * proposal for the note), and the open proposal caps, which delete proposals count toward.
+ */
+export const PendingDeleteHeaders = z.object({
+  [headerKey(IF_MATCH_HEADER)]: VersionTag,
+  [headerKey(PENDING_NONCE_HEADER)]: PendingNonce,
+});
+export type PendingDeleteHeaders = z.infer<typeof PendingDeleteHeaders>;
+
+/** What a pending change proposes: a new version of a note (`edit`) or its delete (`delete`). */
+export const PendingKind = z.enum(["edit", "delete"]);
+export type PendingKind = z.infer<typeof PendingKind>;
 
 export const PendingStatus = z.enum(["open", "approved", "rejected"]);
 export type PendingStatus = z.infer<typeof PendingStatus>;
@@ -65,6 +88,11 @@ export const PendingChange = z.object({
   rejectionCommentId: CommentId.nullable(),
   /** The workspace version of its last change (submitted, approved, rejected): the paging cursor. */
   seq: Version,
+  /**
+   * What it proposes (protocol 3): a new version (`edit`, also from older servers) or the note's
+   * delete (`delete`: no blob, `sizeBytes` 0, `folderId` the note's folder).
+   */
+  kind: PendingKind.default("edit"),
 });
 export type PendingChange = z.infer<typeof PendingChange>;
 
@@ -133,6 +161,16 @@ export const pendingRoutes = {
     summary: "An agent proposes a new version (raw ciphertext) with its base version",
     headers: PendingUploadHeaders,
     body: RAW_BYTES,
+    response: PendingResponse,
+    status: 201,
+  }),
+  proposeNoteDelete: defineRoute({
+    method: "POST",
+    path: "/workspaces/:workspaceId/notes/:noteId/pending-deletes",
+    auth: "agent",
+    summary:
+      "An agent with notes.delete proposes deleting a note at its current version (no blob, unsigned)",
+    headers: PendingDeleteHeaders,
     response: PendingResponse,
     status: 201,
   }),

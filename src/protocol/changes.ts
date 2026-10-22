@@ -36,6 +36,13 @@ export const ChangeEntry = z.discriminatedUnion("kind", [
      * workspace has none). A change means: fetch it again (`getAgentPolicy`).
      */
     agentPolicyRevision: Version.optional(),
+    /**
+     * The workspace root folder marker (protocol 3; absent from older servers and while none is
+     * set): the folder the owner named with `setRootFolder`. Clients lay the workspace out with it
+     * as the root (`buildWorkspacePaths`' `rootFolderId`), and the CLI refuses agents' renames,
+     * moves and deletes of it.
+     */
+    rootFolderId: FolderId.optional(),
   }),
   z.object({
     kind: z.literal("folder"),

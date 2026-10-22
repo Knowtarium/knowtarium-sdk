@@ -131,6 +131,12 @@ const AttachmentRecord = z.strictObject({
 
 const WorkspaceRecord = z.strictObject({ encName: EncName, keyGeneration: KeyGeneration });
 
+/**
+ * The workspace root folder marker (protocol 3), kept apart from the workspace record, which
+ * older CLIs sharing the cache read strictly.
+ */
+const RootFolderRecord = z.strictObject({ rootFolderId: FolderId });
+
 const CursorRecord = z.strictObject({ cursor: Version });
 
 const QuarantineRecord = z.strictObject({
@@ -349,7 +355,12 @@ export class EncryptedCache {
   /** Stores the workspace's encrypted name and current key generation. */
   async putWorkspace(
     workspaceId: WorkspaceId,
-    workspace: { readonly encName: string; readonly keyGeneration: number },
+    workspace: {
+      readonly encName: string;
+      readonly keyGeneration: number;
+      /** The root folder marker, when the feed named one. */
+      readonly rootFolderId?: string | undefined;
+    },
   ): Promise<void> {
     assertEnvelope(fromBase64Url(workspace.encName));
     const record = WorkspaceRecord.parse({
@@ -357,12 +368,25 @@ export class EncryptedCache {
       keyGeneration: workspace.keyGeneration,
     });
     await this.adapter.put(`${root(workspaceId)}/workspace`, encodeRecord(record));
+    if (workspace.rootFolderId !== undefined) {
+      const marker = RootFolderRecord.parse({ rootFolderId: workspace.rootFolderId });
+      await this.adapter.put(`${root(workspaceId)}/root-folder`, encodeRecord(marker));
+    }
   }
 
   async getWorkspace(
     workspaceId: WorkspaceId,
-  ): Promise<{ encName: string; keyGeneration: number } | undefined> {
-    return decodeRecord(WorkspaceRecord, await this.adapter.get(`${root(workspaceId)}/workspace`));
+  ): Promise<{ encName: string; keyGeneration: number; rootFolderId?: FolderId } | undefined> {
+    const record = decodeRecord(
+      WorkspaceRecord,
+      await this.adapter.get(`${root(workspaceId)}/workspace`),
+    );
+    if (record === undefined) return undefined;
+    const marker = decodeRecord(
+      RootFolderRecord,
+      await this.adapter.get(`${root(workspaceId)}/root-folder`),
+    );
+    return marker === undefined ? record : { ...record, rootFolderId: marker.rootFolderId };
   }
 
   /** The notes waiting for a verified version (see `SyncEngine.quarantined`). */

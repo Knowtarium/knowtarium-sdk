@@ -45,15 +45,27 @@ const EXPECTED: Record<string, readonly string[]> = {
     "createWorkspace",
     "getWorkspace",
     "renameWorkspace",
+    "setRootFolder",
     "deleteWorkspace",
   ],
-  folders: ["listFolders", "createFolder", "updateFolder", "deleteFolder"],
+  folders: [
+    "listFolders",
+    "createFolder",
+    "updateFolder",
+    "deleteFolder",
+    "createFolderAsAgent",
+    "renameFolderAsAgent",
+    "moveFolderAsAgent",
+    "deleteFolderAsAgent",
+    "listFolderEvents",
+  ],
   changes: ["listChanges"],
   notes: [
     "getNote",
     "writeNote",
     "writeNoteAsAgent",
     "deleteNote",
+    "deleteNoteAsAgent",
     "listVersions",
     "getVersion",
     "getVersions",
@@ -69,6 +81,7 @@ const EXPECTED: Record<string, readonly string[]> = {
   ],
   pending: [
     "submitPending",
+    "proposeNoteDelete",
     "listPending",
     "getPending",
     "getPendingBlob",
@@ -79,7 +92,7 @@ const EXPECTED: Record<string, readonly string[]> = {
   events: ["listEvents", "addEvent"],
   comments: ["listComments", "addComment", "updateComment"],
   checks: ["listChecks", "recordCheck", "resolveCheck"],
-  tokens: ["listTokens", "getCurrentToken", "revokeToken"],
+  tokens: ["listTokens", "getCurrentToken", "updateTokenScope", "listTokenScopes", "revokeToken"],
   connect: [
     "startConnect",
     "getConnect",
@@ -139,17 +152,28 @@ describe("route table", () => {
     },
   );
 
-  it("keeps writes by agents to proposals, checks and their own signed versions", () => {
+  it("keeps writes by agents to proposals, checks and their own signed actions", () => {
     const agentOnly = ROUTE_LIST.filter((route) => route.auth === "agent").map((r) => r.name);
     expect(agentOnly.sort()).toEqual([
+      "createFolderAsAgent",
+      "deleteFolderAsAgent",
+      "deleteNoteAsAgent",
       "getCurrentToken",
+      "moveFolderAsAgent",
+      "proposeNoteDelete",
       "recordCheck",
+      "renameFolderAsAgent",
       "submitPending",
       "writeNoteAsAgent",
     ]);
     for (const name of [
       "writeNote",
       "deleteNote",
+      "createFolder",
+      "updateFolder",
+      "deleteFolder",
+      "updateTokenScope",
+      "setRootFolder",
       "approvePending",
       "rejectPending",
       "resolveCheck",
@@ -180,9 +204,16 @@ describe("route table", () => {
     expect(routes.revokeExtension.auth).toBe("session");
   });
 
-  it("lets an agent sign on writeNoteAsAgent only", () => {
+  it("lets an agent sign on its own write, delete and folder routes only", () => {
     const signing = ROUTE_LIST.filter((route) => route.agentSigns).map((route) => route.name);
-    expect(signing).toEqual(["writeNoteAsAgent"]);
+    expect(signing.sort()).toEqual([
+      "createFolderAsAgent",
+      "deleteFolderAsAgent",
+      "deleteNoteAsAgent",
+      "moveFolderAsAgent",
+      "renameFolderAsAgent",
+      "writeNoteAsAgent",
+    ]);
     expect(() =>
       defineRoute({
         method: "PUT",
@@ -195,12 +226,60 @@ describe("route table", () => {
     ).toThrow(/agent route/);
   });
 
-  it("never lets an agent delete a note", () => {
+  it("lets an agent delete a note only on its own signed route", () => {
     const deletesNotes = ROUTE_LIST.filter(
       (route) => route.method === "DELETE" && route.path.includes("/notes/"),
     );
-    expect(deletesNotes.map((route) => route.name)).toEqual(["deleteNote"]);
+    expect(deletesNotes.map((route) => route.name).sort()).toEqual([
+      "deleteNote",
+      "deleteNoteAsAgent",
+    ]);
     expect(routes.deleteNote.auth).toBe("session");
+    expect(routes.deleteNoteAsAgent.auth).toBe("agent");
+    expect(Object.keys(routes.deleteNoteAsAgent.headers.shape).sort()).toEqual([
+      "if-match",
+      "knowtarium-agent-policy-revision",
+      "knowtarium-agent-scope-revision",
+      "knowtarium-signature",
+      "knowtarium-signed-at",
+    ]);
+    for (const bad of ["0", "-1", "01", "x"]) {
+      expect(
+        routes.deleteNoteAsAgent.headers.safeParse({
+          "if-match": '"4"',
+          "knowtarium-signature": b64(64),
+          "knowtarium-signed-at": now,
+          "knowtarium-agent-policy-revision": "3",
+          "knowtarium-agent-scope-revision": bad,
+        }).success,
+        bad,
+      ).toBe(false);
+    }
+    // a delete proposal carries no blob and no signature
+    expect(routes.proposeNoteDelete.body).toBeNull();
+    expect(Object.keys(routes.proposeNoteDelete.headers.shape).sort()).toEqual([
+      "if-match",
+      "knowtarium-pending-nonce",
+    ]);
+  });
+
+  it("takes the agent's revisions and signature on its folder changes", () => {
+    for (const route of [
+      routes.createFolderAsAgent,
+      routes.renameFolderAsAgent,
+      routes.moveFolderAsAgent,
+    ]) {
+      const keys = Object.keys(route.body.shape);
+      for (const key of ["policyRevision", "scopeRevision", "signedAt", "signature"]) {
+        expect(keys, route.path).toContain(key);
+      }
+    }
+    expect(Object.keys(routes.deleteFolderAsAgent.headers.shape).sort()).toEqual([
+      "knowtarium-agent-policy-revision",
+      "knowtarium-agent-scope-revision",
+      "knowtarium-signature",
+      "knowtarium-signed-at",
+    ]);
   });
 
   it("uploads note versions and pending changes with their base version and folder", () => {
@@ -222,7 +301,12 @@ describe("route table", () => {
       "knowtarium-folder-id",
       ...signing,
     ]);
-    expect(Object.keys(routes.deleteNote.headers.shape).sort()).toEqual(["if-match", ...signing]);
+    // the pending ID only when the delete approves an agent's delete proposal
+    expect(Object.keys(routes.deleteNote.headers.shape).sort()).toEqual([
+      "if-match",
+      "knowtarium-pending-id",
+      ...signing,
+    ]);
     expect(routes.approvePending.body).toBe(RAW_BYTES);
     expect(Object.keys(routes.approvePending.headers.shape).sort()).toEqual(signing);
   });

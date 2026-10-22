@@ -5,14 +5,20 @@
  * `agent_edited` envelopes, `writeNoteAsAgent` and the agent policy routes. A version 1 client
  * can't parse those envelopes, so the server answers it `unsupported_protocol` (an update notice)
  * instead of sending one (`envelopeProtocolVersion`).
+ *
+ * Version 3 added agent permissions: signed agent scopes (`agent_scope`), an agent's own signed
+ * note deletes and folder changes (`agent_deleted`, `agent_folder_*`) on routes of their own, and
+ * delete proposals. A version 2 client can't parse `agent_deleted` in `listEvents`, so it gets
+ * `unsupported_protocol` for a page holding one, and `listPending` leaves delete proposals out for
+ * it. Everything else is additive. Protocol 1 was never released.
  */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 /**
  * Versions the sync API accepts: the current one and the previous one, so the web app and the CLI
  * can update at different times.
  */
-export const SUPPORTED_PROTOCOL_VERSIONS: readonly number[] = [1, PROTOCOL_VERSION];
+export const SUPPORTED_PROTOCOL_VERSIONS: readonly number[] = [2, PROTOCOL_VERSION];
 
 /** Parses a `Knowtarium-Protocol-Version` header value; null when missing or not a positive integer. */
 export function parseProtocolVersion(value: string | null | undefined): number | null {

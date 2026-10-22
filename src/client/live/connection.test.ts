@@ -55,7 +55,7 @@ describe("live connection", () => {
     live.start();
     await scheduler.advance(0);
     expect(sockets[0]?.url).toBe(
-      `ws://localhost:8787/workspaces/${workspaceId}/live?protocol=2&ticket=ktl_${"0".repeat(39)}1`,
+      `ws://localhost:8787/workspaces/${workspaceId}/live?protocol=3&ticket=ktl_${"0".repeat(39)}1`,
     );
     sockets[0]?.receive(hello);
     sockets[0]?.receive({ type: "changed", workspaceVersion: 4 });

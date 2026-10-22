@@ -137,6 +137,7 @@ async function applyChange(
         ...(change.agentPolicyRevision === undefined
           ? {}
           : { agentPolicyRevision: change.agentPolicyRevision }),
+        ...(change.rootFolderId === undefined ? {} : { rootFolderId: change.rootFolderId }),
       });
       return;
     }

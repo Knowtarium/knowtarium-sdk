@@ -1,5 +1,5 @@
 {
-  "description": "Canonical JSON and signed envelope vectors, shared by knowtarium/crypto (signs) and knowtarium/protocol (verifies on the server). The signed message is the UTF-8 bytes of \"knowtarium-envelope-v1\\n\" followed by the canonical JSON of the fields; signatures are Ed25519, base64url; keys and messages are lowercase hex. Every signedEnvelopes entry uses ids, keys and times knowtarium/protocol accepts; every invalidEnvelopes entry must be refused by both. types lists, per envelope type, the fields it requires besides baseFields, the optional ones (signed when present) and the optional groups that come all or none. nonCanonicalJsonText holds values with no canonical form as JSON text, to be parsed first. recipientsHashes pins recipientsHash: SHA-256 of the UTF-8 recipientsHashTag followed by the X25519 public keys, deduplicated, sorted by their bytes, each prefixed by its length as a uint32 big-endian, as lowercase hex. keyCommitments pins workspaceKeyCommitment: SHA-256 of the UTF-8 keyCommitmentTag, the generation as a uint32 big-endian, the 32-byte key and the UTF-8 workspace id, as lowercase hex. agentPolicyHashes pins agentPolicySha256: each folder override's sha256 is SHA-256 of the UTF-8 agentPolicyFolderTag followed by the canonical JSON of {folderId, mode}; text is agentPolicyTag followed by the canonical JSON of {default, folders: the overrides' sha256 values, sorted}; policySha256 is SHA-256 of text, as lowercase hex. The agent_edited vector is signed by the agent's own key (its own signingSeed), the key the agent_key vector vouches for, and names the agent_policy vector's revision and policySha256. The inbox_key vector's publicKey is the inbox key vectors.json derives from the keyCommitments vector's generation 3 key, and the extension_key vector vouches for the key that signs vectors.json's clips. serverRefusedEnvelopes are valid, signed envelopes that knowtarium/crypto and knowtarium/protocol's SignedEnvelope accept and the sync API refuses by a rule of its own (rule), as protocol's stored record schema does.",
+  "description": "Canonical JSON and signed envelope vectors, shared by knowtarium/crypto (signs) and knowtarium/protocol (verifies on the server). The signed message is the UTF-8 bytes of \"knowtarium-envelope-v1\\n\" followed by the canonical JSON of the fields; signatures are Ed25519, base64url; keys and messages are lowercase hex. Every signedEnvelopes entry uses ids, keys and times knowtarium/protocol accepts; every invalidEnvelopes entry must be refused by both. types lists, per envelope type, the fields it requires besides baseFields, the optional ones (signed when present) and the optional groups that come all or none. nonCanonicalJsonText holds values with no canonical form as JSON text, to be parsed first. recipientsHashes pins recipientsHash: SHA-256 of the UTF-8 recipientsHashTag followed by the X25519 public keys, deduplicated, sorted by their bytes, each prefixed by its length as a uint32 big-endian, as lowercase hex. keyCommitments pins workspaceKeyCommitment: SHA-256 of the UTF-8 keyCommitmentTag, the generation as a uint32 big-endian, the 32-byte key and the UTF-8 workspace id, as lowercase hex. agentPolicyHashes pins agentPolicySha256: each folder override's sha256 is SHA-256 of the UTF-8 agentPolicyFolderTag followed by the canonical JSON of {folderId, mode}; text is agentPolicyTag followed by the canonical JSON of {default, folders: the overrides' sha256 values, sorted}; policySha256 is SHA-256 of text, as lowercase hex. The agent_edited vector is signed by the agent's own key (its own signingSeed), the key the agent_key vector vouches for, and names the agent_policy vector's revision and policySha256. The inbox_key vector's publicKey is the inbox key vectors.json derives from the keyCommitments vector's generation 3 key, and the extension_key vector vouches for the key that signs vectors.json's clips. agentScopeHashes pins agentScopeSha256: text is agentScopeTag followed by the canonical JSON of {access, folderIds: deduplicated and sorted, permissions: in the order notes.move, notes.delete, folders.create, folders.rename, folders.move, folders.delete, each once}; scopeSha256 is SHA-256 of text, as lowercase hex. The agent_scope vector signs the second agentScopeHashes entry; the agent_deleted and agent_folder_* vectors are signed by the agent's own key, like agent_edited, and name the agent_policy vector's revision and policySha256. serverRefusedEnvelopes are valid, signed envelopes that knowtarium/crypto and knowtarium/protocol's SignedEnvelope accept and the sync API refuses by a rule of its own (rule), as protocol's stored record schema does.",
   "format": 1,
   "messagePrefix": "knowtarium-envelope-v1\n",
   "baseFields": ["type", "accountId", "workspaceId", "createdAt"],
@@ -94,6 +94,58 @@
     },
     "extension_key": {
       "required": ["extensionId", "signPublicKey"],
+      "optional": [],
+      "together": []
+    },
+    "agent_scope": {
+      "required": ["tokenId", "revision", "scopeSha256"],
+      "optional": [],
+      "together": []
+    },
+    "agent_deleted": {
+      "required": [
+        "tokenId",
+        "noteId",
+        "version",
+        "folderId",
+        "revision",
+        "policySha256",
+        "scopeRevision"
+      ],
+      "optional": [],
+      "together": []
+    },
+    "agent_folder_created": {
+      "required": [
+        "tokenId",
+        "folderId",
+        "ciphertextSha256",
+        "revision",
+        "policySha256",
+        "scopeRevision"
+      ],
+      "optional": ["parentId"],
+      "together": []
+    },
+    "agent_folder_renamed": {
+      "required": [
+        "tokenId",
+        "folderId",
+        "ciphertextSha256",
+        "revision",
+        "policySha256",
+        "scopeRevision"
+      ],
+      "optional": [],
+      "together": []
+    },
+    "agent_folder_moved": {
+      "required": ["tokenId", "folderId", "revision", "policySha256", "scopeRevision"],
+      "optional": ["parentId"],
+      "together": []
+    },
+    "agent_folder_deleted": {
+      "required": ["tokenId", "folderId", "revision", "policySha256", "scopeRevision"],
       "optional": [],
       "together": []
     }
@@ -614,6 +666,163 @@
       "canonical": "{\"accountId\":\"acc_1560xmcmawcxs7v24kktmv9fya\",\"createdAt\":\"2026-10-10T09:00:01.000Z\",\"extensionId\":\"ext_0h248h248h248h248h248h248h\",\"signPublicKey\":\"F0VTtFbd38aQjsqxwQH-arIeK6oGF3lbfUOmNIKZP9U\",\"type\":\"extension_key\",\"workspaceId\":\"ws_2aang6pxm1hjbt5bdrrf7dks7f\"}",
       "message": "6b6e6f7774617269756d2d656e76656c6f70652d76310a7b226163636f756e744964223a226163635f31353630786d636d6177637873377632346b6b746d7639667961222c22637265617465644174223a22323032362d31302d31305430393a30303a30312e3030305a222c22657874656e73696f6e4964223a226578745f3068323438683234386832343868323438683234386832343868222c227369676e5075626c69634b6579223a224630565474466264333861516a7371787751482d617249654b366f4746336c6266554f6d4e494b5a503955222c2274797065223a22657874656e73696f6e5f6b6579222c22776f726b73706163654964223a2277735f3261616e673670786d31686a627435626472726637646b733766227d",
       "signature": "ujnPCvcoILLFOb9g0XCRGTLeQzSh0vIqlu4T-o1muc8tflxJST99hLjtIl1h5GZSWkAFSN2cjAdnfFWgx3JrDg"
+    },
+    {
+      "name": "agent_scope",
+      "fields": {
+        "type": "agent_scope",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:00.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 2,
+        "scopeSha256": "2a9ba582d4ac4131d252bca27d0b8d1179a0f62c65ad6ec71298f9e7032aa630"
+      },
+      "signingSeed": "505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f",
+      "publicKey": "3f7708d5f5cc2bc633b59d2b3a2ed92e7479220c6f08ade208bebcd8580ab93b",
+      "canonical": "{\"accountId\":\"acc_1560xmcmawcxs7v24kktmv9fya\",\"createdAt\":\"2026-10-22T10:00:00.000Z\",\"revision\":2,\"scopeSha256\":\"2a9ba582d4ac4131d252bca27d0b8d1179a0f62c65ad6ec71298f9e7032aa630\",\"tokenId\":\"tok_4gj699754njtbsh6ctkee9v7mz\",\"type\":\"agent_scope\",\"workspaceId\":\"ws_2aang6pxm1hjbt5bdrrf7dks7f\"}",
+      "message": "6b6e6f7774617269756d2d656e76656c6f70652d76310a7b226163636f756e744964223a226163635f31353630786d636d6177637873377632346b6b746d7639667961222c22637265617465644174223a22323032362d31302d32325431303a30303a30302e3030305a222c227265766973696f6e223a322c2273636f7065536861323536223a2232613962613538326434616334313331643235326263613237643062386431313739613066363263363561643665633731323938663965373033326161363330222c22746f6b656e4964223a22746f6b5f34676a3639393735346e6a746273683663746b65653976376d7a222c2274797065223a226167656e745f73636f7065222c22776f726b73706163654964223a2277735f3261616e673670786d31686a627435626472726637646b733766227d",
+      "signature": "XRjmdDVTFUWOheqfuTIYNmtWj0EiZ8VLJaCaa_67fWGeUEvJHwNszthdOeEa4-Rk5tMObOqkfQVfSzBvQJ0cAQ"
+    },
+    {
+      "name": "agent_deleted, signed by the agent's key",
+      "fields": {
+        "type": "agent_deleted",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:01.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 2,
+        "noteId": "note_3ffa2s16x6p6ycfmpxx3szw28m",
+        "version": 16,
+        "folderId": "fld_4mkynbbg6btvgysxr21mc26bhs"
+      },
+      "signingSeed": "707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f",
+      "publicKey": "1ce56a48c82ff99162a14bc544612674e5d61fb9317e65d4055780fdbcb4dc35",
+      "canonical": "{\"accountId\":\"acc_1560xmcmawcxs7v24kktmv9fya\",\"createdAt\":\"2026-10-22T10:00:01.000Z\",\"folderId\":\"fld_4mkynbbg6btvgysxr21mc26bhs\",\"noteId\":\"note_3ffa2s16x6p6ycfmpxx3szw28m\",\"policySha256\":\"78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8\",\"revision\":3,\"scopeRevision\":2,\"tokenId\":\"tok_4gj699754njtbsh6ctkee9v7mz\",\"type\":\"agent_deleted\",\"version\":16,\"workspaceId\":\"ws_2aang6pxm1hjbt5bdrrf7dks7f\"}",
+      "message": "6b6e6f7774617269756d2d656e76656c6f70652d76310a7b226163636f756e744964223a226163635f31353630786d636d6177637873377632346b6b746d7639667961222c22637265617465644174223a22323032362d31302d32325431303a30303a30312e3030305a222c22666f6c6465724964223a22666c645f346d6b796e62626736627476677973787232316d633236626873222c226e6f74654964223a226e6f74655f3366666132733136783670367963666d70787833737a7732386d222c22706f6c696379536861323536223a2237386535353665323232653430343566303630306435393161326339663632383835306231313936653534666633313631393730376562336339373061346538222c227265766973696f6e223a332c2273636f70655265766973696f6e223a322c22746f6b656e4964223a22746f6b5f34676a3639393735346e6a746273683663746b65653976376d7a222c2274797065223a226167656e745f64656c65746564222c2276657273696f6e223a31362c22776f726b73706163654964223a2277735f3261616e673670786d31686a627435626472726637646b733766227d",
+      "signature": "OQZuxkAx5ZVxsKagX9CNheGkBkk7eFYGqKQmP7hdceu-LM4d9e5A-31TgNpddiYbMran9dvTaV1Iy7_WX6DIBQ"
+    },
+    {
+      "name": "agent_folder_created, at the top level",
+      "fields": {
+        "type": "agent_folder_created",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:02.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 2,
+        "folderId": "fld_186cz4jn2zd9tr12wpm6pbfgpd",
+        "ciphertextSha256": "36dccae90a4c6ce5e2bf4c2e0cd9ae5ad13c3363ac8a57ea12d75708046e6446"
+      },
+      "signingSeed": "707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f",
+      "publicKey": "1ce56a48c82ff99162a14bc544612674e5d61fb9317e65d4055780fdbcb4dc35",
+      "canonical": "{\"accountId\":\"acc_1560xmcmawcxs7v24kktmv9fya\",\"ciphertextSha256\":\"36dccae90a4c6ce5e2bf4c2e0cd9ae5ad13c3363ac8a57ea12d75708046e6446\",\"createdAt\":\"2026-10-22T10:00:02.000Z\",\"folderId\":\"fld_186cz4jn2zd9tr12wpm6pbfgpd\",\"policySha256\":\"78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8\",\"revision\":3,\"scopeRevision\":2,\"tokenId\":\"tok_4gj699754njtbsh6ctkee9v7mz\",\"type\":\"agent_folder_created\",\"workspaceId\":\"ws_2aang6pxm1hjbt5bdrrf7dks7f\"}",
+      "message": "6b6e6f7774617269756d2d656e76656c6f70652d76310a7b226163636f756e744964223a226163635f31353630786d636d6177637873377632346b6b746d7639667961222c2263697068657274657874536861323536223a2233366463636165393061346336636535653262663463326530636439616535616431336333333633616338613537656131326437353730383034366536343436222c22637265617465644174223a22323032362d31302d32325431303a30303a30322e3030305a222c22666f6c6465724964223a22666c645f313836637a346a6e327a64397472313277706d36706266677064222c22706f6c696379536861323536223a2237386535353665323232653430343566303630306435393161326339663632383835306231313936653534666633313631393730376562336339373061346538222c227265766973696f6e223a332c2273636f70655265766973696f6e223a322c22746f6b656e4964223a22746f6b5f34676a3639393735346e6a746273683663746b65653976376d7a222c2274797065223a226167656e745f666f6c6465725f63726561746564222c22776f726b73706163654964223a2277735f3261616e673670786d31686a627435626472726637646b733766227d",
+      "signature": "XMk8vvgjk90v29A96D-lXSuzGBPG5MFVon69lzmyafUb6ogi6-LvR3ewfNx0ttQSQQuo5XSfkN_2proz-s9SAg"
+    },
+    {
+      "name": "agent_folder_created, in a folder",
+      "fields": {
+        "type": "agent_folder_created",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:03.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 2,
+        "folderId": "fld_186cz4jn2zd9tr12wpm6pbfgpd",
+        "parentId": "fld_4mkynbbg6btvgysxr21mc26bhs",
+        "ciphertextSha256": "36dccae90a4c6ce5e2bf4c2e0cd9ae5ad13c3363ac8a57ea12d75708046e6446"
+      },
+      "signingSeed": "707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f",
+      "publicKey": "1ce56a48c82ff99162a14bc544612674e5d61fb9317e65d4055780fdbcb4dc35",
+      "canonical": "{\"accountId\":\"acc_1560xmcmawcxs7v24kktmv9fya\",\"ciphertextSha256\":\"36dccae90a4c6ce5e2bf4c2e0cd9ae5ad13c3363ac8a57ea12d75708046e6446\",\"createdAt\":\"2026-10-22T10:00:03.000Z\",\"folderId\":\"fld_186cz4jn2zd9tr12wpm6pbfgpd\",\"parentId\":\"fld_4mkynbbg6btvgysxr21mc26bhs\",\"policySha256\":\"78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8\",\"revision\":3,\"scopeRevision\":2,\"tokenId\":\"tok_4gj699754njtbsh6ctkee9v7mz\",\"type\":\"agent_folder_created\",\"workspaceId\":\"ws_2aang6pxm1hjbt5bdrrf7dks7f\"}",
+      "message": "6b6e6f7774617269756d2d656e76656c6f70652d76310a7b226163636f756e744964223a226163635f31353630786d636d6177637873377632346b6b746d7639667961222c2263697068657274657874536861323536223a2233366463636165393061346336636535653262663463326530636439616535616431336333333633616338613537656131326437353730383034366536343436222c22637265617465644174223a22323032362d31302d32325431303a30303a30332e3030305a222c22666f6c6465724964223a22666c645f313836637a346a6e327a64397472313277706d36706266677064222c22706172656e744964223a22666c645f346d6b796e62626736627476677973787232316d633236626873222c22706f6c696379536861323536223a2237386535353665323232653430343566303630306435393161326339663632383835306231313936653534666633313631393730376562336339373061346538222c227265766973696f6e223a332c2273636f70655265766973696f6e223a322c22746f6b656e4964223a22746f6b5f34676a3639393735346e6a746273683663746b65653976376d7a222c2274797065223a226167656e745f666f6c6465725f63726561746564222c22776f726b73706163654964223a2277735f3261616e673670786d31686a627435626472726637646b733766227d",
+      "signature": "J0Z_4518LFF9OZ3x8UBFg0l7XXvHuuElz0RZxeX-3pg_m2WTUC6fWnBO-oTNdmmuzDsSzzSNYrx6EBXt8B0PDg"
+    },
+    {
+      "name": "agent_folder_renamed",
+      "fields": {
+        "type": "agent_folder_renamed",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:04.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 2,
+        "folderId": "fld_186cz4jn2zd9tr12wpm6pbfgpd",
+        "ciphertextSha256": "36dccae90a4c6ce5e2bf4c2e0cd9ae5ad13c3363ac8a57ea12d75708046e6446"
+      },
+      "signingSeed": "707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f",
+      "publicKey": "1ce56a48c82ff99162a14bc544612674e5d61fb9317e65d4055780fdbcb4dc35",
+      "canonical": "{\"accountId\":\"acc_1560xmcmawcxs7v24kktmv9fya\",\"ciphertextSha256\":\"36dccae90a4c6ce5e2bf4c2e0cd9ae5ad13c3363ac8a57ea12d75708046e6446\",\"createdAt\":\"2026-10-22T10:00:04.000Z\",\"folderId\":\"fld_186cz4jn2zd9tr12wpm6pbfgpd\",\"policySha256\":\"78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8\",\"revision\":3,\"scopeRevision\":2,\"tokenId\":\"tok_4gj699754njtbsh6ctkee9v7mz\",\"type\":\"agent_folder_renamed\",\"workspaceId\":\"ws_2aang6pxm1hjbt5bdrrf7dks7f\"}",
+      "message": "6b6e6f7774617269756d2d656e76656c6f70652d76310a7b226163636f756e744964223a226163635f31353630786d636d6177637873377632346b6b746d7639667961222c2263697068657274657874536861323536223a2233366463636165393061346336636535653262663463326530636439616535616431336333333633616338613537656131326437353730383034366536343436222c22637265617465644174223a22323032362d31302d32325431303a30303a30342e3030305a222c22666f6c6465724964223a22666c645f313836637a346a6e327a64397472313277706d36706266677064222c22706f6c696379536861323536223a2237386535353665323232653430343566303630306435393161326339663632383835306231313936653534666633313631393730376562336339373061346538222c227265766973696f6e223a332c2273636f70655265766973696f6e223a322c22746f6b656e4964223a22746f6b5f34676a3639393735346e6a746273683663746b65653976376d7a222c2274797065223a226167656e745f666f6c6465725f72656e616d6564222c22776f726b73706163654964223a2277735f3261616e673670786d31686a627435626472726637646b733766227d",
+      "signature": "qjjXYO3d-GCb8sEkegi7mpxV44zeH0ry_gGcPAOD_SqBpxkYtFov7AYZ_1q9OEGRYMBOOoc6eJkocqmI92HyAg"
+    },
+    {
+      "name": "agent_folder_moved, to the top level",
+      "fields": {
+        "type": "agent_folder_moved",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:05.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 2,
+        "folderId": "fld_186cz4jn2zd9tr12wpm6pbfgpd"
+      },
+      "signingSeed": "707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f",
+      "publicKey": "1ce56a48c82ff99162a14bc544612674e5d61fb9317e65d4055780fdbcb4dc35",
+      "canonical": "{\"accountId\":\"acc_1560xmcmawcxs7v24kktmv9fya\",\"createdAt\":\"2026-10-22T10:00:05.000Z\",\"folderId\":\"fld_186cz4jn2zd9tr12wpm6pbfgpd\",\"policySha256\":\"78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8\",\"revision\":3,\"scopeRevision\":2,\"tokenId\":\"tok_4gj699754njtbsh6ctkee9v7mz\",\"type\":\"agent_folder_moved\",\"workspaceId\":\"ws_2aang6pxm1hjbt5bdrrf7dks7f\"}",
+      "message": "6b6e6f7774617269756d2d656e76656c6f70652d76310a7b226163636f756e744964223a226163635f31353630786d636d6177637873377632346b6b746d7639667961222c22637265617465644174223a22323032362d31302d32325431303a30303a30352e3030305a222c22666f6c6465724964223a22666c645f313836637a346a6e327a64397472313277706d36706266677064222c22706f6c696379536861323536223a2237386535353665323232653430343566303630306435393161326339663632383835306231313936653534666633313631393730376562336339373061346538222c227265766973696f6e223a332c2273636f70655265766973696f6e223a322c22746f6b656e4964223a22746f6b5f34676a3639393735346e6a746273683663746b65653976376d7a222c2274797065223a226167656e745f666f6c6465725f6d6f766564222c22776f726b73706163654964223a2277735f3261616e673670786d31686a627435626472726637646b733766227d",
+      "signature": "bGgN_rLnYQyWgbI8gotDqoWX9gKvZWw-LpEJfkAFjYI6AhEo9NrMZlWViKUtkxlY4FG8LM581NLYn2ams6NTAA"
+    },
+    {
+      "name": "agent_folder_moved, into a folder",
+      "fields": {
+        "type": "agent_folder_moved",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:06.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 2,
+        "folderId": "fld_186cz4jn2zd9tr12wpm6pbfgpd",
+        "parentId": "fld_4mkynbbg6btvgysxr21mc26bhs"
+      },
+      "signingSeed": "707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f",
+      "publicKey": "1ce56a48c82ff99162a14bc544612674e5d61fb9317e65d4055780fdbcb4dc35",
+      "canonical": "{\"accountId\":\"acc_1560xmcmawcxs7v24kktmv9fya\",\"createdAt\":\"2026-10-22T10:00:06.000Z\",\"folderId\":\"fld_186cz4jn2zd9tr12wpm6pbfgpd\",\"parentId\":\"fld_4mkynbbg6btvgysxr21mc26bhs\",\"policySha256\":\"78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8\",\"revision\":3,\"scopeRevision\":2,\"tokenId\":\"tok_4gj699754njtbsh6ctkee9v7mz\",\"type\":\"agent_folder_moved\",\"workspaceId\":\"ws_2aang6pxm1hjbt5bdrrf7dks7f\"}",
+      "message": "6b6e6f7774617269756d2d656e76656c6f70652d76310a7b226163636f756e744964223a226163635f31353630786d636d6177637873377632346b6b746d7639667961222c22637265617465644174223a22323032362d31302d32325431303a30303a30362e3030305a222c22666f6c6465724964223a22666c645f313836637a346a6e327a64397472313277706d36706266677064222c22706172656e744964223a22666c645f346d6b796e62626736627476677973787232316d633236626873222c22706f6c696379536861323536223a2237386535353665323232653430343566303630306435393161326339663632383835306231313936653534666633313631393730376562336339373061346538222c227265766973696f6e223a332c2273636f70655265766973696f6e223a322c22746f6b656e4964223a22746f6b5f34676a3639393735346e6a746273683663746b65653976376d7a222c2274797065223a226167656e745f666f6c6465725f6d6f766564222c22776f726b73706163654964223a2277735f3261616e673670786d31686a627435626472726637646b733766227d",
+      "signature": "3JTqJnjx2ElTtFrwEyeVE7NDR2xlbJiSI_iFDUUKvji_O8A-KpjQZ7zMHmWGrxY7qHwCOD8HAxMmKAf925_UBQ"
+    },
+    {
+      "name": "agent_folder_deleted",
+      "fields": {
+        "type": "agent_folder_deleted",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:07.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 2,
+        "folderId": "fld_186cz4jn2zd9tr12wpm6pbfgpd"
+      },
+      "signingSeed": "707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f",
+      "publicKey": "1ce56a48c82ff99162a14bc544612674e5d61fb9317e65d4055780fdbcb4dc35",
+      "canonical": "{\"accountId\":\"acc_1560xmcmawcxs7v24kktmv9fya\",\"createdAt\":\"2026-10-22T10:00:07.000Z\",\"folderId\":\"fld_186cz4jn2zd9tr12wpm6pbfgpd\",\"policySha256\":\"78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8\",\"revision\":3,\"scopeRevision\":2,\"tokenId\":\"tok_4gj699754njtbsh6ctkee9v7mz\",\"type\":\"agent_folder_deleted\",\"workspaceId\":\"ws_2aang6pxm1hjbt5bdrrf7dks7f\"}",
+      "message": "6b6e6f7774617269756d2d656e76656c6f70652d76310a7b226163636f756e744964223a226163635f31353630786d636d6177637873377632346b6b746d7639667961222c22637265617465644174223a22323032362d31302d32325431303a30303a30372e3030305a222c22666f6c6465724964223a22666c645f313836637a346a6e327a64397472313277706d36706266677064222c22706f6c696379536861323536223a2237386535353665323232653430343566303630306435393161326339663632383835306231313936653534666633313631393730376562336339373061346538222c227265766973696f6e223a332c2273636f70655265766973696f6e223a322c22746f6b656e4964223a22746f6b5f34676a3639393735346e6a746273683663746b65653976376d7a222c2274797065223a226167656e745f666f6c6465725f64656c65746564222c22776f726b73706163654964223a2277735f3261616e673670786d31686a627435626472726637646b733766227d",
+      "signature": "NOTd-dDXJTLdtadzrFofbyV8Z1nXyTMZ3_3NMNFo-BQswWO55se7ahO8z4LMAbPW5Cwm3O2xVPHlGRzwyRFrDw"
     }
   ],
   "invalidEnvelopes": [
@@ -1794,6 +2003,621 @@
         "signPublicKey": "F0VTtFbd38aQjsqxwQH-arIeK6oGF3lbfUOmNIKZP9U",
         "policyRevision": 0
       }
+    },
+    {
+      "name": "agent_scope without tokenId",
+      "fields": {
+        "type": "agent_scope",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:00.000Z",
+        "revision": 2,
+        "scopeSha256": "2a9ba582d4ac4131d252bca27d0b8d1179a0f62c65ad6ec71298f9e7032aa630"
+      }
+    },
+    {
+      "name": "agent_scope without revision",
+      "fields": {
+        "type": "agent_scope",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:00.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "scopeSha256": "2a9ba582d4ac4131d252bca27d0b8d1179a0f62c65ad6ec71298f9e7032aa630"
+      }
+    },
+    {
+      "name": "agent_scope without scopeSha256",
+      "fields": {
+        "type": "agent_scope",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:00.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 2
+      }
+    },
+    {
+      "name": "agent_deleted without tokenId",
+      "fields": {
+        "type": "agent_deleted",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:01.000Z",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 2,
+        "noteId": "note_3ffa2s16x6p6ycfmpxx3szw28m",
+        "version": 16,
+        "folderId": "fld_4mkynbbg6btvgysxr21mc26bhs"
+      }
+    },
+    {
+      "name": "agent_deleted without noteId",
+      "fields": {
+        "type": "agent_deleted",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:01.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 2,
+        "version": 16,
+        "folderId": "fld_4mkynbbg6btvgysxr21mc26bhs"
+      }
+    },
+    {
+      "name": "agent_deleted without version",
+      "fields": {
+        "type": "agent_deleted",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:01.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 2,
+        "noteId": "note_3ffa2s16x6p6ycfmpxx3szw28m",
+        "folderId": "fld_4mkynbbg6btvgysxr21mc26bhs"
+      }
+    },
+    {
+      "name": "agent_deleted without folderId",
+      "fields": {
+        "type": "agent_deleted",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:01.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 2,
+        "noteId": "note_3ffa2s16x6p6ycfmpxx3szw28m",
+        "version": 16
+      }
+    },
+    {
+      "name": "agent_deleted without revision",
+      "fields": {
+        "type": "agent_deleted",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:01.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 2,
+        "noteId": "note_3ffa2s16x6p6ycfmpxx3szw28m",
+        "version": 16,
+        "folderId": "fld_4mkynbbg6btvgysxr21mc26bhs"
+      }
+    },
+    {
+      "name": "agent_deleted without policySha256",
+      "fields": {
+        "type": "agent_deleted",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:01.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "scopeRevision": 2,
+        "noteId": "note_3ffa2s16x6p6ycfmpxx3szw28m",
+        "version": 16,
+        "folderId": "fld_4mkynbbg6btvgysxr21mc26bhs"
+      }
+    },
+    {
+      "name": "agent_deleted without scopeRevision",
+      "fields": {
+        "type": "agent_deleted",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:01.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "noteId": "note_3ffa2s16x6p6ycfmpxx3szw28m",
+        "version": 16,
+        "folderId": "fld_4mkynbbg6btvgysxr21mc26bhs"
+      }
+    },
+    {
+      "name": "agent_folder_created without tokenId",
+      "fields": {
+        "type": "agent_folder_created",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:03.000Z",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 2,
+        "folderId": "fld_186cz4jn2zd9tr12wpm6pbfgpd",
+        "parentId": "fld_4mkynbbg6btvgysxr21mc26bhs",
+        "ciphertextSha256": "36dccae90a4c6ce5e2bf4c2e0cd9ae5ad13c3363ac8a57ea12d75708046e6446"
+      }
+    },
+    {
+      "name": "agent_folder_created without folderId",
+      "fields": {
+        "type": "agent_folder_created",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:03.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 2,
+        "parentId": "fld_4mkynbbg6btvgysxr21mc26bhs",
+        "ciphertextSha256": "36dccae90a4c6ce5e2bf4c2e0cd9ae5ad13c3363ac8a57ea12d75708046e6446"
+      }
+    },
+    {
+      "name": "agent_folder_created without ciphertextSha256",
+      "fields": {
+        "type": "agent_folder_created",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:03.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 2,
+        "folderId": "fld_186cz4jn2zd9tr12wpm6pbfgpd",
+        "parentId": "fld_4mkynbbg6btvgysxr21mc26bhs"
+      }
+    },
+    {
+      "name": "agent_folder_created without revision",
+      "fields": {
+        "type": "agent_folder_created",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:03.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 2,
+        "folderId": "fld_186cz4jn2zd9tr12wpm6pbfgpd",
+        "parentId": "fld_4mkynbbg6btvgysxr21mc26bhs",
+        "ciphertextSha256": "36dccae90a4c6ce5e2bf4c2e0cd9ae5ad13c3363ac8a57ea12d75708046e6446"
+      }
+    },
+    {
+      "name": "agent_folder_created without policySha256",
+      "fields": {
+        "type": "agent_folder_created",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:03.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "scopeRevision": 2,
+        "folderId": "fld_186cz4jn2zd9tr12wpm6pbfgpd",
+        "parentId": "fld_4mkynbbg6btvgysxr21mc26bhs",
+        "ciphertextSha256": "36dccae90a4c6ce5e2bf4c2e0cd9ae5ad13c3363ac8a57ea12d75708046e6446"
+      }
+    },
+    {
+      "name": "agent_folder_created without scopeRevision",
+      "fields": {
+        "type": "agent_folder_created",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:03.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "folderId": "fld_186cz4jn2zd9tr12wpm6pbfgpd",
+        "parentId": "fld_4mkynbbg6btvgysxr21mc26bhs",
+        "ciphertextSha256": "36dccae90a4c6ce5e2bf4c2e0cd9ae5ad13c3363ac8a57ea12d75708046e6446"
+      }
+    },
+    {
+      "name": "agent_folder_renamed without tokenId",
+      "fields": {
+        "type": "agent_folder_renamed",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:04.000Z",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 2,
+        "folderId": "fld_186cz4jn2zd9tr12wpm6pbfgpd",
+        "ciphertextSha256": "36dccae90a4c6ce5e2bf4c2e0cd9ae5ad13c3363ac8a57ea12d75708046e6446"
+      }
+    },
+    {
+      "name": "agent_folder_renamed without folderId",
+      "fields": {
+        "type": "agent_folder_renamed",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:04.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 2,
+        "ciphertextSha256": "36dccae90a4c6ce5e2bf4c2e0cd9ae5ad13c3363ac8a57ea12d75708046e6446"
+      }
+    },
+    {
+      "name": "agent_folder_renamed without ciphertextSha256",
+      "fields": {
+        "type": "agent_folder_renamed",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:04.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 2,
+        "folderId": "fld_186cz4jn2zd9tr12wpm6pbfgpd"
+      }
+    },
+    {
+      "name": "agent_folder_renamed without revision",
+      "fields": {
+        "type": "agent_folder_renamed",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:04.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 2,
+        "folderId": "fld_186cz4jn2zd9tr12wpm6pbfgpd",
+        "ciphertextSha256": "36dccae90a4c6ce5e2bf4c2e0cd9ae5ad13c3363ac8a57ea12d75708046e6446"
+      }
+    },
+    {
+      "name": "agent_folder_renamed without policySha256",
+      "fields": {
+        "type": "agent_folder_renamed",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:04.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "scopeRevision": 2,
+        "folderId": "fld_186cz4jn2zd9tr12wpm6pbfgpd",
+        "ciphertextSha256": "36dccae90a4c6ce5e2bf4c2e0cd9ae5ad13c3363ac8a57ea12d75708046e6446"
+      }
+    },
+    {
+      "name": "agent_folder_renamed without scopeRevision",
+      "fields": {
+        "type": "agent_folder_renamed",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:04.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "folderId": "fld_186cz4jn2zd9tr12wpm6pbfgpd",
+        "ciphertextSha256": "36dccae90a4c6ce5e2bf4c2e0cd9ae5ad13c3363ac8a57ea12d75708046e6446"
+      }
+    },
+    {
+      "name": "agent_folder_moved without tokenId",
+      "fields": {
+        "type": "agent_folder_moved",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:06.000Z",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 2,
+        "folderId": "fld_186cz4jn2zd9tr12wpm6pbfgpd",
+        "parentId": "fld_4mkynbbg6btvgysxr21mc26bhs"
+      }
+    },
+    {
+      "name": "agent_folder_moved without folderId",
+      "fields": {
+        "type": "agent_folder_moved",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:06.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 2,
+        "parentId": "fld_4mkynbbg6btvgysxr21mc26bhs"
+      }
+    },
+    {
+      "name": "agent_folder_moved without revision",
+      "fields": {
+        "type": "agent_folder_moved",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:06.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 2,
+        "folderId": "fld_186cz4jn2zd9tr12wpm6pbfgpd",
+        "parentId": "fld_4mkynbbg6btvgysxr21mc26bhs"
+      }
+    },
+    {
+      "name": "agent_folder_moved without policySha256",
+      "fields": {
+        "type": "agent_folder_moved",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:06.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "scopeRevision": 2,
+        "folderId": "fld_186cz4jn2zd9tr12wpm6pbfgpd",
+        "parentId": "fld_4mkynbbg6btvgysxr21mc26bhs"
+      }
+    },
+    {
+      "name": "agent_folder_moved without scopeRevision",
+      "fields": {
+        "type": "agent_folder_moved",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:06.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "folderId": "fld_186cz4jn2zd9tr12wpm6pbfgpd",
+        "parentId": "fld_4mkynbbg6btvgysxr21mc26bhs"
+      }
+    },
+    {
+      "name": "agent_folder_deleted without tokenId",
+      "fields": {
+        "type": "agent_folder_deleted",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:07.000Z",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 2,
+        "folderId": "fld_186cz4jn2zd9tr12wpm6pbfgpd"
+      }
+    },
+    {
+      "name": "agent_folder_deleted without folderId",
+      "fields": {
+        "type": "agent_folder_deleted",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:07.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 2
+      }
+    },
+    {
+      "name": "agent_folder_deleted without revision",
+      "fields": {
+        "type": "agent_folder_deleted",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:07.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 2,
+        "folderId": "fld_186cz4jn2zd9tr12wpm6pbfgpd"
+      }
+    },
+    {
+      "name": "agent_folder_deleted without policySha256",
+      "fields": {
+        "type": "agent_folder_deleted",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:07.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "scopeRevision": 2,
+        "folderId": "fld_186cz4jn2zd9tr12wpm6pbfgpd"
+      }
+    },
+    {
+      "name": "agent_folder_deleted without scopeRevision",
+      "fields": {
+        "type": "agent_folder_deleted",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:07.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "folderId": "fld_186cz4jn2zd9tr12wpm6pbfgpd"
+      }
+    },
+    {
+      "name": "agent_scope with a scopeSha256 that isn't hex",
+      "fields": {
+        "type": "agent_scope",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:00.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 2,
+        "scopeSha256": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+      }
+    },
+    {
+      "name": "agent_scope with a policySha256",
+      "fields": {
+        "type": "agent_scope",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:00.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 2,
+        "scopeSha256": "2a9ba582d4ac4131d252bca27d0b8d1179a0f62c65ad6ec71298f9e7032aa630",
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8"
+      }
+    },
+    {
+      "name": "agent_deleted with a policySha256 that isn't hex",
+      "fields": {
+        "type": "agent_deleted",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:01.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "policySha256": "78E556E222E4045F0600D591A2C9F628850B1196E54FF31619707EB3C970A4E8",
+        "scopeRevision": 2,
+        "noteId": "note_3ffa2s16x6p6ycfmpxx3szw28m",
+        "version": 16,
+        "folderId": "fld_4mkynbbg6btvgysxr21mc26bhs"
+      }
+    },
+    {
+      "name": "agent_deleted with a negative scopeRevision",
+      "fields": {
+        "type": "agent_deleted",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:01.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": -1,
+        "noteId": "note_3ffa2s16x6p6ycfmpxx3szw28m",
+        "version": 16,
+        "folderId": "fld_4mkynbbg6btvgysxr21mc26bhs"
+      }
+    },
+    {
+      "name": "agent_deleted with a fractional scopeRevision",
+      "fields": {
+        "type": "agent_deleted",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:01.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 1.5,
+        "noteId": "note_3ffa2s16x6p6ycfmpxx3szw28m",
+        "version": 16,
+        "folderId": "fld_4mkynbbg6btvgysxr21mc26bhs"
+      }
+    },
+    {
+      "name": "agent_deleted with a ciphertextSha256",
+      "fields": {
+        "type": "agent_deleted",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:01.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 2,
+        "noteId": "note_3ffa2s16x6p6ycfmpxx3szw28m",
+        "version": 16,
+        "folderId": "fld_4mkynbbg6btvgysxr21mc26bhs",
+        "ciphertextSha256": "36dccae90a4c6ce5e2bf4c2e0cd9ae5ad13c3363ac8a57ea12d75708046e6446"
+      }
+    },
+    {
+      "name": "agent_folder_renamed with a parentId",
+      "fields": {
+        "type": "agent_folder_renamed",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:04.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 2,
+        "folderId": "fld_186cz4jn2zd9tr12wpm6pbfgpd",
+        "ciphertextSha256": "36dccae90a4c6ce5e2bf4c2e0cd9ae5ad13c3363ac8a57ea12d75708046e6446",
+        "parentId": "fld_4mkynbbg6btvgysxr21mc26bhs"
+      }
+    },
+    {
+      "name": "agent_folder_deleted with a parentId",
+      "fields": {
+        "type": "agent_folder_deleted",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:07.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 2,
+        "folderId": "fld_186cz4jn2zd9tr12wpm6pbfgpd",
+        "parentId": "fld_4mkynbbg6btvgysxr21mc26bhs"
+      }
+    },
+    {
+      "name": "agent_folder_moved with a null parentId",
+      "fields": {
+        "type": "agent_folder_moved",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:06.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 2,
+        "folderId": "fld_186cz4jn2zd9tr12wpm6pbfgpd",
+        "parentId": null
+      }
+    },
+    {
+      "name": "agent_folder_created with a short ciphertextSha256",
+      "fields": {
+        "type": "agent_folder_created",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:03.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 2,
+        "folderId": "fld_186cz4jn2zd9tr12wpm6pbfgpd",
+        "parentId": "fld_4mkynbbg6btvgysxr21mc26bhs",
+        "ciphertextSha256": "dccae90a4c6ce5e2bf4c2e0cd9ae5ad13c3363ac8a57ea12d75708046e6446"
+      }
+    },
+    {
+      "name": "agent_folder_moved with a scopeSha256",
+      "fields": {
+        "type": "agent_folder_moved",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:06.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 2,
+        "folderId": "fld_186cz4jn2zd9tr12wpm6pbfgpd",
+        "parentId": "fld_4mkynbbg6btvgysxr21mc26bhs",
+        "scopeSha256": "2a9ba582d4ac4131d252bca27d0b8d1179a0f62c65ad6ec71298f9e7032aa630"
+      }
     }
   ],
   "agentPolicyTag": "knowtarium-agent-policy-v1\n",
@@ -1851,6 +2675,84 @@
       "message": "6b6e6f7774617269756d2d656e76656c6f70652d76310a7b226163636f756e744964223a226163635f31353630786d636d6177637873377632346b6b746d7639667961222c22637265617465644174223a22323032362d31302d31305430393a30303a30302e3030305a222c22666f6c6465724964223a22666c645f346d6b796e62626736627476677973787232316d633236626873222c2267656e65726174696f6e223a332c227075626c69634b6579223a226b59747165577238704648626734793465444961464d794d327a6146755034514336726a514a5a71414173222c227265766973696f6e223a302c2274797065223a22696e626f785f6b6579222c22776f726b73706163654964223a2277735f3261616e673670786d31686a627435626472726637646b733766227d",
       "signature": "LYfnfw62TemITEhGe3yoAkIxIX1WKGXZGS79dkh7uc1ttYsnSqq-V3yUyer16m8tKrFEY5Z7hr2v4w5oQYMyCQ",
       "rule": "the sync API stores and serves inbox_key revision 1 or more (baseRevision + 1)"
+    },
+    {
+      "name": "agent_deleted at scope revision 0",
+      "fields": {
+        "type": "agent_deleted",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:08.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 3,
+        "policySha256": "78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8",
+        "scopeRevision": 0,
+        "noteId": "note_3ffa2s16x6p6ycfmpxx3szw28m",
+        "version": 16,
+        "folderId": "fld_4mkynbbg6btvgysxr21mc26bhs"
+      },
+      "signingSeed": "707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f",
+      "publicKey": "1ce56a48c82ff99162a14bc544612674e5d61fb9317e65d4055780fdbcb4dc35",
+      "canonical": "{\"accountId\":\"acc_1560xmcmawcxs7v24kktmv9fya\",\"createdAt\":\"2026-10-22T10:00:08.000Z\",\"folderId\":\"fld_4mkynbbg6btvgysxr21mc26bhs\",\"noteId\":\"note_3ffa2s16x6p6ycfmpxx3szw28m\",\"policySha256\":\"78e556e222e4045f0600d591a2c9f628850b1196e54ff31619707eb3c970a4e8\",\"revision\":3,\"scopeRevision\":0,\"tokenId\":\"tok_4gj699754njtbsh6ctkee9v7mz\",\"type\":\"agent_deleted\",\"version\":16,\"workspaceId\":\"ws_2aang6pxm1hjbt5bdrrf7dks7f\"}",
+      "message": "6b6e6f7774617269756d2d656e76656c6f70652d76310a7b226163636f756e744964223a226163635f31353630786d636d6177637873377632346b6b746d7639667961222c22637265617465644174223a22323032362d31302d32325431303a30303a30382e3030305a222c22666f6c6465724964223a22666c645f346d6b796e62626736627476677973787232316d633236626873222c226e6f74654964223a226e6f74655f3366666132733136783670367963666d70787833737a7732386d222c22706f6c696379536861323536223a2237386535353665323232653430343566303630306435393161326339663632383835306231313936653534666633313631393730376562336339373061346538222c227265766973696f6e223a332c2273636f70655265766973696f6e223a302c22746f6b656e4964223a22746f6b5f34676a3639393735346e6a746273683663746b65653976376d7a222c2274797065223a226167656e745f64656c65746564222c2276657273696f6e223a31362c22776f726b73706163654964223a2277735f3261616e673670786d31686a627435626472726637646b733766227d",
+      "signature": "tBc_9sQ8jFDDyAf7CnxRoiDRkxAmKAbuzbP20GjYpQN9FXFvygQJQtxwRUeOR14iuS1zZacsbQoWpN350nOyDA",
+      "rule": "the sync API takes an agent's action only under scope revision 1 or more (a token at revision 0 has no permissions)"
+    },
+    {
+      "name": "agent_scope at revision 0",
+      "fields": {
+        "type": "agent_scope",
+        "accountId": "acc_1560xmcmawcxs7v24kktmv9fya",
+        "workspaceId": "ws_2aang6pxm1hjbt5bdrrf7dks7f",
+        "createdAt": "2026-10-22T10:00:09.000Z",
+        "tokenId": "tok_4gj699754njtbsh6ctkee9v7mz",
+        "revision": 0,
+        "scopeSha256": "2a9ba582d4ac4131d252bca27d0b8d1179a0f62c65ad6ec71298f9e7032aa630"
+      },
+      "signingSeed": "505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f",
+      "publicKey": "3f7708d5f5cc2bc633b59d2b3a2ed92e7479220c6f08ade208bebcd8580ab93b",
+      "canonical": "{\"accountId\":\"acc_1560xmcmawcxs7v24kktmv9fya\",\"createdAt\":\"2026-10-22T10:00:09.000Z\",\"revision\":0,\"scopeSha256\":\"2a9ba582d4ac4131d252bca27d0b8d1179a0f62c65ad6ec71298f9e7032aa630\",\"tokenId\":\"tok_4gj699754njtbsh6ctkee9v7mz\",\"type\":\"agent_scope\",\"workspaceId\":\"ws_2aang6pxm1hjbt5bdrrf7dks7f\"}",
+      "message": "6b6e6f7774617269756d2d656e76656c6f70652d76310a7b226163636f756e744964223a226163635f31353630786d636d6177637873377632346b6b746d7639667961222c22637265617465644174223a22323032362d31302d32325431303a30303a30392e3030305a222c227265766973696f6e223a302c2273636f7065536861323536223a2232613962613538326434616334313331643235326263613237643062386431313739613066363263363561643665633731323938663965373033326161363330222c22746f6b656e4964223a22746f6b5f34676a3639393735346e6a746273683663746b65653976376d7a222c2274797065223a226167656e745f73636f7065222c22776f726b73706163654964223a2277735f3261616e673670786d31686a627435626472726637646b733766227d",
+      "signature": "im4wBUamzgPMVQChgz_6KwPNf0lh2lCGOCSgOLPvlUQCE5Hmttb5ZhXxefsDtXQi7429D078Llieec_pyuHuAQ",
+      "rule": "the sync API stores and serves agent_scope revision 1 or more (1 at connect, then baseRevision + 1)"
+    }
+  ],
+  "agentScopeTag": "knowtarium-agent-scope-v1\n",
+  "agentScopeHashes": [
+    {
+      "name": "read, the whole workspace",
+      "access": "read",
+      "folderIds": [],
+      "permissions": [],
+      "text": "knowtarium-agent-scope-v1\n{\"access\":\"read\",\"folderIds\":[],\"permissions\":[]}",
+      "scopeSha256": "08c8bb73c8bcdd8bcdf066c8324f43ec68ce8d7d633ab41917f71d934d3f4766"
+    },
+    {
+      "name": "read-write, two folders and two permissions, unsorted",
+      "access": "read-write",
+      "folderIds": ["fld_4mkynbbg6btvgysxr21mc26bhs", "fld_186cz4jn2zd9tr12wpm6pbfgpd"],
+      "permissions": ["notes.delete", "notes.move"],
+      "text": "knowtarium-agent-scope-v1\n{\"access\":\"read-write\",\"folderIds\":[\"fld_186cz4jn2zd9tr12wpm6pbfgpd\",\"fld_4mkynbbg6btvgysxr21mc26bhs\"],\"permissions\":[\"notes.move\",\"notes.delete\"]}",
+      "scopeSha256": "2a9ba582d4ac4131d252bca27d0b8d1179a0f62c65ad6ec71298f9e7032aa630"
+    },
+    {
+      "name": "read-write, a folder twice, every permission in reverse",
+      "access": "read-write",
+      "folderIds": [
+        "fld_186cz4jn2zd9tr12wpm6pbfgpd",
+        "fld_4mkynbbg6btvgysxr21mc26bhs",
+        "fld_186cz4jn2zd9tr12wpm6pbfgpd"
+      ],
+      "permissions": [
+        "folders.delete",
+        "folders.move",
+        "folders.rename",
+        "folders.create",
+        "notes.delete",
+        "notes.move"
+      ],
+      "text": "knowtarium-agent-scope-v1\n{\"access\":\"read-write\",\"folderIds\":[\"fld_186cz4jn2zd9tr12wpm6pbfgpd\",\"fld_4mkynbbg6btvgysxr21mc26bhs\"],\"permissions\":[\"notes.move\",\"notes.delete\",\"folders.create\",\"folders.rename\",\"folders.move\",\"folders.delete\"]}",
+      "scopeSha256": "d1e49d3679154518d189b1e1b466ab6b2c45dba954e6467d5154b61661420637"
     }
   ]
 }

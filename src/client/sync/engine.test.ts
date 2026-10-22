@@ -500,7 +500,7 @@ describe("live", () => {
     await flush();
     const [socket] = sockets;
     expect(socket?.url).toBe(
-      `wss://api.test/workspaces/${world.workspaceId}/live?protocol=2&ticket=ktl_${"t".repeat(39)}1`,
+      `wss://api.test/workspaces/${world.workspaceId}/live?protocol=3&ticket=ktl_${"t".repeat(39)}1`,
     );
     socket?.receive({ type: "hello", protocolVersion: 1, workspaceVersion: world.server.seq });
     await flush();
