@@ -5,12 +5,7 @@ export {
   type AgentNoteWrite,
   type AgentPolicyRead,
 } from "./agent-writes.js";
-export {
-  fetchFolderEvents,
-  type FolderEventEntry,
-  folderEventSignature,
-  readFolderEvent,
-} from "./folder-events.js";
+export { fetchFolderEvents, type FolderEventEntry } from "./folder-events.js";
 export { type Confirmation } from "./confirmations.js";
 export type { AgentConnection } from "./context.js";
 export {
@@ -33,6 +28,7 @@ export type {
   AgentAction,
   AgentActionAudit,
   AgentActionRefusal,
+  AgentFolderDeleteResult,
   AgentFolderResult,
   AgentWriteAudit,
   AgentWriteConflict,

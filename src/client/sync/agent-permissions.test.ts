@@ -39,20 +39,9 @@ beforeAll(ready);
 
 const note = (title: string) => `---\ntype: Note\ntitle: ${title}\n---\nBody of ${title}.\n`;
 
-/** A top-level folder the owner makes in the web app. */
-async function folder(world: World, web: Client, name: string, parentId: FolderId | null = null) {
-  const request = prepareFolder(world.signer, world.key, {
-    workspaceId: world.workspaceId,
-    parentId,
-    name,
-    rootFolderId: null,
-  });
-  await web.api.call(routes.createFolder, {
-    params: { workspaceId: world.workspaceId },
-    body: request,
-  });
-  return request.id;
-}
+/** A folder the owner makes in the web app. */
+const folder = (world: World, _web: Client, name: string, parentId: FolderId | null = null) =>
+  world.createFolder(name, parentId);
 
 /** A workspace with a folder, a note in it, and an agent holding `permissions`. */
 async function seeded(permissions: readonly AgentPermission[] = []) {

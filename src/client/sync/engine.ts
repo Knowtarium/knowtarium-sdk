@@ -32,7 +32,6 @@ import {
   type MergedNote,
   restoreVersion,
   type RestoreVerify,
-  restoreVersionInto,
   type TakenNames,
   undoAgentFolderEvent,
   type UndoFolderResult,
@@ -49,6 +48,7 @@ import type {
   TrustedSigner,
   TrustState,
 } from "../vault/index.js";
+import { restoreVersionInto } from "../history/undo.js";
 import { AgentKeyDirectory } from "./agent-keys.js";
 import {
   type AgentActionOptions,
@@ -90,7 +90,7 @@ import { SerialQueue } from "./queue.js";
 import type {
   AgentAction,
   AgentActionAudit,
-  AgentActionRefusal,
+  AgentFolderDeleteResult,
   AgentFolderResult,
   AgentWriteAudit,
   AgentWriteResult,
@@ -597,14 +597,9 @@ export class SyncEngine {
   }
 
   /** An agent deletes an empty folder (agent, protocol 3, `folders.delete`). */
-  deleteFolderAsAgent(change: AgentActionOptions & { readonly folderId: FolderId }): Promise<
-    | {
-        readonly status: "saved";
-        readonly workspaceVersion: number;
-        readonly policyRevision: number;
-      }
-    | AgentActionRefusal
-  > {
+  deleteFolderAsAgent(
+    change: AgentActionOptions & { readonly folderId: FolderId },
+  ): Promise<AgentFolderDeleteResult> {
     return this.run(() => deleteFolderAsAgent(this.context, change));
   }
 

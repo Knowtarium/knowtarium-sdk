@@ -187,6 +187,16 @@ export type AgentFolderResult =
     }
   | AgentActionRefusal;
 
+/** An agent's folder delete (protocol 3). */
+export type AgentFolderDeleteResult =
+  | {
+      readonly status: "saved";
+      readonly workspaceVersion: number;
+      /** The agent policy revision it checked. */
+      readonly policyRevision: number;
+    }
+  | AgentActionRefusal;
+
 /**
  * An agent's signed action of protocol 3, or its direct write, as `agentActions` lists them for
  * a person (newest first), each verified under the agent's vouched key.

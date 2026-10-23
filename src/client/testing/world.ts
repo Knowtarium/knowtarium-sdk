@@ -20,6 +20,7 @@ import type {
   TokenId,
   WorkspaceId,
 } from "../../protocol/index.js";
+import { routes } from "../../protocol/index.js";
 import { type ApiClient, createApiClient, type RetryPolicy } from "../api/index.js";
 import type { EncryptedCache } from "../cache/index.js";
 import { newId } from "../platform/ids.js";
@@ -29,6 +30,7 @@ import {
   type KeyProvider,
   encryptWorkspaceName,
   MemoryTrustStorage,
+  prepareFolder,
   type Signer,
   signAgentKey,
   TrustState,
@@ -158,6 +160,25 @@ export class World {
         permissions: scope.permissions,
       },
     );
+  }
+
+  /**
+   * The owner creates a folder in the web app (signed `folder_created`, a fresh ID), under
+   * `parentId` (null: the top level); answers its ID.
+   */
+  async createFolder(name: string, parentId: FolderId | null = null): Promise<FolderId> {
+    const request = prepareFolder(this.signer, this.key, {
+      workspaceId: this.workspaceId,
+      parentId,
+      name,
+      rootFolderId: null,
+    });
+    await createApiClient({
+      baseUrl: "https://api.test",
+      fetch: this.server.fetch,
+      auth: { kind: "session" },
+    }).call(routes.createFolder, { params: { workspaceId: this.workspaceId }, body: request });
+    return request.id;
   }
 
   /** The web app: session auth, the account's keys, the account's own signing key trusted. */
