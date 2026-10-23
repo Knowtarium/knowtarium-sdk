@@ -133,6 +133,9 @@ class HttpError extends Error {
   }
 }
 
+/** How old an unfinished upload must be before a folder delete discards it (the sync API's). */
+const UPLOAD_BLOCKS_DELETE_MS = 60 * 60 * 1000;
+
 /** An `invalid_request` with one issue, as the sync API words it. */
 function invalid(at: readonly (string | number)[], problem: string): HttpError {
   return new HttpError("invalid_request", { issues: [{ at, problem }] });
@@ -267,6 +270,8 @@ export class FakeServer {
   rootFolderId: FolderId | null = null;
   /** Every folder change, people's and agents' (`listFolderEvents`). */
   readonly folderEvents: FolderEvent[] = [];
+  /** The most open proposals (the sync API's per-token cap; lower it to test). */
+  openProposalCap = 100;
   /** The agent's note deletes and folder changes so far, and their daily caps (then 429). */
   agentNoteDeletes = 0;
   agentFolderChanges = 0;
@@ -1051,7 +1056,9 @@ export class FakeServer {
               (status === null || change.status === status) &&
               (noteId === null || change.noteId === noteId) &&
               (submittedBy === null || change.submittedBy === submittedBy) &&
-              (request.caller !== "agent" || this.folderInScope(change.folderId)),
+              (request.caller !== "agent" || this.folderInScope(change.folderId)) &&
+              // delete proposals came with protocol 3: an older caller never sees one
+              (change.kind !== "delete" || !this.protocol2(request)),
           )
           .sort((a, b) => a.seq - b.seq);
         return response(200, this.page("pending", pending, request));
@@ -1677,8 +1684,13 @@ export class FakeServer {
         });
         return response(201, { pending: change });
       }
-      case "getPending":
-        return response(200, { pending: this.openPending(pendingId, false).change });
+      case "getPending": {
+        const entry = this.openPending(pendingId, false);
+        if (entry.change.kind === "delete" && this.protocol2(request)) {
+          throw new HttpError("not_found");
+        }
+        return response(200, { pending: entry.change });
+      }
       case "getPendingBlob": {
         const entry = this.openPending(pendingId, false);
         // a delete proposal has no blob
@@ -1807,13 +1819,13 @@ export class FakeServer {
           ciphertextSha256: ciphertextSha256(fromBase64Url(body.encName)),
           createdAt: body.signedAt,
         };
-        if (body.parentId !== null && !this.liveFolder(body.parentId)) {
-          throw new HttpError("not_found");
-        }
         // the ID of a deleted folder revives it, only where it was (protocol 3)
         const revived = this.deletedFolders.has(body.id);
         if (revived && this.folders.get(body.id)?.parentId !== body.parentId) {
           throw invalid(["body", "parentId"], "A deleted folder comes back where it was");
+        }
+        if (body.parentId !== null && !this.liveFolder(body.parentId)) {
+          throw new HttpError("not_found");
         }
         if (this.liveFolder(body.id)) throw new HttpError("already_exists");
         this.verify(envelope, body.signature);
@@ -1944,7 +1956,28 @@ export class FakeServer {
   }
 
   /** Whether a folder holds a live folder, note or file. */
-  private holdsContent(folderId: FolderId): boolean {
+  /**
+   * Whether an attachment is an upload left unfinished for over an hour, which a folder delete
+   * discards (an agent's delete only its own uploads).
+   */
+  private staleUpload(attachment: Attachment, uploader: string | null): boolean {
+    return (
+      attachment.status === "uploading" &&
+      Date.now() - Date.parse(attachment.createdAt) > UPLOAD_BLOCKS_DELETE_MS &&
+      (uploader === null || attachment.authorId === uploader)
+    );
+  }
+
+  /** Discards a folder's stale uploads, as the sync API's folder delete does. */
+  private discardStaleUploads(folderId: FolderId, uploader: string | null): void {
+    for (const [id, entry] of this.attachments) {
+      if (entry.attachment.folderId === folderId && this.staleUpload(entry.attachment, uploader)) {
+        this.attachments.delete(id);
+      }
+    }
+  }
+
+  private holdsContent(folderId: FolderId, uploader: string | null = null): boolean {
     const folders = [...this.folders].some(
       ([id, folder]) => folder.parentId === folderId && !this.deletedFolders.has(id),
     );
@@ -1952,7 +1985,8 @@ export class FakeServer {
       (row) => row.folderId === folderId && row.versions.at(-1)?.deleted === false,
     );
     const files = [...this.attachments.values()].some(
-      (entry) => entry.attachment.folderId === folderId,
+      (entry) =>
+        entry.attachment.folderId === folderId && !this.staleUpload(entry.attachment, uploader),
     );
     const proposals = [...this.pending.values()].some(
       ({ change }) => change.folderId === folderId && change.status === "open",
@@ -2060,6 +2094,29 @@ export class FakeServer {
     );
   }
 
+  /** Whether a request speaks protocol 2 (it never sees protocol 3's delete proposals). */
+  private protocol2(request: Request): boolean {
+    return request.headers.get("knowtarium-protocol-version") === "2";
+  }
+
+  /** The storage used (attachments, as the fake counts it). */
+  private usedBytes(): number {
+    return [...this.attachments.values()].reduce(
+      (sum, entry) => sum + entry.attachment.sizeBytes,
+      0,
+    );
+  }
+
+  /** 402 `quota_exceeded` while the account is over its storage (a new folder, a longer name). */
+  private checkStorage(): void {
+    const used = this.usedBytes();
+    if (used < this.quotaBytes) return;
+    throw new HttpError("quota_exceeded", {
+      plan: { id: "free", storageQuotaBytes: this.quotaBytes, maxWorkspaces: 1 },
+      usage: { usedBytes: used, quotaBytes: this.quotaBytes, workspaceCount: 1, maxWorkspaces: 1 },
+    });
+  }
+
   /** Verifies an agent's signature under its key (`invalid_signature`). */
   private verifyAgent(envelope: SignedEnvelopeFields, signature: string | undefined): void {
     this.verify(envelope, signature, this.agentSignPublicKey ?? new Uint8Array(32));
@@ -2119,6 +2176,10 @@ export class FakeServer {
         return response(200, { folders });
       }
       case "listFolderEvents": {
+        const limit = request.query.get("limit");
+        if (limit !== null && !(Number(limit) >= 1 && Number(limit) <= 1000)) {
+          throw invalid(["query", "limit"], "Between 1 and 1000");
+        }
         const since = Number(request.query.get("since") ?? "0");
         const folderId = request.query.get("folderId");
         const events = this.folderEvents
@@ -2166,6 +2227,7 @@ export class FakeServer {
         const folderId = params["folderId"] as FolderId;
         if (!this.liveFolder(folderId)) throw new HttpError("not_found");
         if (this.holdsContent(folderId)) throw new HttpError("not_empty");
+        this.discardStaleUploads(folderId, null);
         const folder = this.folders.get(folderId) ?? { parentId: null, encName: "" };
         const seq = this.changeFolder(folderId, {
           action: "deleted",
@@ -2244,6 +2306,13 @@ export class FakeServer {
             change.kind === "delete" && change.noteId === noteId && change.status === "open",
         );
         if (open) throw new HttpError("already_exists");
+        // the open proposal caps, which delete proposals count toward (429 after a minute)
+        const undecided = [...this.pending.values()].filter(
+          ({ change }) => change.status === "open",
+        ).length;
+        if (undecided >= this.openProposalCap) {
+          throw new HttpError("rate_limited", { retryAfterSeconds: 60 }, { "Retry-After": "60" });
+        }
         const seq = this.bump();
         const createdAt = new Date().toISOString();
         const change: PendingChange = {
@@ -2298,13 +2367,12 @@ export class FakeServer {
           throw invalid(["body", "parentId"], "A deleted folder comes back where it was");
         }
         const existing = this.folders.get(body.id);
-        if (this.liveFolder(body.id)) {
-          // the same create retried (a lost answer): it stands
-          if (existing?.parentId === body.parentId && existing.encName === body.encName) {
-            return response(201, { folder: this.folderOf(body.id), workspaceVersion: this.seq });
-          }
-          throw new HttpError("already_exists");
-        }
+        // the same create retried (a lost answer) stands, once every check passed again
+        const retried =
+          this.liveFolder(body.id) &&
+          existing?.parentId === body.parentId &&
+          existing.encName === body.encName;
+        if (this.liveFolder(body.id) && !retried) throw new HttpError("already_exists");
         const { policySha256 } = this.agentSigning(body.policyRevision);
         if (body.scopeRevision !== this.scopeRevision) throw new HttpError("stale_agent_scope");
         const envelope: SignedEnvelopeFields = {
@@ -2324,6 +2392,14 @@ export class FakeServer {
         if (body.parentId !== null && !this.liveFolder(body.parentId)) {
           throw new HttpError("not_found");
         }
+        if (retried) {
+          const created = this.folderEvents.filter((row) => row.folderId === body.id).at(-1);
+          return response(201, {
+            folder: this.folderOf(body.id),
+            workspaceVersion: created?.seq ?? this.seq,
+          });
+        }
+        this.checkStorage();
         this.checkCap(this.agentFolderChanges, this.agentFolderChangeDailyCap);
         this.useAgentSignature(body.signature);
         this.agentFolderChanges++;
@@ -2411,10 +2487,17 @@ export class FakeServer {
           throw new HttpError("not_found");
         }
         if (moving) this.checkTree(folderId, destination);
-        if (deleting && this.holdsContent(folderId)) throw new HttpError("not_empty");
+        // a longer name while over the plan's storage
+        if (!deleting && !moving && (encName ?? "").length > folder.encName.length) {
+          this.checkStorage();
+        }
+        if (deleting && this.holdsContent(folderId, this.options.tokenId)) {
+          throw new HttpError("not_empty");
+        }
         this.checkCap(this.agentFolderChanges, this.agentFolderChangeDailyCap);
         this.useAgentSignature(body.signature);
         this.agentFolderChanges++;
+        if (deleting) this.discardStaleUploads(folderId, this.options.tokenId);
         const seq = this.changeFolder(folderId, {
           action: deleting ? "deleted" : moving ? "moved" : "renamed",
           parentId: moving ? destination : parentId,
