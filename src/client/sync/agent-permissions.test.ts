@@ -2,11 +2,14 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { ready, verifyEnvelopeFor } from "../../crypto/index.js";
 import {
+  AGENT_PERMISSIONS,
   type AgentPermission,
   agentScopeSha256,
+  NO_PREVIOUS_AGENT_SCOPE_SHA256,
   SIGNATURE_MAX_SKEW_SECONDS,
   type FolderId,
   routes,
+  type SignedAgentScope,
 } from "../../protocol/index.js";
 import { isSyncApiError, RequestValidationError } from "../errors/index.js";
 import { newId } from "../platform/ids.js";
@@ -22,6 +25,7 @@ import {
   signAgentFolderMoved,
   signAgentFolderRenamed,
   signAgentScope,
+  signAgentScopeRevision,
   toSignedEnvelope,
   type TokenScopes,
   TrustState,
@@ -88,6 +92,7 @@ describe("the agents' envelopes", () => {
     const revisions = { revision: 2, policySha256: "a".repeat(64), scopeRevision: 3 };
     const common = { workspaceId: world.workspaceId, ...revisions };
     const folderId = newId("fld");
+    const from = newId("fld");
     const actions = [
       signAgentDeleted(agent, {
         ...common,
@@ -101,9 +106,19 @@ describe("the agents' envelopes", () => {
         parentId: null,
         encName: new Uint8Array(9),
       }),
-      signAgentFolderRenamed(agent, { ...common, folderId, encName: new Uint8Array(9) }),
-      signAgentFolderMoved(agent, { ...common, folderId, parentId: newId("fld") }),
-      signAgentFolderDeleted(agent, { ...common, folderId }),
+      signAgentFolderRenamed(agent, {
+        ...common,
+        folderId,
+        parentId: from,
+        encName: new Uint8Array(9),
+      }),
+      signAgentFolderMoved(agent, {
+        ...common,
+        folderId,
+        parentId: newId("fld"),
+        fromParentId: from,
+      }),
+      signAgentFolderDeleted(agent, { ...common, folderId, parentId: null }),
     ];
     for (const action of actions) {
       const { envelope } = action.signed;
@@ -123,6 +138,10 @@ describe("the agents' envelopes", () => {
     expect(actions[0]?.signed.envelope.version).toBe(5);
     // a folder at the top level carries no parentId
     expect("parentId" in (actions[1]?.signed.envelope ?? {})).toBe(false);
+    // the parents an audit and an undo rely on are signed too
+    expect(actions[2]?.signed.envelope).toMatchObject({ parentId: from });
+    expect(actions[3]?.signed.envelope).toMatchObject({ fromParentId: from });
+    expect("parentId" in (actions[4]?.signed.envelope ?? {})).toBe(false);
   });
 
   it("refuses a signing time out of range, naming where it travels", () => {
@@ -133,6 +152,7 @@ describe("the agents' envelopes", () => {
         tokenId: world.tokenId,
         revision: 1,
         scopeSha256: "0".repeat(64),
+        prevScopeSha256: NO_PREVIOUS_AGENT_SCOPE_SHA256,
         route: "approveConnect",
         signedAt: "2020-01-01T00:00:00.000Z",
       }),
@@ -208,6 +228,7 @@ describe("agent scopes", () => {
       tokenId: world.tokenId,
       revision: 1,
       scopeSha256,
+      prevScopeSha256: NO_PREVIOUS_AGENT_SCOPE_SHA256,
       createdAt: fields.scopeSignedAt,
     };
     expect(
@@ -256,8 +277,66 @@ describe("agent scopes", () => {
         { signer: world.signer, trust },
         { ...change, permissions: ["notes.move"] },
       ),
-    ).toEqual({ status: "conflict", currentRevision: 1 });
+    ).toEqual({ status: "stale", floorRevision: 1 });
     expect(world.server.requests.length).toBe(sent);
+  });
+
+  it("chains each revision to the one before, so two scopes at one revision can't both count", async () => {
+    const world = new World();
+    await world.grantScope({ permissions: ["notes.delete"] });
+    const second = await world.grantScope({ permissions: [] });
+    if (second.status !== "saved") throw new Error(second.status);
+    const [first] = world.server.agentScopes;
+    if (first === undefined) throw new Error("no scope");
+    expect(second.verified.prevScopeSha256).toBe(first.envelope.scopeSha256);
+    const owner = {
+      ownerSigningPublicKey: world.account.signing.publicKey,
+      accountId: world.accountId,
+      workspaceId: world.workspaceId,
+      tokenId: world.tokenId,
+    };
+    // the owner led to sign another revision 2, over another base: a fork
+    const widened = {
+      access: "read-write" as const,
+      folderIds: [],
+      permissions: [...AGENT_PERMISSIONS],
+    };
+    const forged = await signAgentScopeRevision(world.signer, {
+      workspaceId: world.workspaceId,
+      tokenId: world.tokenId,
+      revision: 2,
+      scope: widened,
+      prevScopeSha256: "1".repeat(64),
+    });
+    const fork = {
+      envelope: forged.signed.envelope,
+      signature: forged.signature,
+      scope: widened,
+    } as SignedAgentScope;
+    expect(
+      await verifyAgentScope(fork, {
+        ...owner,
+        minRevision: 1,
+        floorScopeSha256: first.envelope.scopeSha256,
+      }),
+    ).toEqual({ ok: false, problem: "fork" });
+    expect(
+      await verifyAgentScope(fork, {
+        ...owner,
+        minRevision: 2,
+        floorScopeSha256: second.verified.scopeSha256,
+      }),
+    ).toEqual({ ok: false, problem: "fork" });
+    const read = (trust?: TrustState) =>
+      fetchTokenScopes(sessionApi(world), { ...owner, ...(trust === undefined ? {} : { trust }) });
+    world.server.tamper.scopes = (list) => [...list.slice(0, 1), fork];
+    expect((await read()).problem).toBe("fork");
+    // a device that verified the real revision 2 refuses the other one there too
+    delete world.server.tamper.scopes;
+    const trust = new TrustState(new MemoryTrustStorage());
+    expect((await read(trust)).problem).toBeNull();
+    world.server.tamper.scopes = (list) => [...list.slice(0, 1), fork];
+    expect((await read(trust)).problem).toBe("fork");
   });
 
   it("reads every revision, flagging a gap or a list below the device's floor", async () => {
@@ -451,6 +530,48 @@ describe("an agent's note delete", () => {
     expect(world.server.notes.get(noteId)?.versions).toHaveLength(4);
   });
 
+  it("opens a move proposal into and out of a folder that asks first", async () => {
+    const { world, web, cli, home, noteId } = await seeded(["notes.move"]);
+    const other = await folder(world, web, "Other");
+    const outOf = newId("note");
+    await web.engine.writeNote({
+      noteId: outOf,
+      folderId: other,
+      baseVersion: 0,
+      name: "b.md",
+      text: note("B"),
+    });
+    await web.engine.setAgentPolicy({
+      default: "direct",
+      folders: [{ folderId: other, mode: "review" }],
+      baseRevision: 0,
+    });
+    await cli.engine.pull();
+    const proposals = [
+      { noteId, from: home, to: other, name: "a.md", text: note("A") },
+      { noteId: outOf, from: other, to: home, name: "b.md", text: note("B") },
+    ];
+    for (const move of proposals) {
+      const write = {
+        noteId: move.noteId,
+        folderId: move.to,
+        baseVersion: 1,
+        name: move.name,
+        text: move.text,
+      };
+      expect((await cli.engine.writeAsAgent(write)).status).toBe("approval_required");
+      const proposed = await cli.engine.submitPending(write);
+      if (proposed.status !== "submitted") throw new Error(proposed.status);
+      // the base version is read in its own folder, not the destination
+      const review = await web.engine.readPending(proposed.pending.id);
+      expect(review).toMatchObject({
+        kind: "edit",
+        proposedName: move.name,
+        base: { folderId: move.from, version: 1 },
+      });
+    }
+  });
+
   it("needs notes.move to move a note, directly or as a proposal", async () => {
     const { world, web, cli, noteId, scopeRevision } = await seeded([]);
     const other = await folder(world, web, "Other");
@@ -553,6 +674,36 @@ describe("an agent's folder changes", () => {
     expect(
       await cli.engine.renameFolderAsAgent({ folderId: other, name: "Renamed", scopeRevision }),
     ).toMatchObject({ status: "approval_required", reason: "policy" });
+  });
+
+  it("refuses a folder history row whose parents differ from what the agent signed", async () => {
+    const { world, web, cli, home, scopeRevision } = await seeded(all);
+    const made = await cli.engine.createFolderAsAgent({
+      parentId: home,
+      name: "Kid",
+      scopeRevision,
+    });
+    if (made.status !== "saved") throw new Error(made.status);
+    await cli.engine.renameFolderAsAgent({
+      folderId: made.folder.id,
+      name: "Kid 2",
+      scopeRevision,
+    });
+    await cli.engine.moveFolderAsAgent({ folderId: made.folder.id, parentId: null, scopeRevision });
+    const before = await web.engine.readFolderEvents({ folderId: made.folder.id });
+    expect(before.map((entry) => entry.signature)).toEqual(["verified", "verified", "verified"]);
+    expect(before[2]?.event.signed?.envelope).toMatchObject({ fromParentId: home });
+    expect(before[1]?.event.signed?.envelope).toMatchObject({ parentId: home });
+    // a server that rewrites where the folder was, so an undo would put it elsewhere
+    const elsewhere = await folder(world, web, "Elsewhere");
+    for (const row of world.server.folderEvents) {
+      if (row.folderId === made.folder.id && row.action !== "created") row.parentBefore = elsewhere;
+    }
+    const after = await web.engine.readFolderEvents({ folderId: made.folder.id });
+    expect(after.map((entry) => entry.signature)).toEqual(["verified", "invalid", "invalid"]);
+    const moved = after[2];
+    if (moved === undefined) throw new Error("no event");
+    await expect(web.engine.undoAgentFolderEvent(moved)).rejects.toThrow(RequestValidationError);
   });
 
   it("undoes each folder change as the person's own, saying when it can't", async () => {

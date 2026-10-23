@@ -37,7 +37,9 @@ type OptionalField =
   | "publicKey"
   | "extensionId"
   | "scopeSha256"
-  | "scopeRevision";
+  | "prevScopeSha256"
+  | "scopeRevision"
+  | "fromParentId";
 
 /**
  * The signed envelope types and the fields each requires on top of type, accountId, workspaceId
@@ -108,7 +110,7 @@ export const SIGNED_ENVELOPE_TYPES = {
    * change; the API stores 1 or more) and `scopeSha256` (`agentScopeSha256` in
    * knowtarium/protocol of the access, folders and permissions).
    */
-  agent_scope: ["tokenId", "revision", "scopeSha256"],
+  agent_scope: ["tokenId", "revision", "scopeSha256", "prevScopeSha256"],
   /**
    * An agent's note delete, signed with the AGENT's key like `agent_edited`: the delete marker's
    * `version` (base + 1) of the note in `folderId`, the agent policy `revision` and
@@ -141,7 +143,10 @@ export const SIGNED_ENVELOPE_TYPES = {
     "policySha256",
     "scopeRevision",
   ],
-  /** An agent moves a folder (`parentId`, optional, is the destination). */
+  /**
+   * An agent moves a folder (`parentId`, optional, is the destination; `fromParentId`, optional,
+   * the parent it leaves).
+   */
   agent_folder_moved: ["tokenId", "folderId", "revision", "policySha256", "scopeRevision"],
   /** An agent deletes an empty folder. */
   agent_folder_deleted: ["tokenId", "folderId", "revision", "policySha256", "scopeRevision"],
@@ -164,8 +169,12 @@ export const SIGNED_ENVELOPE_OPTIONAL = {
   folder_moved: ["parentId"],
   /** The parent folder; absent means the top level. */
   agent_folder_created: ["parentId"],
-  /** The destination parent folder; absent means the top level. */
-  agent_folder_moved: ["parentId"],
+  /** The folder's parent; absent means the top level. */
+  agent_folder_renamed: ["parentId"],
+  /** The destination and the parent it leaves; absent means the top level. */
+  agent_folder_moved: ["parentId", "fromParentId"],
+  /** The folder's parent; absent means the top level. */
+  agent_folder_deleted: ["parentId"],
 } as const satisfies Partial<Record<keyof typeof SIGNED_ENVELOPE_TYPES, readonly OptionalField[]>>;
 
 /** Optional fields that come together: each group is all present or all absent. */
@@ -240,6 +249,10 @@ export interface SignedEnvelopeFields {
   readonly extensionId?: string;
   /** For "agent_scope": `agentScopeSha256` of the token's scope, lowercase hex. */
   readonly scopeSha256?: string;
+  /** For "agent_scope": the previous revision's `scopeSha256` (64 zeros at revision 1). */
+  readonly prevScopeSha256?: string;
+  /** For "agent_folder_moved": the parent the folder leaves; absent is the top level. */
+  readonly fromParentId?: string;
   /** For an agent's protocol 3 actions: the scope revision it acted under (0 or more). */
   readonly scopeRevision?: number;
   /** When it was signed, as `Date.prototype.toISOString()` writes it (UTC, milliseconds). */
@@ -337,7 +350,8 @@ function fieldProblem(key: string, value: unknown): string | undefined {
     key === "recipientsHash" ||
     key === "keyCommitment" ||
     key === "policySha256" ||
-    key === "scopeSha256"
+    key === "scopeSha256" ||
+    key === "prevScopeSha256"
   ) {
     return typeof value === "string" && SHA256_HEX.test(value)
       ? undefined

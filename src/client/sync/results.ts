@@ -249,5 +249,5 @@ export type AgentActionAudit =
   | {
       readonly verdict: "unchecked";
       readonly reason:
-        "gap" | "below_floor" | "unknown_folder" | "not_agent_action" | "other_token";
+        "gap" | "fork" | "below_floor" | "unknown_folder" | "not_agent_action" | "other_token";
     };

@@ -34,6 +34,7 @@ import {
   type AgentWriteMode,
   canonicalEnvelope,
   MISSING_AGENT_POLICY_SHA256,
+  NO_PREVIOUS_AGENT_SCOPE_SHA256,
   canonicalJson,
   ENVELOPE_SIGNING_PREFIX,
   envelopeSigningText,
@@ -395,7 +396,7 @@ describe("agent policy hashes", () => {
         vector.fields.type === "agent_deleted" ||
         vector.fields.type.startsWith("agent_folder_"),
     );
-    expect(signedByAgent.length).toBe(8);
+    expect(signedByAgent.length).toBe(9);
     for (const signed of signedByAgent) {
       const fields = signed.fields as Record<string, unknown>;
       expect(toHex(fromBase64Url(vouched)), signed.name).toBe(signed.publicKey);
@@ -449,6 +450,11 @@ describe("agent scope hashes", () => {
     expect(vectors.agentScopeHashes.map((vector) => vector.scopeSha256)).toContain(
       (signed?.fields as Record<string, unknown>)["scopeSha256"],
     );
+    // revision 2, chained to the scope of revision 1
+    expect((signed?.fields as Record<string, unknown>)["prevScopeSha256"]).toBe(
+      vectors.agentScopeHashes[0]?.scopeSha256,
+    );
+    expect(NO_PREVIOUS_AGENT_SCOPE_SHA256).toBe("0".repeat(64));
   });
 
   it("refuses a malformed input instead of hashing it", async () => {

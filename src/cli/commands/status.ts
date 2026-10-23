@@ -55,6 +55,7 @@ async function scopeReport(
     workspaceId: connection.workspaceId,
     tokenId: connection.tokenId,
     minRevision: floor?.revision ?? 0,
+    ...(floor === undefined ? {} : { floorScopeSha256: floor.signed.envelope.scopeSha256 }),
   });
   if (!checked.ok) {
     return {

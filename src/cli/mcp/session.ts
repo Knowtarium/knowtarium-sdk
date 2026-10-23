@@ -107,6 +107,8 @@ export interface SessionScope {
   readonly permissions: readonly AgentPermission[];
   /** Whether it comes from the owner's signed scope, verified. */
   readonly verified: boolean;
+  /** That signed scope's `scopeSha256` (null at revision 0): the next revision must chain to it. */
+  readonly scopeSha256: string | null;
   /**
    * Why the scope the server served was refused (the last verified one stays in force): a
    * rollback below the floor, a bad signature and the like. Null when it was accepted.
@@ -122,6 +124,7 @@ function connectScope(connection: Connection): SessionScope {
     folderIds: connection.folderIds,
     permissions: [],
     verified: false,
+    scopeSha256: null,
     problem: null,
   };
 }
@@ -134,6 +137,7 @@ function verifiedScope(floor: Pick<AgentScopeFloor, "revision" | "signed">): Ses
     folderIds: floor.signed.scope.folderIds,
     permissions: floor.signed.scope.permissions,
     verified: true,
+    scopeSha256: floor.signed.envelope.scopeSha256,
     problem: null,
   };
 }
@@ -437,6 +441,8 @@ export class WorkspaceSession {
       workspaceId: this.workspaceId,
       tokenId: this.connection.tokenId,
       minRevision: floor,
+      // the scope kept at the floor: the same one again, or the next chained to it
+      ...(before.scopeSha256 === null ? {} : { floorScopeSha256: before.scopeSha256 }),
     });
     if (!checked.ok) {
       this.setScope({ ...before, problem: checked.problem });

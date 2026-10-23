@@ -68,6 +68,12 @@ export const AgentScopeSha256 = z
  */
 export const AGENT_PERMISSIONS_MIN_CLI_VERSION = "0.1.4";
 
+/**
+ * The `prevScopeSha256` of revision 1, which has no revision before it: 64 zeros (no scope text
+ * hashes to it).
+ */
+export const NO_PREVIOUS_AGENT_SCOPE_SHA256 = "0".repeat(64);
+
 /** Domain tag of a scope hash (`agentScopeSha256`). */
 export const AGENT_SCOPE_HASH_TAG = "knowtarium-agent-scope-v1\n";
 

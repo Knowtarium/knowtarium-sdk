@@ -58,9 +58,10 @@ function expectedType(action: FolderEventAction, byAgent: boolean): SignedAction
 
 /**
  * How far to trust a folder event: its envelope must be the type its action and author call for,
- * name this folder (and for a create or move its new parent, for a create or rename the hash of
- * its new encrypted name), and verify under the owner's key (a person's) or the agent's vouched
- * key for the token the row names (an agent's).
+ * name this folder (and for a create or move its new parent, for an agent's move the parent it
+ * left and for an agent's rename or delete its parent, for a create or rename the hash of its new
+ * encrypted name), and verify under the owner's key (a person's) or the agent's vouched key for
+ * the token the row names (an agent's).
  */
 export function folderEventSignature(
   event: FolderEvent,
@@ -78,6 +79,22 @@ export function folderEventSignature(
   if (
     (event.action === "created" || event.action === "restored" || event.action === "moved") &&
     (fields["parentId"] ?? null) !== event.parentAfter
+  ) {
+    return "invalid";
+  }
+  // an agent signs the parents too (protocol 3): the parent it left, the parent it renamed or
+  // deleted the folder under
+  if (
+    byAgent &&
+    event.action === "moved" &&
+    (fields["fromParentId"] ?? null) !== event.parentBefore
+  ) {
+    return "invalid";
+  }
+  if (
+    byAgent &&
+    (event.action === "renamed" || event.action === "deleted") &&
+    (fields["parentId"] ?? null) !== event.parentBefore
   ) {
     return "invalid";
   }

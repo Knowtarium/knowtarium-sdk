@@ -4,6 +4,7 @@ import {
   type AgentScopeBody,
   agentScopeSha256,
   type AgentToken,
+  NO_PREVIOUS_AGENT_SCOPE_SHA256,
   routes,
   type SignedAgentScope,
   SignedAgentScope as SignedAgentScopeSchema,
@@ -46,6 +47,8 @@ export interface VerifiedAgentScope {
   /** The scope, with `permissions` in `AgentPermission` order. */
   readonly scope: AgentScopeBody;
   readonly scopeSha256: string;
+  /** The revision before's `scopeSha256` (`NO_PREVIOUS_AGENT_SCOPE_SHA256` at revision 1). */
+  readonly prevScopeSha256: string;
   /** When the owner signed it (the envelope's `createdAt`). */
   readonly signedAt: string;
   readonly signed: SignedAgentScope;
@@ -66,7 +69,12 @@ export type AgentScopeProblem =
   /** The owner's signature doesn't verify. */
   | "bad_signature"
   /** A revision below the floor, or none after one was seen. */
-  | "rollback";
+  | "rollback"
+  /**
+   * Another owner-signed scope than the one the caller kept at that revision, or one that doesn't
+   * continue it (`prevScopeSha256`), or a revision 1 that claims a previous one.
+   */
+  | "fork";
 
 export type AgentScopeVerification =
   | {
@@ -91,13 +99,21 @@ export interface AgentScopeTrust {
    * mark); 0 when none. A lower revision, or no signed scope at all after one, is `rollback`.
    */
   readonly minRevision?: number;
+  /**
+   * The `scopeSha256` of the scope verified at `minRevision`, when the caller kept it: a scope at
+   * that revision must be the same one, and one at the next revision must chain to it
+   * (`prevScopeSha256`), else `fork`.
+   */
+  readonly floorScopeSha256?: string;
 }
 
 /**
  * Checks a token's signed scope (`AgentToken.scope`, or one entry of `listTokenScopes`): the
  * owner's signature under the trusted key, the token, workspace and account it names, the hash
- * against the scope it carries, and the revision against the floor. A missing scope (revision 0)
- * passes only while the floor is 0.
+ * against the scope it carries, the chain (revision 1 has no previous scope; with
+ * `floorScopeSha256`, the same scope at the floor's revision and one chained to it at the next),
+ * and the revision against the floor. A missing scope (revision 0) passes only while the floor is
+ * 0.
  */
 export async function verifyAgentScope(
   signed: SignedAgentScope | null | undefined,
@@ -108,8 +124,9 @@ export async function verifyAgentScope(
     throw new TypeError("verifyAgentScope: minRevision must be a safe integer of 0 or more");
   }
   const refuse = (problem: AgentScopeProblem) => ({ ok: false, problem }) as const;
-  if (signed == null)
+  if (signed == null) {
     return floor > 0 ? refuse("rollback") : { ok: true, revision: 0, verified: null };
+  }
   const parsed = SignedAgentScopeSchema.safeParse(signed);
   if (!parsed.success) return refuse("malformed");
   const { envelope, scope } = parsed.data;
@@ -132,6 +149,17 @@ export async function verifyAgentScope(
   });
   if (!ok) return refuse("bad_signature");
   if (envelope.revision < floor) return refuse("rollback");
+  // the chain: revision 1 starts it; next to a scope this caller kept, it must continue it
+  if (envelope.revision === 1 && envelope.prevScopeSha256 !== NO_PREVIOUS_AGENT_SCOPE_SHA256) {
+    return refuse("fork");
+  }
+  const kept = trust.floorScopeSha256;
+  if (kept !== undefined && floor > 0) {
+    if (envelope.revision === floor && hash !== kept) return refuse("fork");
+    if (envelope.revision === floor + 1 && envelope.prevScopeSha256 !== kept) {
+      return refuse("fork");
+    }
+  }
   return {
     ok: true,
     revision: envelope.revision,
@@ -139,6 +167,7 @@ export async function verifyAgentScope(
       revision: envelope.revision,
       scope: { ...scope, permissions: sortAgentPermissions(scope.permissions) },
       scopeSha256: hash,
+      prevScopeSha256: envelope.prevScopeSha256,
       signedAt: envelope.createdAt,
       signed: parsed.data,
     },
@@ -147,7 +176,9 @@ export async function verifyAgentScope(
 
 /**
  * The owner signs a token's scope at `revision` (1 at connect, then `baseRevision + 1`): the
- * `agent_scope` over `agentScopeSha256` of `scope`. Returns the signed action and the hash.
+ * `agent_scope` over `agentScopeSha256` of `scope`, chained to the revision before
+ * (`prevScopeSha256`; `NO_PREVIOUS_AGENT_SCOPE_SHA256` at revision 1, the default). Returns the
+ * signed action and the hash.
  */
 export async function signAgentScopeRevision(
   signer: Signer,
@@ -156,6 +187,7 @@ export async function signAgentScopeRevision(
     readonly tokenId: string;
     readonly revision: number;
     readonly scope: AgentScopeChoice;
+    readonly prevScopeSha256?: string;
     readonly route?: AgentScopeRoute;
     readonly signedAt?: string;
   },
@@ -166,6 +198,7 @@ export async function signAgentScopeRevision(
     tokenId: details.tokenId,
     revision: details.revision,
     scopeSha256,
+    prevScopeSha256: details.prevScopeSha256 ?? NO_PREVIOUS_AGENT_SCOPE_SHA256,
     ...(details.route === undefined ? {} : { route: details.route }),
     ...(details.signedAt === undefined ? {} : { signedAt: details.signedAt }),
   });
@@ -213,16 +246,26 @@ export type UpdateTokenScopeResult =
       /** The token's scope changed since `baseRevision`: read the token again and sign anew. */
       readonly status: "conflict";
       readonly currentRevision: number;
+    }
+  | {
+      /**
+       * `baseRevision` is below a revision this device already verified (`floorRevision`):
+       * nothing was signed or sent, since signing over it would fork that revision. Read the
+       * token again.
+       */
+      readonly status: "stale";
+      readonly floorRevision: number;
     };
 
 /**
  * The owner changes a token's access, folders and permissions together (session), signing the
- * next scope revision (`baseRevision + 1`). The server keeps each revision's hash, so sending the
- * same change again after a lost answer (or a save that stopped halfway) succeeds rather than
- * conflicting. The answer must hold that revision with this hash, signed by the owner, else
- * `untrusted_signature`; the revision then becomes this device's floor for the token (`trust`).
- * A `baseRevision` below that floor answers `conflict` without signing anything, since signing
- * over it would fork a revision this device already saw.
+ * next scope revision (`baseRevision + 1`), chained to the scope at `baseRevision`, which it
+ * reads and verifies first (`fetchTokenScopes`: a newer revision there answers `conflict`, a list
+ * that doesn't verify whole throws `untrusted_signature`). The server keeps each revision's hash,
+ * so sending the same change again after a lost answer (or a save that stopped halfway) succeeds
+ * rather than conflicting. The answer must hold that revision with this hash, signed by the
+ * owner, else `untrusted_signature`; the revision then becomes this device's floor for the token
+ * (`trust`). A `baseRevision` below that floor answers `stale` without signing anything.
  */
 export async function updateTokenScope(
   api: ApiClient,
@@ -240,13 +283,37 @@ export async function updateTokenScope(
   const scope = { access: change.access, folderIds: [...change.folderIds], permissions };
   // an edit of a revision older than one this device verified: signing it would fork the next
   const seen = (await flow.trust?.agentScopeRevision(change.tokenId)) ?? 0;
-  if (change.baseRevision < seen) return { status: "conflict", currentRevision: seen };
+  if (change.baseRevision < seen) return { status: "stale", floorRevision: seen };
+  const owner = {
+    ownerSigningPublicKey: signer.signing.publicKey,
+    accountId: signer.accountId,
+    workspaceId: change.workspaceId,
+    tokenId: change.tokenId,
+  };
+  // the scope the new revision continues, read and verified (none before revision 1)
+  let prevScopeSha256 = NO_PREVIOUS_AGENT_SCOPE_SHA256;
+  if (change.baseRevision > 0) {
+    const listed = await fetchTokenScopes(api, {
+      ...owner,
+      ...(flow.trust === undefined ? {} : { trust: flow.trust }),
+    });
+    const newest = listed.scopes.at(-1)?.revision ?? 0;
+    if (listed.problem === null && newest > change.baseRevision) {
+      return { status: "conflict", currentRevision: newest };
+    }
+    const base = listed.scopes.find((each) => each.revision === change.baseRevision);
+    if (listed.problem !== null || base === undefined) {
+      throw new VaultError("untrusted_signature", "the agent's scope revisions don't verify");
+    }
+    prevScopeSha256 = base.scopeSha256;
+  }
   const revision = change.baseRevision + 1;
   const action = await signAgentScopeRevision(signer, {
     workspaceId: change.workspaceId,
     tokenId: change.tokenId,
     revision,
     scope,
+    prevScopeSha256,
     ...(change.signedAt === undefined ? {} : { signedAt: change.signedAt }),
   });
   let token: AgentToken;
@@ -272,24 +339,24 @@ export async function updateTokenScope(
         detail.code === "scope_conflict" ? detail.currentRevision : change.baseRevision,
     };
   }
-  // exactly this revision with this hash, signed by the owner (an earlier attempt's signature of
-  // the same scope counts: the hash covers the scope, not the signing time)
+  // exactly this revision with this hash, chained to the base, signed by the owner (an earlier
+  // attempt's signature of the same scope counts: the hash covers the scope, not the time)
   const result = await verifyAgentScope(token.scope, {
-    ownerSigningPublicKey: signer.signing.publicKey,
-    accountId: signer.accountId,
-    workspaceId: change.workspaceId,
-    tokenId: change.tokenId,
+    ...owner,
+    minRevision: change.baseRevision,
+    ...(change.baseRevision > 0 ? { floorScopeSha256: prevScopeSha256 } : {}),
   });
   if (
     !result.ok ||
     result.verified === null ||
     result.revision !== revision ||
     result.verified.scopeSha256 !== action.scopeSha256 ||
+    result.verified.prevScopeSha256 !== prevScopeSha256 ||
     token.scopeRevision !== revision
   ) {
     throw new VaultError("untrusted_signature", "the server stored another agent scope");
   }
-  await flow.trust?.acceptAgentScopeRevision(change.tokenId, revision);
+  await flow.trust?.acceptAgentScopeRevision(change.tokenId, revision, action.scopeSha256);
   return { status: "saved", token, verified: result.verified };
 }
 
@@ -298,40 +365,60 @@ export interface TokenScopes {
   /** The revisions that verified, oldest first. */
   readonly scopes: readonly VerifiedAgentScope[];
   /**
-   * Null when the list is whole: every revision from 1 to the newest, none below the device's
-   * floor. Otherwise why it can't be trusted whole: `gap` (a revision missing, or one that didn't
-   * verify), `below_floor` (the newest is below a revision this device saw).
+   * Null when the list is whole: every revision from 1 to the newest, each chained to the one
+   * before, none below the device's floor. Otherwise why it can't be trusted whole: `gap` (a
+   * revision missing, or one that didn't verify), `fork` (two scopes at one revision, a broken
+   * chain, or another scope than this device verified at its floor), `below_floor` (the newest
+   * is below a revision this device saw).
    */
-  readonly problem: "gap" | "below_floor" | null;
+  readonly problem: "gap" | "fork" | "below_floor" | null;
 }
 
 /**
  * A token's signed scope revisions (`listTokenScopes`; the owner's session, or the agent itself),
- * each verified under the owner's key. A revision that doesn't verify is left out and reads as a
- * gap; a list stopping below the device's floor (`trust`) is `below_floor`. A whole list raises
- * the floor to its newest revision.
+ * each verified under the owner's key and chained to the one before. A revision that doesn't
+ * verify is left out and reads as a gap; two at one revision or a broken chain is a `fork`; a
+ * list stopping below the device's floor (`trust`) is `below_floor`. A whole list raises the
+ * floor to its newest revision (with its hash).
  */
 export async function fetchTokenScopes(
   api: ApiClient,
-  details: Omit<AgentScopeTrust, "minRevision"> & { readonly trust?: TrustState },
+  details: Omit<AgentScopeTrust, "minRevision" | "floorScopeSha256"> & {
+    readonly trust?: TrustState;
+  },
 ): Promise<TokenScopes> {
   const { data } = await api.call(routes.listTokenScopes, {
     params: { tokenId: details.tokenId },
   });
+  const { trust, ...owner } = details;
   const scopes: VerifiedAgentScope[] = [];
   for (const signed of data.scopes) {
-    const result = await verifyAgentScope(signed, details);
+    const result = await verifyAgentScope(signed, owner);
     if (result.ok && result.verified !== null) scopes.push(result.verified);
   }
   scopes.sort((a, b) => a.revision - b.revision);
-  const unique = scopes.filter((scope, index) => scopes[index - 1]?.revision !== scope.revision);
+  const floor = (await trust?.agentScopeRevision(details.tokenId)) ?? 0;
+  const pinned = await trust?.agentScopeSha256(details.tokenId);
+  const twice = scopes.some((scope, index) => scopes[index - 1]?.revision === scope.revision);
+  const chained = scopes.every(
+    (scope, index) =>
+      scope.prevScopeSha256 ===
+      (index === 0 ? NO_PREVIOUS_AGENT_SCOPE_SHA256 : scopes[index - 1]?.scopeSha256),
+  );
+  const atFloor = scopes.find((scope) => scope.revision === floor);
+  if (twice || (pinned !== undefined && atFloor !== undefined && atFloor.scopeSha256 !== pinned)) {
+    return { scopes, problem: "fork" };
+  }
+  const newest = scopes.at(-1)?.revision ?? 0;
+  if (newest < floor) return { scopes, problem: "below_floor" };
   const whole =
-    unique.length === data.scopes.length &&
-    unique.every((scope, index) => scope.revision === index + 1);
-  const newest = unique.at(-1)?.revision ?? 0;
-  const floor = (await details.trust?.agentScopeRevision(details.tokenId)) ?? 0;
-  if (newest < floor) return { scopes: unique, problem: "below_floor" };
-  if (!whole) return { scopes: unique, problem: "gap" };
-  if (newest > 0) await details.trust?.acceptAgentScopeRevision(details.tokenId, newest);
-  return { scopes: unique, problem: null };
+    scopes.length === data.scopes.length &&
+    scopes.every((scope, index) => scope.revision === index + 1);
+  if (!whole) return { scopes, problem: "gap" };
+  if (!chained) return { scopes, problem: "fork" };
+  const last = scopes.at(-1);
+  if (last !== undefined) {
+    await trust?.acceptAgentScopeRevision(details.tokenId, last.revision, last.scopeSha256);
+  }
+  return { scopes, problem: null };
 }

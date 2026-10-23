@@ -34,6 +34,15 @@ export type UndoFolderResult =
   | { readonly status: "moved_on" | "not_empty" }
   | { readonly status: "parent_missing"; readonly parentId: FolderId };
 
+/** A parent an agent's folder change signed (null: the top level). */
+function signedParent(
+  entry: FolderEventEntry,
+  field: "parentId" | "fromParentId",
+): FolderId | null {
+  const fields = entry.event.signed?.envelope as Partial<Record<string, string>> | undefined;
+  return (fields?.[field] ?? null) as FolderId | null;
+}
+
 /** The workspace's live folders by ID (a person's session sees every one). */
 async function liveFolders(context: SyncContext): Promise<Map<string, Folder>> {
   const { data } = await context.api.call(routes.listFolders, {
@@ -103,10 +112,12 @@ export async function undoAgentFolderEvent(
       });
     }
     case "moved": {
+      // the parents the agent signed, never the server's word
+      const from = signedParent(entry, "fromParentId");
       if (current === undefined) return { status: "moved_on" };
-      if (current.parentId === event.parentBefore) return saved(current, null);
-      if (current.parentId !== event.parentAfter) return { status: "moved_on" };
-      const parentId = event.parentBefore;
+      if (current.parentId === from) return saved(current, null);
+      if (current.parentId !== signedParent(entry, "parentId")) return { status: "moved_on" };
+      const parentId = from;
       if (parentId !== null && !folders.has(parentId)) {
         return { status: "parent_missing", parentId };
       }
@@ -120,7 +131,7 @@ export async function undoAgentFolderEvent(
     case "deleted": {
       // revived already (an earlier attempt, or by someone else)
       if (current !== undefined) return saved(current, null);
-      const parentId = event.parentBefore;
+      const parentId = signedParent(entry, "parentId");
       if (parentId !== null && !folders.has(parentId)) {
         return { status: "parent_missing", parentId };
       }

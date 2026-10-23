@@ -14,6 +14,7 @@ import {
   type AccountId,
   type AgentPermission,
   agentScopeSha256,
+  NO_PREVIOUS_AGENT_SCOPE_SHA256,
   type AgentToken,
   type Folder,
   type FolderEvent,
@@ -2326,16 +2327,22 @@ export class FakeServer {
         };
         const encName = (body as { encName?: string }).encName;
         const envelope: SignedEnvelopeFields = deleting
-          ? { type: "agent_folder_deleted", ...agent }
+          ? {
+              type: "agent_folder_deleted",
+              ...agent,
+              ...(parentId === null ? {} : { parentId }),
+            }
           : moving
             ? {
                 type: "agent_folder_moved",
                 ...agent,
                 ...(destination === null ? {} : { parentId: destination }),
+                ...(parentId === null ? {} : { fromParentId: parentId }),
               }
             : {
                 type: "agent_folder_renamed",
                 ...agent,
+                ...(parentId === null ? {} : { parentId }),
                 ciphertextSha256: ciphertextSha256(fromBase64Url(encName ?? "")),
               };
         this.verifyAgent(envelope, body.signature);
@@ -2397,6 +2404,12 @@ export class FakeServer {
       tokenId: this.options.tokenId,
       revision: next,
       scopeSha256,
+      // chained to the revision it replaces, as stored
+      prevScopeSha256:
+        body.baseRevision === 0
+          ? NO_PREVIOUS_AGENT_SCOPE_SHA256
+          : (this.agentScopes.find((stored) => stored.envelope.revision === body.baseRevision)
+              ?.envelope.scopeSha256 ?? NO_PREVIOUS_AGENT_SCOPE_SHA256),
       createdAt: body.signedAt,
     };
     this.verify(envelope, body.signature);
@@ -2440,6 +2453,7 @@ export class FakeServer {
         tokenId: body.tokenId,
         revision: 1,
         scopeSha256,
+        prevScopeSha256: NO_PREVIOUS_AGENT_SCOPE_SHA256,
         createdAt: body.scopeSignedAt ?? "",
       };
       this.verify(envelope, body.scopeSignature);

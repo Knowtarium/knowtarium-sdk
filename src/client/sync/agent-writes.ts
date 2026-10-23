@@ -53,7 +53,7 @@ import {
   withCurrentKey,
   withKeys,
 } from "./context.js";
-import { fetchFolderEvents } from "./folder-events.js";
+import { fetchFolderEvents, type FolderEventEntry } from "./folder-events.js";
 import { acceptNote, checkStoredWrite, fetchEvents } from "./notes.js";
 import type {
   AgentAction,
@@ -849,6 +849,7 @@ export async function renameFolderAsAgent(
         const action = signAgentFolderRenamed(signer, {
           workspaceId,
           folderId: change.folderId,
+          parentId: parent,
           encName: fromBase64Url(encName),
           ...revisions,
           ...(change.signedAt === undefined ? {} : { signedAt: change.signedAt }),
@@ -897,6 +898,7 @@ export async function moveFolderAsAgent(
         workspaceId,
         folderId: change.folderId,
         parentId: change.parentId,
+        fromParentId: parent,
         ...revisions,
         ...(change.signedAt === undefined ? {} : { signedAt: change.signedAt }),
       });
@@ -946,6 +948,7 @@ export async function deleteFolderAsAgent(
       const action = signAgentFolderDeleted(signer, {
         workspaceId,
         folderId: change.folderId,
+        parentId: parent,
         ...revisions,
         ...(change.signedAt === undefined ? {} : { signedAt: change.signedAt }),
       });
@@ -1055,35 +1058,45 @@ function reaches(
   return ancestry.some((folder) => folder.unknown === true) ? null : false;
 }
 
+/** The parents an agent's folder change signed: `parentId` and `fromParentId` (null: the top level). */
+function signedParents(entry: FolderEventEntry): {
+  readonly parentId: string | null;
+  readonly fromParentId: string | null;
+} {
+  const fields = entry.event.signed?.envelope as
+    { readonly parentId?: string; readonly fromParentId?: string } | undefined;
+  return { parentId: fields?.parentId ?? null, fromParentId: fields?.fromParentId ?? null };
+}
+
 /**
- * The folders an action touched, for the scope's reach (the folder, a create's parent, both
- * parents of a move) and for the modes table (every folder whose contents change: a note
- * delete's folder, a create's parent, a rename's or a folder delete's folder and parent, a move's
- * folder and both parents). Null is the top level; `modes` is null when a parent isn't known.
+ * The folders an action touched, from what the agent signed (never the server's word): for the
+ * scope's reach (a note delete's folder, a create's parent, a revive's own folder, a rename's or
+ * a folder delete's folder, a move's folder and both parents) and for the modes table (every
+ * folder whose contents change: a note delete's folder, a create's or revive's parent, a rename's
+ * or a folder delete's folder and parent, a move's folder and both parents). Null is the top
+ * level.
  */
-function touchedBy(
-  action: AgentAction,
-  lookup: AgentPolicyFolderLookup,
-): { readonly reach: (string | null)[]; readonly modes: (string | null)[] | null } {
+function touchedBy(action: AgentAction): {
+  readonly reach: (string | null)[];
+  readonly modes: (string | null)[];
+} {
   if (action.kind !== "folder") return { reach: [action.folderId], modes: [action.folderId] };
   const { event } = action.entry;
+  const { parentId, fromParentId } = signedParents(action.entry);
   switch (event.action) {
     case "created":
+      return { reach: [parentId], modes: [parentId] };
     case "restored":
-      return { reach: [event.folderId, event.parentAfter], modes: [event.parentAfter] };
+      // a revive needs the scope on the deleted folder's own place, never another
+      return { reach: [event.folderId], modes: [parentId] };
     case "moved":
       return {
-        reach: [event.folderId, event.parentBefore, event.parentAfter],
-        modes: [event.folderId, event.parentBefore, event.parentAfter],
+        reach: [event.folderId, fromParentId, parentId],
+        modes: [event.folderId, fromParentId, parentId],
       };
     case "renamed":
-    case "deleted": {
-      // the row names the parent; a live folder's own record agrees
-      const parent =
-        event.parentBefore ??
-        (lookup(event.folderId) === undefined ? null : (lookup(event.folderId)?.parentId ?? null));
-      return { reach: [event.folderId], modes: [event.folderId, parent] };
-    }
+    case "deleted":
+      return { reach: [event.folderId], modes: [event.folderId, parentId] };
   }
 }
 
@@ -1138,12 +1151,10 @@ export async function auditAgentAction(
   }
   if (!agentScopeAllows(named.scope, permission)) return notAllowed("permission");
   const lookup = options.folders ?? knownFolders(context);
-  const touched = touchedBy(action, lookup);
+  const touched = touchedBy(action);
   const reach = touched.reach.map((folderId) => reaches(named.scope, folderId, lookup));
   if (reach.includes(false)) return notAllowed("folders");
-  if (reach.includes(null) || touched.modes === null) {
-    return { verdict: "unchecked", reason: "unknown_folder" };
-  }
+  if (reach.includes(null)) return { verdict: "unchecked", reason: "unknown_folder" };
   const audited = await auditPolicyRevision(context, fields, options);
   if (audited.audit.status !== "consistent") {
     return { ...notAllowed("policy"), policy: audited.audit };

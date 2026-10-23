@@ -509,21 +509,51 @@ export class TrustState {
 
   /** The highest scope revision this device verified for an agent token (0 before any). */
   async agentScopeRevision(tokenId: string): Promise<number> {
-    return (await this.read<number>(`token/${tokenId}/agent-scope`)) ?? 0;
+    return (await this.agentScopeMark(tokenId)).revision;
+  }
+
+  /** The `scopeSha256` this device verified at that revision, when it kept it. */
+  async agentScopeSha256(tokenId: string): Promise<string | undefined> {
+    return (await this.agentScopeMark(tokenId)).scopeSha256;
+  }
+
+  private async agentScopeMark(
+    tokenId: string,
+  ): Promise<{ readonly revision: number; readonly scopeSha256?: string }> {
+    const mark = await this.read<number | { revision: number; scopeSha256?: string }>(
+      `token/${tokenId}/agent-scope`,
+    );
+    return typeof mark === "number" ? { revision: mark } : (mark ?? { revision: 0 });
   }
 
   /**
-   * Accepts a verified `agent_scope` revision of an agent token (protocol 3), refusing one below
-   * the highest this device verified (`rollback`): a server can't show an older scope of the
-   * token, nor a list of its revisions that stops below one seen. The same revision again is
-   * fine.
+   * Accepts a verified `agent_scope` revision of an agent token (protocol 3), with its
+   * `scopeSha256`: one below the highest this device verified is a `rollback` (a server can't
+   * show an older scope of the token, nor a list of its revisions that stops below one seen), and
+   * another scope at that very revision is `untrusted_signature` (two owner-signed scopes at one
+   * revision: a fork). The same revision and hash again is fine.
    */
-  acceptAgentScopeRevision(tokenId: string, revision: number): Promise<void> {
+  acceptAgentScopeRevision(tokenId: string, revision: number, scopeSha256?: string): Promise<void> {
     return this.exclusive(async () => {
       const key = `token/${tokenId}/agent-scope`;
-      const seen = (await this.read<number>(key)) ?? 0;
-      if (revision < seen) throw new VaultError("rollback", "an older agent scope than one seen");
-      if (revision > seen) await this.write(key, revision);
+      const seen = await this.agentScopeMark(tokenId);
+      if (revision < seen.revision) {
+        throw new VaultError("rollback", "an older agent scope than one seen");
+      }
+      if (
+        revision === seen.revision &&
+        seen.scopeSha256 !== undefined &&
+        scopeSha256 !== undefined &&
+        scopeSha256 !== seen.scopeSha256
+      ) {
+        throw new VaultError("untrusted_signature", "another agent scope at a revision seen");
+      }
+      if (
+        revision > seen.revision ||
+        (scopeSha256 !== undefined && seen.scopeSha256 === undefined)
+      ) {
+        await this.write(key, { revision, ...(scopeSha256 === undefined ? {} : { scopeSha256 }) });
+      }
     });
   }
 

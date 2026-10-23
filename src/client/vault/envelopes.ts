@@ -551,6 +551,11 @@ export function signAgentScope(
     readonly tokenId: string;
     readonly revision: number;
     readonly scopeSha256: string;
+    /**
+     * The previous revision's `scopeSha256` (`NO_PREVIOUS_AGENT_SCOPE_SHA256` at revision 1):
+     * the chain that keeps two scopes at one revision from both counting.
+     */
+    readonly prevScopeSha256: string;
     /** The request the signature goes in (for errors); defaults to `updateTokenScope`. */
     readonly route?: AgentScopeRoute;
   } & SigningTime,
@@ -568,6 +573,7 @@ export function signAgentScope(
       tokenId: details.tokenId,
       revision: details.revision,
       scopeSha256: details.scopeSha256,
+      prevScopeSha256: details.prevScopeSha256,
     },
     signedAt,
   );
@@ -717,12 +723,16 @@ export function signAgentFolderCreated(
   );
 }
 
-/** `agent_folder_renamed` for `renameFolderAsAgent`, over the new encrypted name. */
+/**
+ * `agent_folder_renamed` for `renameFolderAsAgent`, over the new encrypted name, naming the
+ * folder's parent (null: the top level).
+ */
 export function signAgentFolderRenamed(
   agent: AgentSigner,
   details: {
     readonly workspaceId: string;
     readonly folderId: string;
+    readonly parentId: string | null;
     /** The new encrypted name's bytes (the decoded `encName`). */
     readonly encName: Uint8Array;
   } & AgentActionRevisions &
@@ -735,6 +745,7 @@ export function signAgentFolderRenamed(
       type: "agent_folder_renamed",
       tokenId: agent.tokenId,
       folderId: details.folderId,
+      ...(details.parentId === null ? {} : { parentId: details.parentId }),
       ciphertextSha256: ciphertextSha256(details.encName),
       ...revisionsOf(details),
     },
@@ -742,8 +753,37 @@ export function signAgentFolderRenamed(
   );
 }
 
-/** `agent_folder_moved` for `moveFolderAsAgent`; `parentId` null moves it to the top level. */
+/**
+ * `agent_folder_moved` for `moveFolderAsAgent`, from `fromParentId` to `parentId` (null: the top
+ * level).
+ */
 export function signAgentFolderMoved(
+  agent: AgentSigner,
+  details: {
+    readonly workspaceId: string;
+    readonly folderId: string;
+    readonly parentId: string | null;
+    readonly fromParentId: string | null;
+  } & AgentActionRevisions &
+    SigningTime,
+): SignedAction {
+  return signAsAgent(
+    agent,
+    details.workspaceId,
+    {
+      type: "agent_folder_moved",
+      tokenId: agent.tokenId,
+      folderId: details.folderId,
+      ...(details.parentId === null ? {} : { parentId: details.parentId }),
+      ...(details.fromParentId === null ? {} : { fromParentId: details.fromParentId }),
+      ...revisionsOf(details),
+    },
+    details.signedAt,
+  );
+}
+
+/** `agent_folder_deleted` for `deleteFolderAsAgent`, naming its parent (null: the top level). */
+export function signAgentFolderDeleted(
   agent: AgentSigner,
   details: {
     readonly workspaceId: string;
@@ -756,29 +796,10 @@ export function signAgentFolderMoved(
     agent,
     details.workspaceId,
     {
-      type: "agent_folder_moved",
-      tokenId: agent.tokenId,
-      folderId: details.folderId,
-      ...(details.parentId === null ? {} : { parentId: details.parentId }),
-      ...revisionsOf(details),
-    },
-    details.signedAt,
-  );
-}
-
-/** `agent_folder_deleted` for `deleteFolderAsAgent`. */
-export function signAgentFolderDeleted(
-  agent: AgentSigner,
-  details: { readonly workspaceId: string; readonly folderId: string } & AgentActionRevisions &
-    SigningTime,
-): SignedAction {
-  return signAsAgent(
-    agent,
-    details.workspaceId,
-    {
       type: "agent_folder_deleted",
       tokenId: agent.tokenId,
       folderId: details.folderId,
+      ...(details.parentId === null ? {} : { parentId: details.parentId }),
       ...revisionsOf(details),
     },
     details.signedAt,

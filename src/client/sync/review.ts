@@ -78,9 +78,9 @@ export async function readPending(
   const { pending } = data;
   if (pending.kind === "delete") {
     // a delete proposal has no blob: what it would delete is its base version
+    // the base version in its own folder, from its signed envelope
     const base = await readNoteVersion(context, {
       noteId: pending.noteId,
-      folderId: pending.folderId,
       version: pending.baseVersion,
     });
     return { pending, kind: "delete", proposed: "", proposedName: null, base: snapshotOf(base) };
@@ -102,9 +102,10 @@ export async function readPending(
   const base =
     pending.baseVersion === 0
       ? null
-      : await readNoteVersion(context, {
+      : // in its own folder, from its signed envelope: a move proposal's folder is the
+        // destination, where the base version never was
+        await readNoteVersion(context, {
           noteId: pending.noteId,
-          folderId: pending.folderId,
           version: pending.baseVersion,
         });
   return {

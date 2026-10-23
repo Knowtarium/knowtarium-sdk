@@ -41,6 +41,7 @@ const signedScope = (revision = 1) => ({
     tokenId: id("tok"),
     revision,
     scopeSha256: sha256Hex,
+    prevScopeSha256: "0".repeat(64),
   },
   signature: b64(64),
   scope: { access: "read-write", folderIds: [id("fld")], permissions: ["notes.delete"] },

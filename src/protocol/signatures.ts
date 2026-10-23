@@ -101,8 +101,10 @@ import {
  * | approveConnect (with      | `agent_scope`    | tokenId, revision (1 at connect, then          |
  * | `scopeSignature`),        |                  | baseRevision + 1), scopeSha256                 |
  * | updateTokenScope          |                  | (`agentScopeSha256` of the access, folders and |
- * |                           |                  | permissions); at connect signed with           |
- * |                           |                  | `scopeSignedAt` and `scopeSignature`           |
+ * |                           |                  | permissions), prevScopeSha256 (the previous    |
+ * |                           |                  | revision's scopeSha256, NO_PREVIOUS_AGENT_     |
+ * |                           |                  | SCOPE_SHA256 at revision 1); at connect signed |
+ * |                           |                  | with `scopeSignedAt` and `scopeSignature`      |
  * | deleteNoteAsAgent (the    | `agent_deleted`  | tokenId, noteId, version = base + 1, folderId  |
  * | AGENT's key)              |                  | (the note's), revision and policySha256 (as    |
  * |                           |                  | `agent_edited`), scopeRevision (the scope      |
@@ -110,14 +112,17 @@ import {
  * | createFolderAsAgent       | `agent_folder_   | tokenId, folderId, parentId (absent at the top |
  * | (the AGENT's key)         | created`         | level), hash of the decoded `encName`,         |
  * |                           |                  | revision, policySha256, scopeRevision          |
- * | renameFolderAsAgent       | `agent_folder_   | tokenId, folderId, hash of the new decoded     |
- * | (the AGENT's key)         | renamed`         | `encName`, revision, policySha256,             |
+ * | renameFolderAsAgent       | `agent_folder_   | tokenId, folderId, parentId (its parent;       |
+ * | (the AGENT's key)         | renamed`         | absent at the top level), hash of the new      |
+ * |                           |                  | decoded `encName`, revision, policySha256,     |
  * |                           |                  | scopeRevision                                  |
- * | moveFolderAsAgent (the    | `agent_folder_   | tokenId, folderId, parentId (the destination;  |
- * | AGENT's key)              | moved`           | absent at the top level), revision,            |
+ * | moveFolderAsAgent (the    | `agent_folder_   | tokenId, folderId, parentId (the destination), |
+ * | AGENT's key)              | moved`           | fromParentId (the parent it leaves; each       |
+ * |                           |                  | absent at the top level), revision,            |
  * |                           |                  | policySha256, scopeRevision                    |
- * | deleteFolderAsAgent (the  | `agent_folder_   | tokenId, folderId, revision, policySha256,     |
- * | AGENT's key)              | deleted`         | scopeRevision                                  |
+ * | deleteFolderAsAgent (the  | `agent_folder_   | tokenId, folderId, parentId (its parent;       |
+ * | AGENT's key)              | deleted`         | absent at the top level), revision,            |
+ * |                           |                  | policySha256, scopeRevision                    |
  *
  * The common fields: `type`, `accountId` (the signer, the session's account), `workspaceId`, and
  * `createdAt` (the `signedAt` sent, in milliseconds, within `SIGNATURE_MAX_SKEW_SECONDS` of the
@@ -126,7 +131,8 @@ import {
  * fields, and optional ones are signed when present: `noteId` on `commented` and `recorded` (the
  * note the comment or event is on; every comment and event in this API is on a note, so the server
  * always includes it), `parentId` on the folder types (a folder at the root has no `parentId`,
- * never a null one; the same on `agent_folder_created` and `agent_folder_moved`), and `commentId`
+ * never a null one; the same for `parentId` on the `agent_folder_*` types and `fromParentId` on
+ * `agent_folder_moved`), and `commentId`
  * with `ciphertextSha256` on `rejected` (both or neither). `version`, `revision` and
  * `scopeRevision` are 0 or more, `generation` 1 or more. `knowtarium/crypto`
  * (SIGNED_ENVELOPE_TYPES) has the same table, and the shared vectors test
@@ -324,6 +330,11 @@ export const AgentScopeEnvelope = z.strictObject({
   /** 1 at connect, then +1 per change (the envelope rules allow 0; the API not). */
   revision: Version,
   scopeSha256: AgentScopeSha256,
+  /**
+   * The `scopeSha256` of the revision before (`NO_PREVIOUS_AGENT_SCOPE_SHA256` at revision 1), so
+   * the revisions form a chain: two owner-signed scopes at one revision can't both extend it.
+   */
+  prevScopeSha256: AgentScopeSha256,
 });
 export type AgentScopeEnvelope = z.infer<typeof AgentScopeEnvelope>;
 
@@ -368,32 +379,38 @@ export const AgentFolderCreatedEnvelope = z.strictObject({
 });
 export type AgentFolderCreatedEnvelope = z.infer<typeof AgentFolderCreatedEnvelope>;
 
-/** An agent renames a folder: the hash of the new encrypted name. */
+/** An agent renames a folder: its parent (absent at the top level), the new name's hash. */
 export const AgentFolderRenamedEnvelope = z.strictObject({
   type: z.literal("agent_folder_renamed"),
   ...base,
   ...agentAction,
   folderId: FolderId,
+  parentId: FolderId.optional(),
   ciphertextSha256: CiphertextSha256,
 });
 export type AgentFolderRenamedEnvelope = z.infer<typeof AgentFolderRenamedEnvelope>;
 
-/** An agent moves a folder under `parentId` (absent: to the top level). */
+/**
+ * An agent moves a folder from `fromParentId` to `parentId` (each absent at the top level), so
+ * the audit and the undo rely on signed parents, never the server's word.
+ */
 export const AgentFolderMovedEnvelope = z.strictObject({
   type: z.literal("agent_folder_moved"),
   ...base,
   ...agentAction,
   folderId: FolderId,
   parentId: FolderId.optional(),
+  fromParentId: FolderId.optional(),
 });
 export type AgentFolderMovedEnvelope = z.infer<typeof AgentFolderMovedEnvelope>;
 
-/** An agent deletes an empty folder. */
+/** An agent deletes an empty folder under `parentId` (absent at the top level). */
 export const AgentFolderDeletedEnvelope = z.strictObject({
   type: z.literal("agent_folder_deleted"),
   ...base,
   ...agentAction,
   folderId: FolderId,
+  parentId: FolderId.optional(),
 });
 export type AgentFolderDeletedEnvelope = z.infer<typeof AgentFolderDeletedEnvelope>;
 

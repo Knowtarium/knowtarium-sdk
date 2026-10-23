@@ -166,6 +166,7 @@ describe("credentials", () => {
           tokenId: connection.tokenId,
           revision,
           scopeSha256: "0".repeat(64),
+          prevScopeSha256: "1".repeat(64),
         },
         signature: "A".repeat(86),
         scope: {
