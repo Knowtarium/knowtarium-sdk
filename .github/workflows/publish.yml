@@ -58,7 +58,21 @@ jobs:
       - run: pnpm check
         env:
           KNOWTARIUM_PERF: strict
+      # The npm dist-tag: package.json's publishConfig.tag when set (a protocol bump goes out under
+      # `next` first, RELEASING.md), else `latest`; any other value stops the release.
+      - name: Choose the dist-tag
+        id: dist-tag
+        run: |
+          tag=$(node -p "require('./package.json').publishConfig?.tag ?? 'latest'")
+          if [ "$tag" != "latest" ] && [ "$tag" != "next" ]; then
+            echo "::error::publishConfig.tag is $tag; only latest or next are published (RELEASING.md)"
+            exit 1
+          fi
+          echo "Publishing under the npm dist-tag $tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
       # prepublishOnly builds and runs test:dist (which also checks the shrinkwrap) first. npm signs in
       # through trusted publishing (npm 11.5.1 or later, which Node 24 ships): npmjs.com trusts this
       # repository's publish.yml for knowtarium, so no token is stored anywhere.
-      - run: npm publish
+      - run: npm publish --tag "$DIST_TAG"
+        env:
+          DIST_TAG: ${{ steps.dist-tag.outputs.tag }}

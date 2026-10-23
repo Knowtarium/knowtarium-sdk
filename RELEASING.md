@@ -133,6 +133,32 @@ These stay as they are until the owner decides; nothing in this repo changes the
    `npx knowtarium agents`, the plugins and the bundle are. Publish the entry only once that is
    accepted, or the registry's format can carry a safe command.
 
+## A release that bumps the protocol
+
+The sync API refuses a request naming a protocol version it doesn't list, so a CLI that speaks a
+new protocol must never reach `latest` before production accepts it. Such a release (protocol 3,
+agent permissions, t-140) goes out under the npm dist-tag `next` first:
+
+1. **Publish under `next`.** `package.json` carries `"publishConfig": { ..., "tag": "next" }`; the
+   publish workflow reads it (only `latest` and `next` are accepted) and runs
+   `npm publish --tag next`, so nothing that installs `latest` gets it. The sync and web branches pin
+   the exact version. The release-assets workflow doesn't mark its GitHub Release as latest, since
+   npm's `latest` is still the previous version.
+2. **Deploy sync** accepting the old and the new protocol, staging then production, and wait for
+   100% of the rollout. Check that production `/health` reports the new `protocolVersion` on every
+   request of a short check.
+3. **Promote, the same day:** `npm dist-tag add knowtarium@<version> latest`, then
+   `gh release edit v<version> --latest`, then republish the pinned plugins (`pnpm build:extras`,
+   step 6 of the order above) and the Claude Desktop bundle link, so no install keeps pinning the
+   previous version longer than needed and none pinned the new one before the server took it.
+4. **Drop `publishConfig.tag`** in the next commit, so the following ordinary release goes to
+   `latest` again.
+5. **Never roll sync back past the new protocol** once `latest` is promoted: every fresh
+   `npx knowtarium` would fail. If the release itself is bad, roll forward.
+
+The version on the `agent-permissions` branch (0.1.4, matching `AGENT_PERMISSIONS_MIN_CLI_VERSION`)
+is a placeholder for local end-to-end runs until t-140 sets the release version.
+
 ## The shrinkwrap
 
 The package ships `npm-shrinkwrap.json` because it is published CLI-first: people run it with

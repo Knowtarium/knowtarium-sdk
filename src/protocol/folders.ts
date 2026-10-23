@@ -152,8 +152,12 @@ export type FolderEventAction = z.infer<typeof FolderEventAction>;
  * | `deleted`  | its parent        | null              | its name              | null           |
  * | `restored` | its stored parent | its stored parent | its name when deleted | the name sent  |
  *
- * So undoing a delete revives the folder under `parentBefore` with `encNameBefore`, and undoing a
- * rename or a move puts back the `*Before` value. `signed` is the change's envelope
+ * One exception: a person's `updateFolder` that renames and moves at once records one `moved` row,
+ * with both names (`encNameBefore` the old, `encNameAfter` the new). An agent's rename and move
+ * are separate changes. Undoing a delete revives the folder under `parentBefore` with
+ * `encNameBefore`, and undoing a rename or a move puts back the `*Before` value (for an agent's,
+ * the parents it signed: `parentId` on `agent_folder_renamed` and `agent_folder_deleted`,
+ * `fromParentId` on `agent_folder_moved`). `signed` is the change's envelope
  * (`folder_created` for `created` and `restored`, `folder_moved`, or an agent's
  * `agent_folder_*`), verified by clients; null for a person's rename or delete, which are
  * unsigned (the server's word).

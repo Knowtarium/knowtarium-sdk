@@ -135,28 +135,28 @@ fields in `SIGNED_ENVELOPE_OPTIONAL`, which are signed when present (`SIGNED_ENV
 lists the ones that come as a pair). The server rebuilds each envelope from the request, so any
 other field is refused, as are unknown types. `knowtarium/protocol` has the same table.
 
-| Type             | Requires (optional in parentheses)                                                                                                                                             |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `edited`         | `noteId`, `version`, `folderId`, `ciphertextSha256`                                                                                                                            |
-| `deleted`        | `noteId`, `version`                                                                                                                                                            |
-| `approved`       | `noteId`, `pendingId`, `version`, `folderId`, `ciphertextSha256`                                                                                                               |
-| `rejected`       | `noteId`, `pendingId` (`commentId` with the comment's hash, both or none)                                                                                                      |
-| `commented`      | `commentId`, `revision`, `ciphertextSha256` (`noteId`)                                                                                                                         |
-| `recorded`       | `eventId`, `ciphertextSha256` (`noteId`)                                                                                                                                       |
-| `wrapped_key`    | `recipient` (X25519 public key, base64url), `holder` (`"account"` or the token id), `generation`, `ciphertextSha256`                                                           |
-| `key_generation` | `generation`, `recipientsHash`, `keyCommitment`                                                                                                                                |
-| `token_revoked`  | `recipient` (the token's X25519 public key), `tokenId`                                                                                                                         |
-| `check_applied`  | `noteId`, `version`, `folderId`, `ciphertextSha256`, `checkId` (a write that applies an agent's passing check)                                                                 |
-| `folder_created` | `folderId`, `ciphertextSha256` of the encrypted name (`parentId`)                                                                                                              |
-| `folder_moved`   | `folderId` (`parentId`, the destination)                                                                                                                                       |
-| `agent_policy`   | `revision`, `policySha256` (the owner set the agent policy; protocol 2)                                                                                                        |
-| `agent_key`      | `tokenId`, `signPublicKey`, `policyRevision` (the owner vouches for an agent's Ed25519 key and its policy floor)                                                               |
-| `agent_edited`   | `tokenId`, `noteId`, `version`, `folderId`, `ciphertextSha256`, `revision`, `policySha256` (signed by the agent's key)                                                         |
-| `inbox_key`      | `revision`, `generation`, `publicKey` (the derived inbox X25519 key, base64url), `folderId` (the web clipper)                                                                  |
-| `extension_key`  | `extensionId` (an `ext_` id), `signPublicKey` (the owner vouches for a paired extension's Ed25519 key)                                                                         |
-| `agent_scope`    | `tokenId`, `revision`, `scopeSha256` (the owner signs an agent token's access, folders and permissions; protocol 3)                                                            |
-| `agent_deleted`  | `tokenId`, `noteId`, `version`, `folderId`, `revision`, `policySha256`, `scopeRevision` (an agent's note delete)                                                               |
-| `agent_folder_*` | `tokenId`, `folderId`, `revision`, `policySha256`, `scopeRevision`, plus `ciphertextSha256` of the new name for `created` and `renamed` (`parentId` for `created` and `moved`) |
+| Type             | Requires (optional in parentheses)                                                                                                                                                                                         |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `edited`         | `noteId`, `version`, `folderId`, `ciphertextSha256`                                                                                                                                                                        |
+| `deleted`        | `noteId`, `version`                                                                                                                                                                                                        |
+| `approved`       | `noteId`, `pendingId`, `version`, `folderId`, `ciphertextSha256`                                                                                                                                                           |
+| `rejected`       | `noteId`, `pendingId` (`commentId` with the comment's hash, both or none)                                                                                                                                                  |
+| `commented`      | `commentId`, `revision`, `ciphertextSha256` (`noteId`)                                                                                                                                                                     |
+| `recorded`       | `eventId`, `ciphertextSha256` (`noteId`)                                                                                                                                                                                   |
+| `wrapped_key`    | `recipient` (X25519 public key, base64url), `holder` (`"account"` or the token id), `generation`, `ciphertextSha256`                                                                                                       |
+| `key_generation` | `generation`, `recipientsHash`, `keyCommitment`                                                                                                                                                                            |
+| `token_revoked`  | `recipient` (the token's X25519 public key), `tokenId`                                                                                                                                                                     |
+| `check_applied`  | `noteId`, `version`, `folderId`, `ciphertextSha256`, `checkId` (a write that applies an agent's passing check)                                                                                                             |
+| `folder_created` | `folderId`, `ciphertextSha256` of the encrypted name (`parentId`)                                                                                                                                                          |
+| `folder_moved`   | `folderId` (`parentId`, the destination)                                                                                                                                                                                   |
+| `agent_policy`   | `revision`, `policySha256` (the owner set the agent policy; protocol 2)                                                                                                                                                    |
+| `agent_key`      | `tokenId`, `signPublicKey`, `policyRevision` (the owner vouches for an agent's Ed25519 key and its policy floor)                                                                                                           |
+| `agent_edited`   | `tokenId`, `noteId`, `version`, `folderId`, `ciphertextSha256`, `revision`, `policySha256` (signed by the agent's key)                                                                                                     |
+| `inbox_key`      | `revision`, `generation`, `publicKey` (the derived inbox X25519 key, base64url), `folderId` (the web clipper)                                                                                                              |
+| `extension_key`  | `extensionId` (an `ext_` id), `signPublicKey` (the owner vouches for a paired extension's Ed25519 key)                                                                                                                     |
+| `agent_scope`    | `tokenId`, `revision`, `scopeSha256`, `prevScopeSha256` (the owner signs an agent token's access, folders and permissions, chained to the revision before; protocol 3)                                                     |
+| `agent_deleted`  | `tokenId`, `noteId`, `version`, `folderId`, `revision`, `policySha256`, `scopeRevision` (an agent's note delete)                                                                                                           |
+| `agent_folder_*` | `tokenId`, `folderId`, `revision`, `policySha256`, `scopeRevision`, plus `ciphertextSha256` of the new name for `created` and `renamed` (`parentId` for all four, the destination for `moved`; `fromParentId` for `moved`) |
 
 A folder at the workspace root has no `parentId` (never an empty or null one), so a signed
 move always says where the folder goes.
@@ -171,7 +171,9 @@ connected: the agent never accepts a policy below it (nor below the highest one 
 `agent_scope` (`scopeSha256` is `agentScopeSha256()` in `knowtarium/protocol`: the lowercase hex
 SHA-256 of the tag `knowtarium-agent-scope-v1\n` followed by the canonical JSON of
 `{access, folderIds, permissions}`, the folders sorted and deduplicated, the permissions in
-`AgentPermission` order) and the agent's own `agent_deleted`, `agent_folder_created`,
+`AgentPermission` order; `prevScopeSha256` is the previous revision's, 64 zeros
+(`NO_PREVIOUS_AGENT_SCOPE_SHA256`) at revision 1, so two owner-signed scopes at one revision can't
+both extend the chain) and the agent's own `agent_deleted`, `agent_folder_created`,
 `agent_folder_renamed`, `agent_folder_moved` and `agent_folder_deleted`, signed like
 `agent_edited` with the scope revision the agent acted under (`scopeRevision`; the API requires 1
 or more). `envelope-vectors.json` has their vectors and `agentScopeHashes`.
@@ -759,9 +761,13 @@ How the engine behaves:
   other refusals (`permission_required`, `stale_agent_scope`, `protected_folder`, `not_empty`).
   The person's side: `approveDelete`, `readFolderEvents` (`fetchFolderEvents`, signed rows
   verified, names decrypted), `agentActions({ sinceMs })` (an agent's writes, deletes and folder
-  changes, newest first), `auditAgentAction` (allowed only under the newest owner-signed revision
-  signed before the action, naming it, holding the permission and reaching the folders; a gap or a
-  list below the floor is `unchecked`), `undoAgentVersion` for a delete (`folder_missing` when its
+  changes, newest first), `auditAgentAction` (the revision R the action names is allowed when it
+  was in force within the signature skew, `SIGNATURE_MAX_SKEW_SECONDS`: R signed no later than the
+  action plus the skew and R + 1 no earlier than the action minus it; its scope must hold the
+  permission and reach the folders the agent signed, every folder whose contents changed must be
+  `direct` under the policy revision it named, and its signed time must agree with the server's
+  record and come after what it acted on, else `backdated`; a gap, a fork or a list below the
+  floor is `unchecked`; folders deleted since are read where they stood), `undoAgentVersion` for a delete (`folder_missing` when its
   folder is gone) and `undoAgentFolderEvent` (`saved`, `moved_on`, `not_empty`,
   `parent_missing`). `SyncEngine.rootFolderId` is the root marker the feed named, and `reset`
   drops the local copy for a scope whose reach changed.

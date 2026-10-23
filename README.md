@@ -112,7 +112,7 @@ your agents at the new version. Then restart them.
   the agent's, and a person can undo it. Where a workspace or folder asks for approval, the change
   is a proposal a person approves first. An agent can move or delete notes, or create, rename,
   move or delete folders, only with the permissions you give it when connecting it (or later, in
-  the workspace's agent settings), each signed by you and checked by the agent; every such change
+  the web app under Settings, Agents), each signed by you and checked by the agent; every such change
   is signed with its own key and can be undone. Agents can't delete files or mark a note as checked
   by a person, and a note reaches them only after its version's signature is checked against the
   workspace owner's key.
