@@ -1112,9 +1112,12 @@ function touchedBy(action: AgentAction): {
  * rule), and every folder whose contents changed must have been `direct` under that policy
  * revision, as these actions are only ever allowed there. A list with a gap, below the floor, or
  * of another token's scopes is `unchecked`, as is an action whose folders aren't known (`folders`,
- * defaulting to the engine's). The reach and the modes are judged on today's folder tree (a
- * folder moved since may read differently; the folder history has the moves). For display: the
- * server enforces the scope.
+ * defaulting to the engine's). The reach and the modes are judged on today's folder tree, a
+ * folder deleted since read where it stood (a folder moved since may read differently; the
+ * folder history has the moves). An action whose signed time differs from the server's record of
+ * it by more than the skew, or comes before what it acted on (the version it deleted, the
+ * folder's change before), is `not_allowed` as `backdated`. For display: the server enforces the
+ * scope.
  */
 export async function auditAgentAction(
   context: SyncContext,
@@ -1142,15 +1145,22 @@ export async function auditAgentAction(
   if (named === undefined) {
     return { verdict: "not_allowed", scopeRevision: revision, reason: "no_scope" };
   }
-  const notAllowed = (reason: "other_revision" | "permission" | "folders" | "policy") =>
-    ({ verdict: "not_allowed", scopeRevision: revision, reason }) as const;
+  const notAllowed = (
+    reason: "other_revision" | "permission" | "folders" | "policy" | "backdated",
+  ) => ({ verdict: "not_allowed", scopeRevision: revision, reason }) as const;
+  // its signed time must be when it happened: as the server recorded it (within the skew), and
+  // never before what it acted on (the version it deleted, the folder's change before)
+  const row = action.kind === "folder" ? action.entry.event.createdAt : action.event.createdAt;
+  if (Math.abs(Date.parse(row) - at) > skew) return notAllowed("backdated");
+  const earliest = await earliestActionTime(context, action);
+  if (earliest !== null && at < earliest - skew) return notAllowed("backdated");
   const next = scopes.scopes.find((scope) => scope.revision === revision + 1);
   if (Date.parse(named.signedAt) > at + skew) return notAllowed("other_revision");
   if (next !== undefined && Date.parse(next.signedAt) < at - skew) {
     return notAllowed("other_revision");
   }
   if (!agentScopeAllows(named.scope, permission)) return notAllowed("permission");
-  const lookup = options.folders ?? knownFolders(context);
+  const lookup = asLive(options.folders ?? knownFolders(context));
   const touched = touchedBy(action);
   const reach = touched.reach.map((folderId) => reaches(named.scope, folderId, lookup));
   if (reach.includes(false)) return notAllowed("folders");
@@ -1172,6 +1182,41 @@ export async function auditAgentAction(
   const policy: AgentWriteAudit = { status: "consistent", revision: audited.audit.revision, mode };
   if (mode !== "direct") return { ...notAllowed("policy"), policy };
   return { verdict: "allowed", scopeRevision: revision, policy };
+}
+
+/**
+ * A folder lookup that reads a deleted folder as it stood (its stored parent): an action is
+ * judged on the tree as it was, and a folder deleted since (by the agent's own delete, say) would
+ * otherwise read as `review`. A folder the lookup doesn't know at all stays unknown.
+ */
+function asLive(lookup: AgentPolicyFolderLookup): AgentPolicyFolderLookup {
+  return (folderId) => {
+    const folder = lookup(folderId);
+    return folder === undefined ? undefined : { parentId: folder.parentId, deleted: false };
+  };
+}
+
+/**
+ * The earliest an action can have happened (milliseconds): when the version an agent's delete
+ * replaced was signed, or when the folder's change before an agent's folder change was recorded.
+ * Null when there is none (a folder's first change) or it can't be read.
+ */
+async function earliestActionTime(
+  context: SyncContext,
+  action: AgentAction,
+): Promise<number | null> {
+  if (action.kind === "folder") {
+    const { event } = action.entry;
+    const history = await fetchFolderEvents(context, { folderId: event.folderId });
+    const before = history.filter((entry) => entry.event.seq < event.seq).at(-1);
+    return before === undefined ? null : Date.parse(before.event.createdAt);
+  }
+  if (action.kind !== "deleted") return null;
+  const events = await fetchEvents(context, { noteId: action.noteId });
+  const base = events.find(
+    (event) => event.noteVersion === action.version - 1 && event.signed != null,
+  );
+  return base?.signed == null ? null : Date.parse(base.signed.envelope.createdAt);
 }
 
 /**

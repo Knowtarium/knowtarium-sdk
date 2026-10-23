@@ -257,16 +257,30 @@ export function registerReadTools(server: McpServer, context: ToolContext): void
     {
       title: "List folders",
       description:
-        "Every folder in scope with its path and ID. A folder's `index.md`, if it has one, describes what belongs there and the conventions to follow; read it before writing in that folder.",
+        "Every folder in scope with its path and ID, whether agents' changes apply there or ask first (`agentChanges`), whether agents may not rename, move or delete it (`protected`: `root`, or `scope` for a folder this agent was given; other agents' folders are protected too, and only the server knows them) and the web clipper's inbox (`inbox`, which agents can't delete). A folder's `index.md`, if it has one, describes what belongs there and the conventions to follow; read it before writing in that folder.",
       inputSchema: { workspace },
       annotations: readOnly,
     },
     (args) =>
       guarded(async () => {
         const session = await sessionFor(context, args.workspace);
+        const policy = await session.agentPolicy();
         const folders = [...session.view.folders.keys()]
           .filter((id) => session.inScope(id))
-          .map((id) => ({ id, path: session.view.folderPath(id) }))
+          .map((id) => ({
+            id,
+            path: session.view.folderPath(id),
+            // whether agents' changes apply here or ask first (folder changes are refused then)
+            agentChanges: session.folderMode(id, policy),
+            // folders agents can't rename, move or delete: the root and this agent's own folders
+            ...(session.view.isRoot(id)
+              ? { protected: "root" as const }
+              : session.view.ownScopeFolders.includes(id)
+                ? { protected: "scope" as const }
+                : {}),
+            // the web clipper's inbox, which agents can't delete
+            ...(session.inboxFolderId === id ? { inbox: true } : {}),
+          }))
           .sort((a, b) => a.path.localeCompare(b.path));
         return json(folders, session);
       }),

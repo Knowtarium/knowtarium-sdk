@@ -160,10 +160,57 @@ function frontmatterKeys(text: string | null): string[] {
 }
 
 /** The refusal for an edit based on an old version. */
-export function staleBase(base: number, current: number): ToolError {
+export function staleBase(
+  base: number,
+  current: number,
+  change: "edit" | "delete" | "move" = "edit",
+): ToolError {
+  const redo =
+    change === "edit"
+      ? "redo your change on the current text, and send it again"
+      : `check that you still mean to ${change} it, and call again`;
   return new ToolError(
-    `This note is at version ${String(current)} now, but your edit is based on version ${String(base)}. Read it again with read_note, redo your change on the current text, and send it again with base_version ${String(current)}.`,
+    `This note is at version ${String(current)} now, but your ${change} is based on version ${String(base)}. Read it again with read_note, ${redo} with base_version ${String(current)}.`,
   );
+}
+
+/**
+ * What a wait from a rate limit tells the agent: nothing was `done` (saved, changed), and how
+ * long to wait.
+ */
+export function tooManyChanges(wait: number | null, done: string): ToolError {
+  return new ToolError(
+    `Too many changes in a short time, so nothing was ${done}. Wait ${wait === null ? "a minute" : `${String(Math.max(1, wait))} seconds`}, then try again.`,
+  );
+}
+
+/**
+ * Why a note change that couldn't be written directly becomes a proposal (`PROPOSED_BECAUSE`):
+ * the one mapping `propose_edit`, `create_note`, `delete_note` and `move_note` share. A
+ * per-minute limit is refused with the wait instead (only the daily cap is proposed).
+ */
+export function proposedReason(
+  result:
+    | { readonly status: "approval_required"; readonly reason: string }
+    | { readonly status: "agent_key_required" }
+    | { readonly status: "rate_limited"; readonly retryAfterSeconds: number | null },
+): keyof typeof PROPOSED_BECAUSE {
+  switch (result.status) {
+    case "approval_required":
+      return result.reason === "policy" || result.reason === "server"
+        ? "review"
+        : result.reason === "unknown_folder"
+          ? "unknown_folder"
+          : "unverified";
+    case "agent_key_required":
+      return "reconnect";
+    case "rate_limited": {
+      const wait = result.retryAfterSeconds;
+      if (wait === null || wait <= PER_MINUTE_RETRY_MAX_SECONDS)
+        throw tooManyChanges(wait, "saved");
+      return "daily_cap";
+    }
+  }
 }
 
 /** `human:` entries in a text's `verified` list, as `by at` keys. */
@@ -342,27 +389,8 @@ async function commit(
       }
       case "conflict":
         throw staleBase(change.baseVersion, result.currentVersion);
-      case "rate_limited": {
-        const wait = result.retryAfterSeconds;
-        if (wait === null || wait <= PER_MINUTE_RETRY_MAX_SECONDS) {
-          throw new ToolError(
-            `Too many changes in a short time, so nothing was saved. Wait ${wait === null ? "a minute" : `${String(Math.max(1, wait))} seconds`}, then try again.`,
-          );
-        }
-        because = "daily_cap";
-        break;
-      }
-      case "approval_required":
-        because =
-          result.reason === "policy" || result.reason === "server"
-            ? "review"
-            : result.reason === "unknown_folder"
-              ? "unknown_folder"
-              : "unverified";
-        break;
-      case "agent_key_required":
-        because = "reconnect";
-        break;
+      default:
+        because = proposedReason(result);
     }
   }
   delete details.outcome.unreachable;
@@ -503,9 +531,9 @@ async function proposalDetails(
 
 /**
  * The writing tools: registered once, and listed only while some connected session may write
- * (server.ts switches them; hidden, not just refused, for read-only tokens). A change is written directly where the folder's
- * policy lets agents apply changes and this connection has a key the owner vouched for, and is a
- * proposal a person approves everywhere else (`commit`).
+ * (server.ts switches them; hidden, not just refused, for read-only tokens). A change is written
+ * directly where the folder's policy lets agents apply changes and this connection has a key the
+ * owner vouched for, and is a proposal a person approves everywhere else (`commit`).
  */
 export function registerWriteTools(server: McpServer, context: ToolContext): RegisteredTool[] {
   const tools: RegisteredTool[] = [];
@@ -618,7 +646,7 @@ export function registerWriteTools(server: McpServer, context: ToolContext): Reg
         folder: z
           .string()
           .describe(
-            "The folder path or ID (list_folders); `` is the workspace root, if it has one.",
+            "The folder path or ID (list_folders); an empty string is the workspace root, if it has one.",
           ),
         name: z
           .string()
@@ -649,7 +677,7 @@ export function registerWriteTools(server: McpServer, context: ToolContext): Reg
             args.folder.replace(/^\/+|\/+$/g, "") === ""
               ? "This workspace has no root folder, so notes live in folders. Pick one from list_folders."
               : session.allows("folders.create")
-                ? `No folder ${args.folder}; create it first with create_folder (when the person asked for it or the workspace's conventions call for it), or pick one from list_folders.`
+                ? `No folder ${args.folder}; pick one from list_folders, or ask the person whether to create it (create_folder, only when they ask).`
                 : `No folder ${args.folder}; this agent can't create folders, so pick one from list_folders.`,
           );
         }
@@ -688,7 +716,7 @@ export function registerWriteTools(server: McpServer, context: ToolContext): Reg
     {
       title: "My pending changes",
       description:
-        "This agent's proposals and what became of them (open, approved, rejected with the reviewer's comment), each with its `kind` (`edit`, or `delete` for a proposed delete), when it was submitted, the proposed file name and title, and your summary. Read rejections before trying again.",
+        "This agent's proposals and what became of them (open, approved, rejected with the reviewer's comment), each with its `kind` (`edit`, `move` with the folders `from` and `to`, or `delete`), when it was submitted, the proposed file name and title, and your summary. Read rejections before trying again.",
       inputSchema: {
         workspace,
         status: z.enum(["open", "approved", "rejected"]).optional(),
@@ -721,14 +749,27 @@ export function registerWriteTools(server: McpServer, context: ToolContext): Reg
         const details = await proposalDetails(session, items);
         const changes = items.map((pending) => {
           const detail = details.get(pending.id);
+          // a proposal into another folder than the note's own is a move (told while the note
+          // still sits where it was, as for an open one)
+          const from = session.view.notes.get(pending.noteId)?.folderId;
+          const move =
+            pending.kind === "edit" &&
+            pending.baseVersion > 0 &&
+            from !== undefined &&
+            from !== pending.folderId;
+          const folderPath = (folderId: FolderId) =>
+            session.view.folders.has(folderId) ? session.view.folderPath(folderId) : folderId;
           return {
             pendingId: pending.id,
             note: session.view.notes.has(pending.noteId)
               ? session.view.pathOf(pending.noteId)
               : pending.noteId,
             noteId: pending.noteId,
-            // `edit` (a new version, a move or a new note included) or `delete`
-            kind: pending.kind,
+            // `edit` (a new version or a new note), `move` (into another folder) or `delete`
+            kind: move ? "move" : pending.kind,
+            ...(move && from !== undefined
+              ? { from: folderPath(from), to: folderPath(pending.folderId) }
+              : {}),
             status: pending.status,
             submittedAt: pending.createdAt,
             proposedName: detail?.name ?? null,

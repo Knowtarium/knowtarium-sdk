@@ -925,6 +925,74 @@ describe("auditing an agent's actions", () => {
     });
   });
 
+  it("flags an action whose signed time the server's record or its base contradicts", async () => {
+    const { world, web, action, scopes } = await audited();
+    const listed = await scopes();
+    expect((await web.engine.auditAgentAction(action, listed)).verdict).toBe("allowed");
+    if (action.kind !== "deleted") throw new Error("not a delete");
+    // the server recorded it an hour later than the agent signed it: backdated
+    const late = {
+      ...action,
+      event: { ...action.event, createdAt: new Date(Date.now() + 3_600_000).toISOString() },
+    };
+    expect(await web.engine.auditAgentAction(late, listed)).toMatchObject({
+      verdict: "not_allowed",
+      reason: "backdated",
+    });
+    // a delete signed before the version it deleted was: backdated
+    const base = world.server.events.find(
+      (event) => event.noteId === action.noteId && event.noteVersion === 1,
+    );
+    if (base?.signed == null) throw new Error("no base");
+    const envelope = base.signed.envelope;
+    const later = new Date(Date.parse(action.createdAt) + 3_600_000).toISOString();
+    world.server.tamper.events = (events) =>
+      events.map((event) =>
+        event === base
+          ? ({
+              ...event,
+              signed: { ...base.signed, envelope: { ...envelope, createdAt: later } },
+            } as typeof event)
+          : event,
+      );
+    expect(await web.engine.auditAgentAction(action, listed)).toMatchObject({
+      verdict: "not_allowed",
+      reason: "backdated",
+    });
+  });
+
+  it("allows an agent's folder delete, reading the deleted folder where it stood", async () => {
+    const { world, web, cli, home, scopeRevision } = await seeded([
+      "folders.create",
+      "folders.delete",
+    ]);
+    const made = await cli.engine.createFolderAsAgent({
+      parentId: home,
+      name: "Tmp",
+      scopeRevision,
+    });
+    if (made.status !== "saved") throw new Error(made.status);
+    expect(
+      (await cli.engine.deleteFolderAsAgent({ folderId: made.folder.id, scopeRevision })).status,
+    ).toBe("saved");
+    await web.engine.pull();
+    const actions = await web.engine.agentActions({ sinceMs: 60_000 });
+    expect(
+      actions.map((each) => (each.kind === "folder" ? each.entry.event.action : null)).sort(),
+    ).toEqual(["created", "deleted"]);
+    const scopes = await fetchTokenScopes(sessionApi(world), {
+      ownerSigningPublicKey: world.account.signing.publicKey,
+      accountId: world.accountId,
+      workspaceId: world.workspaceId,
+      tokenId: world.tokenId,
+    });
+    for (const action of actions) {
+      expect(await web.engine.auditAgentAction(action, scopes)).toMatchObject({
+        verdict: "allowed",
+      });
+    }
+  });
+
   it("judges every touched folder's mode under the policy revision the action named", async () => {
     const { world, web, cli, home, noteId, scopeRevision } = await seeded(["notes.delete"]);
     const other = await folder(world, web, "Other");

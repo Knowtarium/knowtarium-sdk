@@ -2,12 +2,16 @@ import { parseArgs } from "node:util";
 
 import {
   type AgentScopeProblem,
+  type ApiClient,
   createApiClient,
+  decryptFolderName,
   isSyncApiError,
   NetworkError,
   verifyAgentScope,
 } from "../../client/index.js";
-import { fromBase64Url } from "../../crypto/index.js";
+import { boxKeyPairFromPrivateKey, fromBase64Url } from "../../crypto/index.js";
+import { cachedKeyProvider } from "../mcp/key-cache.js";
+import { FileCacheAdapter } from "../storage/file-cache.js";
 import { type AgentPermission, type AgentToken, routes } from "../../protocol/index.js";
 import {
   type AgentChanges,
@@ -33,6 +37,8 @@ import {
 interface ScopeReport {
   readonly revision: number | null;
   readonly access: "read" | "read-write" | null;
+  /** The folders the verified scope gives (null: as saved at connect). */
+  readonly folderIds: readonly string[] | null;
   readonly permissions: readonly AgentPermission[];
   readonly verified: boolean | null;
   readonly problem: AgentScopeProblem | null;
@@ -61,6 +67,7 @@ async function scopeReport(
     return {
       revision: token.scopeRevision,
       access: null,
+      folderIds: null,
       permissions: [],
       verified: false,
       problem: checked.problem,
@@ -69,6 +76,7 @@ async function scopeReport(
   return {
     revision: checked.revision,
     access: checked.verified?.scope.access ?? connection.access,
+    folderIds: checked.verified?.scope.folderIds ?? null,
     permissions: checked.verified?.scope.permissions ?? [],
     verified: checked.verified !== null,
     problem: null,
@@ -94,9 +102,11 @@ export async function statusCommand(context: CliContext, argv: readonly string[]
   const report = [];
   for (const connection of connections) {
     let token: "active" | "revoked" | "unknown" | "unreachable" = "unknown";
+    let folderNames: string[] | null = null;
     let scope: ScopeReport = {
       revision: null,
       access: null,
+      folderIds: null,
       permissions: [],
       verified: null,
       problem: null,
@@ -118,6 +128,12 @@ export async function statusCommand(context: CliContext, argv: readonly string[]
           await context.credentials(),
           connection as Connection,
           data.token,
+        );
+        folderNames = await scopeFolderNames(
+          context,
+          connection as Connection,
+          api,
+          scope.folderIds ?? connection.folderIds,
         );
       } catch (error) {
         // this version can't talk to Knowtarium at all: the command says to update
@@ -154,7 +170,9 @@ export async function statusCommand(context: CliContext, argv: readonly string[]
       workspaceId: connection.workspaceId,
       tokenId: connection.tokenId,
       access,
-      folderIds: connection.folderIds,
+      folderIds: scope.folderIds ?? connection.folderIds,
+      // the scope folders' paths, read with the workspace key (null: offline, or unreadable)
+      folders: folderNames,
       permissions: scope.permissions,
       scopeRevision: scope.revision,
       scopeVerified: scope.verified,
@@ -190,7 +208,7 @@ export async function statusCommand(context: CliContext, argv: readonly string[]
     io.out(`Workspace ${entry.workspaceId}`);
     io.out(`  token     ${entry.tokenId} (${entry.token})`);
     io.out(
-      `  access    ${entry.access}${entry.folderIds.length > 0 ? `, folders ${entry.folderIds.join(", ")}` : ", whole workspace"}`,
+      `  access    ${entry.access}${entry.folderIds.length > 0 ? `, folders ${(entry.folders ?? entry.folderIds).join(", ")}` : ", whole workspace"}`,
     );
     io.out(`  changes   ${describeAgentChanges(entry.agentChanges)}`);
     if (entry.scopeVerified !== null) io.out(`  allowed   ${describeScope(entry)}`);
@@ -228,4 +246,55 @@ function describeScope(entry: {
     return `${what} (scope revision ${String(entry.scopeRevision)}, signed by the workspace owner)`;
   }
   return `${what} (no signed scope yet: the workspace owner can give it permissions in its agent settings)`;
+}
+
+/**
+ * The paths of a connection's scope folders, decrypted with the workspace key (from the local
+ * cache, else fetched and verified as the MCP server does); null when they can't be read, and the
+ * IDs are shown instead.
+ */
+async function scopeFolderNames(
+  context: CliContext,
+  connection: Connection,
+  api: ApiClient,
+  folderIds: readonly string[],
+): Promise<string[] | null> {
+  if (folderIds.length === 0) return [];
+  try {
+    const pinned = await context.trust.ownerKey(connection.workspaceId);
+    const keys = await cachedKeyProvider(
+      api,
+      {
+        workspaceId: connection.workspaceId,
+        recipient: boxKeyPairFromPrivateKey(fromBase64Url(connection.agentPrivateKey)),
+        ownerSigningPublicKey: pinned ?? fromBase64Url(connection.ownerSignPublicKey),
+        ownerAccountId: connection.ownerId,
+        trust: context.trust,
+      },
+      new FileCacheAdapter(context.env.cache),
+    ).get();
+    const { data } = await api.call(routes.listFolders, {
+      params: { workspaceId: connection.workspaceId },
+    });
+    const byId = new Map(data.folders.map((folder) => [folder.id as string, folder]));
+    const nameOf = (folderId: string): string => {
+      const folder = byId.get(folderId);
+      if (folder === undefined) return folderId;
+      return decryptFolderName(
+        keys,
+        { workspaceId: connection.workspaceId, folderId: folder.id },
+        folder.encName,
+      );
+    };
+    const pathOf = (folderId: string, depth = 0): string => {
+      const parentId = byId.get(folderId)?.parentId ?? null;
+      const name = nameOf(folderId);
+      if (parentId === null || depth > 64) return name === "" ? "(root folder)" : name;
+      const parent = pathOf(parentId, depth + 1);
+      return parent === "(root folder)" ? name : `${parent}/${name}`;
+    };
+    return folderIds.map((folderId) => pathOf(folderId));
+  } catch {
+    return null;
+  }
 }

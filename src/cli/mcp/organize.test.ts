@@ -184,12 +184,15 @@ describe("organizing tools", () => {
     expect((await tools()).filter((name) => ORGANIZE.includes(name))).toEqual([]);
     const [before] = (await call("list_workspaces")).json() as unknown as Record<string, unknown>[];
     expect(before).toMatchObject({ permissions: [], scopeRevision: 0, scopeVerified: false });
+    const notified = listChanged();
     await grant(world, session, ["notes.delete", "folders.create"]);
     expect((await tools()).filter((name) => ORGANIZE.includes(name)).sort()).toEqual([
       "create_folder",
       "delete_note",
     ]);
-    expect(listChanged()).toBeGreaterThan(0);
+    // one notification for the change, however many tools it switched
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(listChanged()).toBe(notified + 1);
     const [after] = (await call("list_workspaces")).json() as unknown as Record<string, unknown>[];
     expect(after).toMatchObject({
       permissions: ["notes.delete", "folders.create"],
@@ -608,7 +611,7 @@ describe("folder tools", () => {
     world.server.otherScopeFolderIds = [archive];
     const answer = await call("rename_folder", { folder: "Archive", name: "Old" });
     expect(answer.error).toBe(true);
-    expect(answer.text).toMatch(/Agents can't rename, move or delete that folder/);
+    expect(answer.text).toMatch(/one a connected agent was given.*can't rename or move/);
   });
 
   it("points create_note at create_folder when the agent may make folders", async () => {

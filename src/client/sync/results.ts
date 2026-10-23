@@ -229,8 +229,9 @@ export type AgentAction =
  *   signature clock skew), its scope holds the permission and reaches the folders, the policy part
  *   checks out as for edits and every folder whose contents changed was `direct` under it
  *   (`policy`, with that `mode`);
- * - `not_allowed`: it isn't (`reason`; `policy` with `mode` `review` when a folder asked first):
- *   flag it ("Not allowed by your settings");
+ * - `not_allowed`: it isn't (`reason`; `policy` with `mode` `review` when a folder asked first;
+ *   `backdated` when its signed time disagrees with the server's record of it by more than the
+ *   skew, or comes before what it acted on): flag it ("Not allowed by your settings");
  * - `unchecked`: the revisions couldn't be read whole (a gap, below the device's floor), they are
  *   another token's, or the folders aren't known: flag it.
  */
@@ -243,7 +244,8 @@ export type AgentActionAudit =
   | {
       readonly verdict: "not_allowed";
       readonly scopeRevision: number;
-      readonly reason: "no_scope" | "other_revision" | "permission" | "folders" | "policy";
+      readonly reason:
+        "no_scope" | "other_revision" | "permission" | "folders" | "policy" | "backdated";
       readonly policy?: AgentWriteAudit;
     }
   | {
