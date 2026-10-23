@@ -63,10 +63,10 @@ export const AgentScopeSha256 = z
 
 /**
  * The oldest CLI that knows permissions (from a connect request's `cliVersion`): the web app
- * disables the permission pickers for an older one, which would never offer the tools. The
- * release that ships them (t-140) sets it to its own version.
+ * disables the permission pickers for an older one, which would never offer the tools. 0.3.0 is
+ * the release that ships them (t-140).
  */
-export const AGENT_PERMISSIONS_MIN_CLI_VERSION = "0.1.4";
+export const AGENT_PERMISSIONS_MIN_CLI_VERSION = "0.3.0";
 
 /**
  * The `prevScopeSha256` of revision 1, which has no revision before it: 64 zeros (no scope text

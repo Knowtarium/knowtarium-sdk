@@ -160,8 +160,8 @@ agent permissions, t-140) goes out under the npm dist-tag `next` first:
 5. **Never roll sync back past the new protocol** once `latest` is promoted: every fresh
    `npx knowtarium` would fail. If the release itself is bad, roll forward.
 
-The version on the `agent-permissions` branch (0.1.4, matching `AGENT_PERMISSIONS_MIN_CLI_VERSION`)
-is a placeholder for local end-to-end runs until t-140 sets the release version.
+Agent permissions (protocol 3) ship in 0.3.0, the version in `package.json`, `server.json` and
+`AGENT_PERMISSIONS_MIN_CLI_VERSION`.
 
 ## The shrinkwrap
 
