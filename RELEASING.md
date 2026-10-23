@@ -42,7 +42,9 @@ These stay as they are until the owner decides; nothing in this repo changes the
 4. **npm.** Commit, then tag and push the tag: `git tag v<version> && git push origin v<version>`.
    The publish workflow (`.github/workflows/publish.yml`) checks that the package isn't private,
    that the version isn't `0.0.0` and that the tag matches it, runs `pnpm check`, then
-   `npm publish`, whose `prepublishOnly` builds and runs `pnpm test:dist`. It signs in to npm
+   `npm publish --tag "$DIST_TAG"` (`latest`, or `package.json`'s `publishConfig.tag` when set:
+   see "A release that bumps the protocol"), whose `prepublishOnly` builds and runs
+   `pnpm test:dist`. It signs in to npm
    through trusted publishing, with no token: on npmjs.com, `knowtarium`'s settings name this
    repository (`Knowtarium/knowtarium-sdk`) and the workflow file `publish.yml` as its trusted
    publisher, and npm checks that GitHub Actions run before it accepts the package. Renaming the
@@ -139,7 +141,9 @@ The sync API refuses a request naming a protocol version it doesn't list, so a C
 new protocol must never reach `latest` before production accepts it. Such a release (protocol 3,
 agent permissions, t-140) goes out under the npm dist-tag `next` first:
 
-1. **Publish under `next`.** `package.json` carries `"publishConfig": { ..., "tag": "next" }`; the
+1. **Set the floor and publish under `next`.** Set `AGENT_PERMISSIONS_MIN_CLI_VERSION` (in
+   `src/protocol/agent-scope.ts`) to the release's version, so the web app enables the new
+   permissions only for a CLI that knows them. `package.json` carries `"publishConfig": { ..., "tag": "next" }`; the
    publish workflow reads it (only `latest` and `next` are accepted) and runs
    `npm publish --tag next`, so nothing that installs `latest` gets it. The sync and web branches pin
    the exact version. The release-assets workflow doesn't mark its GitHub Release as latest, since

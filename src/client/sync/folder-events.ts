@@ -63,7 +63,7 @@ function expectedType(action: FolderEventAction, byAgent: boolean): SignedAction
  * encrypted name), and verify under the owner's key (a person's) or the agent's vouched key for
  * the token the row names (an agent's).
  */
-export function folderEventSignature(
+function folderEventSignature(
   event: FolderEvent,
   workspaceId: string,
   owner: TrustedSigner,
@@ -123,7 +123,7 @@ export function folderEventSignature(
 }
 
 /** A folder event, verified and with its names decrypted. */
-export async function readFolderEvent(
+async function readFolderEvent(
   context: SyncContext,
   event: FolderEvent,
 ): Promise<FolderEventEntry> {

@@ -464,9 +464,11 @@ canonicalizer. `pnpm test` runs the crypto tests in Node and again under happy-d
   deleted folder's ID revives it where it was; `setRootFolder` names the workspace root folder once
   (409 `already_exists` after), and the changes feed's `workspace` entry carries it as
   `rootFolderId`. The live `scope_changed` ping tells an agent to read its token again.
-- **Deploy order for protocol changes**: the sync API first (it accepts the old and the new
-  version), then the web app, then the npm release of the CLI, so no client ever speaks a version
-  the server doesn't accept yet.
+- **Release order for protocol changes** (RELEASING.md, "A release that bumps the protocol"): the
+  npm release under the dist-tag `next` (nothing that installs `latest` gets it), then the sync API
+  accepting the old and the new version at 100%, then the promotion to `latest` once production
+  reports the new protocol, then the web app; so no published CLI ever speaks a version the server
+  doesn't accept yet.
 - **Headers**: every request sends `Knowtarium-Protocol-Version: 3` (the API also accepts 2; the
   web clipper extension stays on 2),
   and every request that isn't a GET also sends `Knowtarium-Request: 1` (a CSRF guard). A
@@ -749,9 +751,15 @@ How the engine behaves:
 - **Agent permissions** (protocol 3): `verifyAgentScope` checks a token's signed scope under the
   owner's key at or above a floor (`rollback` below it, or none after one); `prepareConnectScope`
   signs revision 1 for `approveConnect`; `updateTokenScope(api, { signer, trust }, change)` signs
-  `baseRevision + 1`, answers `conflict` with `currentRevision`, and accepts the stored revision
-  only with this hash under the owner's key; `fetchTokenScopes` verifies every revision and says
-  `gap` or `below_floor` (`TrustState.acceptAgentScopeRevision` keeps a floor per token). A delete
+  `baseRevision + 1` chained to the verified base (it reads every revision first, at base 0
+  too), answers `conflict` with `currentRevision` and `stale` for a base below the device's
+  floor, and accepts the stored revision only with this hash under the owner's key;
+  `fetchTokenScopes` verifies every revision and its chain and says `gap`, `fork` or
+  `below_floor` (`TrustState.acceptAgentScopeRevision` keeps a floor per token, with its hash).
+  Residual risks: the audit takes a folder event's `created` or `restored` label from the server
+  (both are signed `agent_folder_created`; the label only chooses which reach and display apply,
+  never the verdict on the signature), and a device keeps only its newest verified scope
+  revision's hash, so a fork below that revision shows only as a broken chain in the list. A delete
   marker signed `agent_deleted` verifies under the agent's vouched key wherever `deleted` does
   (reads, the cache, history). The agent's engine calls (`deleteAsAgent`, `proposeDelete`,
   `createFolderAsAgent`, `renameFolderAsAgent`, `moveFolderAsAgent`, `deleteFolderAsAgent`) take

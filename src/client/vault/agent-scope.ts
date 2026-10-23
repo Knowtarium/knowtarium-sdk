@@ -290,7 +290,6 @@ export async function updateTokenScope(
     workspaceId: change.workspaceId,
     tokenId: change.tokenId,
   };
-  // the scope the new revision continues, read and verified (none before revision 1)
   // the scope the new revision continues, read and verified; at base 0 the list must be empty,
   // so a server hiding a signed revision 1 can't get a second one signed
   const listed = await fetchTokenScopes(api, {

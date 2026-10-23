@@ -77,8 +77,8 @@ export async function readPending(
   const { data } = await context.api.call(routes.getPending, { params });
   const { pending } = data;
   if (pending.kind === "delete") {
-    // a delete proposal has no blob: what it would delete is its base version
-    // the base version in its own folder, from its signed envelope
+    // a delete proposal has no blob: what it would delete is its base version, read in its own
+    // folder from its signed envelope
     const base = await readNoteVersion(context, {
       noteId: pending.noteId,
       version: pending.baseVersion,

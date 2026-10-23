@@ -230,7 +230,7 @@ jobs:
             fi
             notes="knowtarium $VERSION is on npm: [knowtarium@$VERSION](https://www.npmjs.com/package/knowtarium/v/$VERSION).
 
-          **Any agent:** run \`npx knowtarium@$VERSION agents\` (or \`npx knowtarium@latest agents\`) so your agents use this version, then restart them.
+          **Any agent:** run \`npx knowtarium@$VERSION agents\` so your agents use this version, then restart them.
 
           **Claude Code and Codex:** install the Knowtarium plugin from [Knowtarium/knowtarium-plugins](https://github.com/Knowtarium/knowtarium-plugins), or update it there.
 
