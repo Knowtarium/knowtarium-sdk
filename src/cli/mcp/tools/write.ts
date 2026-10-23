@@ -752,13 +752,15 @@ export function registerWriteTools(server: McpServer, context: ToolContext): Reg
           // a proposal into another folder than the note's own is a move (told while the note
           // still sits where it was, as for an open one)
           const from = session.view.notes.get(pending.noteId)?.folderId;
-          const move =
+          const folderPath = (folderId: FolderId) =>
+            session.view.folders.has(folderId) ? session.view.folderPath(folderId) : folderId;
+          const moved =
             pending.kind === "edit" &&
             pending.baseVersion > 0 &&
             from !== undefined &&
-            from !== pending.folderId;
-          const folderPath = (folderId: FolderId) =>
-            session.view.folders.has(folderId) ? session.view.folderPath(folderId) : folderId;
+            from !== pending.folderId
+              ? { from: folderPath(from), to: folderPath(pending.folderId) }
+              : null;
           return {
             pendingId: pending.id,
             note: session.view.notes.has(pending.noteId)
@@ -766,10 +768,8 @@ export function registerWriteTools(server: McpServer, context: ToolContext): Reg
               : pending.noteId,
             noteId: pending.noteId,
             // `edit` (a new version or a new note), `move` (into another folder) or `delete`
-            kind: move ? "move" : pending.kind,
-            ...(move && from !== undefined
-              ? { from: folderPath(from), to: folderPath(pending.folderId) }
-              : {}),
+            kind: moved === null ? pending.kind : "move",
+            ...moved,
             status: pending.status,
             submittedAt: pending.createdAt,
             proposedName: detail?.name ?? null,

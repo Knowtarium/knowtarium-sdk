@@ -14,6 +14,7 @@ import {
   type AccountId,
   type AgentPermission,
   agentScopeSha256,
+  sortAgentPermissions,
   NO_PREVIOUS_AGENT_SCOPE_SHA256,
   type AgentToken,
   type Folder,
@@ -181,6 +182,12 @@ export interface Tampering {
   hold?: (route: RouteName) => Promise<void> | undefined;
   /** Rewrites the `ETag` of every answer that has one, as an edge proxy might. */
   etag?: (tag: string) => string;
+  /**
+   * The scope revision an agent's requests were authenticated under, when it differs from the
+   * token's (a request in flight while the owner changes the scope): every agent-scoped call then
+   * answers 409 `stale_agent_scope`, as the sync API's object does.
+   */
+  principalScopeRevision?: () => number | undefined;
   /** Rewrites the signed scope revisions `listTokenScopes` answers. */
   scopes?: (scopes: SignedAgentScope[]) => SignedAgentScope[];
 }
@@ -448,6 +455,15 @@ export class FakeServer {
       caller,
     };
     this.checkScope(request);
+    const principal = this.tamper.principalScopeRevision?.();
+    if (
+      caller === "agent" &&
+      principal !== undefined &&
+      principal !== this.scopeRevision &&
+      match.route.name !== "getCurrentToken"
+    ) {
+      throw new HttpError("stale_agent_scope");
+    }
     return this.route(request);
   }
 
@@ -1573,8 +1589,6 @@ export class FakeServer {
       }
       case "deleteNote": {
         const base = Number(/^"(\d+)"$/.exec(headers.get("if-match") ?? "")?.[1] ?? "-1");
-        const current = this.currentVersion(noteId);
-        if (base !== current) throw new HttpError("conflict", { currentVersion: current });
         const envelope: SignedEnvelopeFields = {
           type: "deleted",
           accountId: this.options.ownerId,
@@ -1583,7 +1597,8 @@ export class FakeServer {
           version: base + 1,
           createdAt: signedAt,
         };
-        // approving an agent's delete proposal (protocol 3)
+        // the signature, then the proposal it approves (protocol 3), then the note and its base
+        this.verify(envelope, signature);
         const pendingDelete = headers.get("knowtarium-pending-id") as PendingId | undefined;
         const proposal =
           pendingDelete === undefined ? undefined : this.openPending(pendingDelete, true);
@@ -1595,8 +1610,9 @@ export class FakeServer {
         ) {
           throw invalid(["headers", "knowtarium-pending-id"], "Not a delete of this note");
         }
-        this.verify(envelope, signature);
         const folderId = this.noteMeta(noteId).folderId;
+        const current = this.currentVersion(noteId);
+        if (base !== current) throw new HttpError("conflict", { currentVersion: current });
         const stored = this.storeVersion(
           noteId,
           folderId,
@@ -1670,10 +1686,11 @@ export class FakeServer {
         return response(200, entry.blob);
       }
       case "approvePending": {
-        const entry = this.openPending(pendingId, true);
-        if (entry.change.kind === "delete") {
+        // a delete proposal is refused before anything else, open or not
+        if (this.pending.get(pendingId)?.change.kind === "delete") {
           throw invalid(["params", "pendingId"], "Approve a delete with deleteNote");
         }
+        const entry = this.openPending(pendingId, true);
         const current = this.currentVersion(entry.change.noteId);
         if (entry.change.baseVersion !== current) {
           throw new HttpError("conflict", { currentVersion: current });
@@ -1790,6 +1807,9 @@ export class FakeServer {
           ciphertextSha256: ciphertextSha256(fromBase64Url(body.encName)),
           createdAt: body.signedAt,
         };
+        if (body.parentId !== null && !this.liveFolder(body.parentId)) {
+          throw new HttpError("not_found");
+        }
         // the ID of a deleted folder revives it, only where it was (protocol 3)
         const revived = this.deletedFolders.has(body.id);
         if (revived && this.folders.get(body.id)?.parentId !== body.parentId) {
@@ -1934,7 +1954,10 @@ export class FakeServer {
     const files = [...this.attachments.values()].some(
       (entry) => entry.attachment.folderId === folderId,
     );
-    return folders || notes || files;
+    const proposals = [...this.pending.values()].some(
+      ({ change }) => change.folderId === folderId && change.status === "open",
+    );
+    return folders || notes || files || proposals;
   }
 
   /** The folder as `FolderResponse` answers it. */
@@ -1999,6 +2022,31 @@ export class FakeServer {
       signed: change.signed as FolderEvent["signed"],
     });
     return seq;
+  }
+
+  /**
+   * The tree's own refusals of a move, as for people: into itself or a folder under it, or a
+   * tree more than 64 levels deep (both 400 `invalid_request`).
+   */
+  private checkTree(folderId: FolderId, destination: FolderId | null): void {
+    let depth = 1;
+    for (let id: FolderId | null = destination; id !== null;) {
+      if (id === folderId) {
+        throw invalid(["body", "parentId"], "A folder can't move into itself or its subfolders");
+      }
+      depth++;
+      id = this.folders.get(id)?.parentId ?? null;
+    }
+    const below = (id: FolderId): number =>
+      Math.max(
+        0,
+        ...[...this.folders]
+          .filter(([child, folder]) => folder.parentId === id && !this.deletedFolders.has(child))
+          .map(([child]) => 1 + below(child)),
+      );
+    if (depth + below(folderId) > 64) {
+      throw invalid(["body", "parentId"], "Folders nest at most 64 levels deep");
+    }
   }
 
   /** A day's cap on the agent's note deletes or folder changes (the fake's day never ends). */
@@ -2161,8 +2209,11 @@ export class FakeServer {
         const current = this.currentVersion(noteId);
         if (baseVersion !== current) throw new HttpError("conflict", { currentVersion: current });
         this.checkCap(this.agentNoteDeletes, this.agentNoteDeleteDailyCap);
+        // a delete marker is a version: the direct versions cap counts it too
+        this.checkCap(this.agentWrites, this.agentWriteDailyCap);
         this.useAgentSignature(signature ?? "");
         this.agentNoteDeletes++;
+        this.agentWrites++;
         return response(
           200,
           this.storeVersion(
@@ -2246,9 +2297,13 @@ export class FakeServer {
         if (revived && stored !== body.parentId) {
           throw invalid(["body", "parentId"], "A deleted folder comes back where it was");
         }
-        if (this.liveFolder(body.id)) throw new HttpError("already_exists");
-        if (body.parentId !== null && !this.liveFolder(body.parentId)) {
-          throw new HttpError("not_found");
+        const existing = this.folders.get(body.id);
+        if (this.liveFolder(body.id)) {
+          // the same create retried (a lost answer): it stands
+          if (existing?.parentId === body.parentId && existing.encName === body.encName) {
+            return response(201, { folder: this.folderOf(body.id), workspaceVersion: this.seq });
+          }
+          throw new HttpError("already_exists");
         }
         const { policySha256 } = this.agentSigning(body.policyRevision);
         if (body.scopeRevision !== this.scopeRevision) throw new HttpError("stale_agent_scope");
@@ -2266,6 +2321,9 @@ export class FakeServer {
         };
         this.verifyAgent(envelope, body.signature);
         this.requireDirect([body.parentId]);
+        if (body.parentId !== null && !this.liveFolder(body.parentId)) {
+          throw new HttpError("not_found");
+        }
         this.checkCap(this.agentFolderChanges, this.agentFolderChangeDailyCap);
         this.useAgentSignature(body.signature);
         this.agentFolderChanges++;
@@ -2304,8 +2362,10 @@ export class FakeServer {
         const destination = moving
           ? ((body as { parentId?: FolderId | null }).parentId ?? null)
           : null;
+        // the scope: the folder, and for a move both parents; the modes: the parent too
+        const reached = moving ? [folderId, parentId, destination] : [folderId];
         const touched = moving ? [folderId, parentId, destination] : [folderId, parentId];
-        if (this.liveFolder(folderId) && !touched.every((id) => this.inWriteScope(id))) {
+        if (this.liveFolder(folderId) && !reached.every((id) => this.inWriteScope(id))) {
           throw new HttpError("scope_denied");
         }
         this.checkAgentScope(
@@ -2350,6 +2410,7 @@ export class FakeServer {
         if (moving && destination !== null && !this.liveFolder(destination)) {
           throw new HttpError("not_found");
         }
+        if (moving) this.checkTree(folderId, destination);
         if (deleting && this.holdsContent(folderId)) throw new HttpError("not_empty");
         this.checkCap(this.agentFolderChanges, this.agentFolderChangeDailyCap);
         this.useAgentSignature(body.signature);
@@ -2438,9 +2499,15 @@ export class FakeServer {
       scopeSignature?: string;
     };
     const permissions = body.permissions ?? [];
+    if (permissions.length > 0 && body.access === "read") {
+      throw invalid(["body", "permissions"], "Permissions need read-write access");
+    }
     if (body.scopeSignature === undefined && permissions.length > 0) {
       throw invalid(["body", "scopeSignature"], "Permissions need a signed scope");
     }
+    // the agent key first (as the sync API checks it), undone if the scope then fails
+    const vouched = this.agentKeyRecords.length;
+    const answer = this.routeConnect(request);
     let signed: SignedAgentScope | null = null;
     let scopeSha256: string | null = null;
     if (body.scopeSignature !== undefined) {
@@ -2456,11 +2523,14 @@ export class FakeServer {
         prevScopeSha256: NO_PREVIOUS_AGENT_SCOPE_SHA256,
         createdAt: body.scopeSignedAt ?? "",
       };
-      this.verify(envelope, body.scopeSignature);
+      try {
+        this.verify(envelope, body.scopeSignature);
+      } catch (error) {
+        this.agentKeyRecords.length = vouched;
+        throw error;
+      }
       signed = { envelope, signature: body.scopeSignature, scope } as SignedAgentScope;
     }
-    // the agent key and the token, as before
-    const answer = this.routeConnect(request);
     this.agentScopes.length = 0;
     if (signed !== null && scopeSha256 !== null) this.applyScope(signed, scopeSha256);
     else {
@@ -2473,14 +2543,21 @@ export class FakeServer {
     return answer.status === 200 ? response(200, { token: this.agentTokenInfo() }) : answer;
   }
 
+  /**
+   * Called when the token's scope changed, as the sync API sends `scope_changed` to the token's
+   * sockets and closes them with 4000 (tests deliver it to their fake sockets).
+   */
+  onScopeChanged: ((revision: number) => void) | undefined;
+
   /** Makes a verified signed scope the token's current one (and keeps it with the others). */
   applyScope(signed: SignedAgentScope, scopeSha256: string): void {
     this.agentAccess = signed.scope.access;
     this.agentFolderIds = [...signed.scope.folderIds];
-    this.agentPermissions = [...signed.scope.permissions];
+    this.agentPermissions = sortAgentPermissions(signed.scope.permissions);
     this.scopeRevision = signed.envelope.revision;
     this.scopeSha256 = scopeSha256;
     this.agentScopes.push(signed);
+    this.onScopeChanged?.(signed.envelope.revision);
   }
 
   /** A new workspace entry in the feed (after the root folder marker changed). */

@@ -329,8 +329,11 @@ describe("organizing tools", () => {
     for (let i = 0; i < 50 && opened.length === 0; i++) await flush();
     expect((await tools()).filter((name) => ORGANIZE.includes(name))).toEqual([]);
     const before = listChanged();
+    // the server pings the token's sockets when the owner changes its scope
+    world.server.onScopeChanged = (revision) => {
+      opened[0]?.receive({ type: "scope_changed", revision });
+    };
     await world.grantScope({ permissions: ["notes.delete"] });
-    opened[0]?.receive({ type: "scope_changed", revision: 1 });
     for (let i = 0; i < 100 && !session.allows("notes.delete"); i++) {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
@@ -389,6 +392,17 @@ describe("organizing tools", () => {
     // the copy was read again for the narrowed scope
     expect(session.loaded).toBe(true);
     expect([...session.view.folders.keys()]).not.toContain(archive);
+  });
+
+  it("reads the token again and retries a write refused for a scope that moved on in flight", async () => {
+    const { world } = await seeded();
+    const { session, call } = await connect(world);
+    await grant(world, session, ["notes.delete"]);
+    // one request authenticated before the owner's change: refused, then read again and retried
+    let stale = 1;
+    world.server.tamper.principalScopeRevision = () => (stale-- > 0 ? 0 : undefined);
+    const answer = await call("delete_note", { note: "Research/pricing.md", base_version: 1 });
+    expect(answer.json()).toMatchObject({ mode: "written" });
   });
 
   it("sends protocol 3 on every request", async () => {
@@ -485,8 +499,14 @@ describe("delete_note and move_note", () => {
       note: "Research/pricing.md",
       folder: "Archive",
       base_version: 1,
+      summary: "Belongs with the archive",
     });
     expect(answer.json()).toMatchObject({ mode: "proposed" });
+    // the agent sees it as a move, with both folders
+    const mine = (await call("my_pending_changes")).json() as { changes: unknown[] };
+    expect(mine.changes).toMatchObject([
+      { kind: "move", from: "Research", to: "Archive", summary: "Belongs with the archive" },
+    ]);
   });
 
   it("reads the token again and retries once when its scope moved on in between", async () => {

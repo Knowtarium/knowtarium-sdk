@@ -644,6 +644,19 @@ describe("an agent's folder changes", () => {
     expect(person.at(-1)).toMatchObject({ signature: "unsigned", agent: null });
   });
 
+  it("refuses a move into the folder itself or a folder under it, as for people", async () => {
+    const { cli, home, scopeRevision } = await seeded(all);
+    const made = await cli.engine.createFolderAsAgent({
+      parentId: home,
+      name: "In",
+      scopeRevision,
+    });
+    if (made.status !== "saved") throw new Error(made.status);
+    await expect(
+      cli.engine.moveFolderAsAgent({ folderId: home, parentId: made.folder.id, scopeRevision }),
+    ).rejects.toSatisfy((error) => isSyncApiError(error, "invalid_request"));
+  });
+
   it("refuses its own scope folders, the root folder, another permission, and folders that ask first", async () => {
     const { world, web, cli, home, scopeRevision } = await seeded(["folders.rename"]);
     const refused = async (
