@@ -44,6 +44,7 @@ import {
   type TokenScopes,
   type SigningTime,
   type VerifiedAgentKey,
+  type VerifiedAgentScope,
 } from "../vault/index.js";
 import { eventSignatureValid } from "../history/verify.js";
 import {
@@ -1002,10 +1003,17 @@ function signedParents(entry: FolderEventEntry): {
  * or a folder delete's folder and parent, a move's folder and both parents). Null is the top
  * level.
  */
-function touchedBy(action: AgentAction): {
+function touchedBy(
+  action: AgentAction,
+  movedFrom: string | null,
+): {
   readonly reach: (string | null)[];
   readonly modes: (string | null)[];
 } {
+  // a note move: both folders, as the server checks them
+  if (action.kind === "edited" && movedFrom !== null) {
+    return { reach: [movedFrom, action.folderId], modes: [movedFrom, action.folderId] };
+  }
   if (action.kind !== "folder") return { reach: [action.folderId], modes: [action.folderId] };
   const { event } = action.entry;
   const { parentId, fromParentId } = signedParents(action.entry);
@@ -1027,7 +1035,9 @@ function touchedBy(action: AgentAction): {
 }
 
 /**
- * Audits an agent's protocol 3 action (a note delete or a folder change, from `agentActions`)
+ * Audits an agent's protocol 3 action (a note delete, a note move or a folder change, from
+ * `agentActions`; an edit in its own folder is `unchecked` as `not_agent_action`: there is no
+ * permission to check, and `auditAgentVersion` audits it)
  * against the scope revisions the owner signed for its token (`fetchTokenScopes`, read with the
  * device's floor): the revision R the action names must be the one in force when it was signed,
  * allowing for the clock skew a signature may have (`SIGNATURE_MAX_SKEW_SECONDS`): R signed no
@@ -1056,8 +1066,24 @@ export async function auditAgentAction(
 ): Promise<AgentActionAudit> {
   const signed = action.kind === "folder" ? action.entry.event.signed : action.event.signed;
   const fields = signed?.envelope;
-  const permission = fields === undefined ? undefined : PERMISSION_OF[fields.type];
-  if (fields === undefined || permission === undefined || !("scopeRevision" in fields)) {
+  // a note move (`agent_edited` into another folder than the version before's): `notes.move`
+  const movedFrom =
+    action.kind === "edited" && fields?.type === "agent_edited"
+      ? await previousFolder(context, action)
+      : null;
+  const isMove = movedFrom !== null && action.kind === "edited" && movedFrom !== action.folderId;
+  const permission = isMove
+    ? "notes.move"
+    : fields === undefined
+      ? undefined
+      : PERMISSION_OF[fields.type];
+  if (
+    fields === undefined ||
+    permission === undefined ||
+    !("tokenId" in fields) ||
+    !("policySha256" in fields) ||
+    !("revision" in fields)
+  ) {
     return { verdict: "unchecked", reason: "not_agent_action" };
   }
   if (scopes.scopes.some((scope) => scope.signed.envelope.tokenId !== fields.tokenId)) {
@@ -1066,7 +1092,24 @@ export async function auditAgentAction(
   if (scopes.problem !== null) return { verdict: "unchecked", reason: scopes.problem };
   const at = Date.parse(fields.createdAt);
   const skew = SIGNATURE_MAX_SKEW_SECONDS * 1000;
-  const revision = fields.scopeRevision;
+  // in force at `at`, within the skew: signed no later than it plus the skew, and the revision
+  // after it signed no earlier than it minus the skew
+  const inForce = (candidate: VerifiedAgentScope) => {
+    const after = scopes.scopes.find((scope) => scope.revision === candidate.revision + 1);
+    return (
+      Date.parse(candidate.signedAt) <= at + skew &&
+      (after === undefined || Date.parse(after.signedAt) >= at - skew)
+    );
+  };
+  // a move signs no scope revision (it stays `agent_edited`): the revision in force then, one
+  // holding the permission when the skew leaves two
+  const revision =
+    "scopeRevision" in fields
+      ? fields.scopeRevision
+      : (scopes.scopes.filter(inForce).find((scope) => agentScopeAllows(scope.scope, permission))
+          ?.revision ??
+        scopes.scopes.filter(inForce).at(-1)?.revision ??
+        0);
   const named = scopes.scopes.find((scope) => scope.revision === revision);
   if (named === undefined) {
     return { verdict: "not_allowed", scopeRevision: revision, reason: "no_scope" };
@@ -1080,14 +1123,10 @@ export async function auditAgentAction(
   if (Math.abs(Date.parse(row) - at) > skew) return notAllowed("backdated");
   const earliest = await earliestActionTime(context, action);
   if (earliest !== null && at < earliest - skew) return notAllowed("backdated");
-  const next = scopes.scopes.find((scope) => scope.revision === revision + 1);
-  if (Date.parse(named.signedAt) > at + skew) return notAllowed("other_revision");
-  if (next !== undefined && Date.parse(next.signedAt) < at - skew) {
-    return notAllowed("other_revision");
-  }
+  if (!inForce(named)) return notAllowed("other_revision");
   if (!agentScopeAllows(named.scope, permission)) return notAllowed("permission");
   const lookup = asLive(options.folders ?? knownFolders(context));
-  const touched = touchedBy(action);
+  const touched = touchedBy(action, isMove ? movedFrom : null);
   const reach = touched.reach.map((folderId) => reaches(named.scope, folderId, lookup));
   if (reach.includes(false)) return notAllowed("folders");
   if (reach.includes(null)) return { verdict: "unchecked", reason: "unknown_folder" };
@@ -1124,7 +1163,8 @@ function asLive(lookup: AgentPolicyFolderLookup): AgentPolicyFolderLookup {
 
 /**
  * The earliest an action can have happened (milliseconds): when the version an agent's delete
- * replaced was signed, or when the folder's change before an agent's folder change was recorded.
+ * or move replaced was signed, or when the folder's change before an agent's folder change was
+ * recorded.
  * Null when there is none (a folder's first change) or it can't be read.
  */
 async function earliestActionTime(
@@ -1137,12 +1177,32 @@ async function earliestActionTime(
     const before = history.filter((entry) => entry.event.seq < event.seq).at(-1);
     return before === undefined ? null : Date.parse(before.event.createdAt);
   }
-  if (action.kind !== "deleted") return null;
   const events = await fetchEvents(context, { noteId: action.noteId });
   const base = events.find(
     (event) => event.noteVersion === action.version - 1 && event.signed != null,
   );
   return base?.signed == null ? null : Date.parse(base.signed.envelope.createdAt);
+}
+
+/**
+ * The folder of the version before an agent's direct write, as its signed write names it (a
+ * person's `edited`, `approved` or `check_applied`, or an agent's `agent_edited`); null for a
+ * note's first version or when it can't be told. The write is a move when it differs.
+ */
+async function previousFolder(
+  context: SyncContext,
+  action: Extract<AgentAction, { kind: "edited" }>,
+): Promise<string | null> {
+  if (action.version <= 1) return null;
+  const events = await fetchEvents(context, { noteId: action.noteId });
+  const before = events.find(
+    (event) =>
+      event.noteVersion === action.version - 1 &&
+      event.signed != null &&
+      "folderId" in event.signed.envelope,
+  );
+  const fields = before?.signed?.envelope;
+  return fields !== undefined && "folderId" in fields ? fields.folderId : null;
 }
 
 /**

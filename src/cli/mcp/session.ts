@@ -12,6 +12,7 @@ import {
   type NoteId,
   routes,
   type SignedInboxKey,
+  STALE_CLOSE_CODE,
   type TokenAccess,
   type WorkspaceId,
 } from "../../protocol/index.js";
@@ -966,7 +967,16 @@ export class WorkspaceSession {
     this.engine.on("clip_added", () => {
       if (this.filesInBackground) void this.fileClips();
     });
-    this.engine.connectLive(connect);
+    // every (re)connect reads the scope again: a change made while the socket was down (asleep,
+    // offline, or closed after a first scope_changed) sends no ping of its own
+    this.engine.on("live", ({ state }) => {
+      if (state === "open") void this.refreshScope({ pull: true });
+    });
+    this.engine.connectLive(connect, {
+      onClose: (code) => {
+        if (code === STALE_CLOSE_CODE) void this.refreshScope({ pull: true });
+      },
+    });
   }
 
   /** Stops syncing (the server is shutting down). */

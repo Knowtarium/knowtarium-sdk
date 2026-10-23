@@ -19,6 +19,12 @@ import { defineRoute, WEBSOCKET } from "./route.js";
 
 export const LIVE_PING_INTERVAL_SECONDS = 30;
 
+/**
+ * The close code of a socket whose state went stale (protocol 3: its agent token's scope changed,
+ * after `scope_changed`). Every client reconnects; an agent reads its token again.
+ */
+export const STALE_CLOSE_CODE = 4000;
+
 export const LiveTicket = secretSchema("ktl");
 
 export const LiveTicketResponse = z.object({ ticket: LiveTicket, expiresAt: Timestamp });

@@ -1021,6 +1021,56 @@ describe("auditing an agent's actions", () => {
     }
   });
 
+  it("audits a note move against notes.move and both folders; an edit in place isn't one", async () => {
+    const { world, web, cli, noteId } = await seeded(["notes.move"]);
+    const other = await folder(world, web, "Other");
+    await cli.engine.pull();
+    const move = { noteId, baseVersion: 1, name: "a.md", text: note("A") };
+    expect((await cli.engine.writeAsAgent({ ...move, folderId: other })).status).toBe("saved");
+    expect(
+      (
+        await cli.engine.writeAsAgent({
+          ...move,
+          folderId: other,
+          baseVersion: 2,
+          text: note("A2"),
+        })
+      ).status,
+    ).toBe("saved");
+    await web.engine.pull();
+    const actions = await web.engine.agentActions({ sinceMs: 60_000 });
+    const byVersion = (version: number) =>
+      actions.find((action) => action.kind === "edited" && action.version === version);
+    const moved = byVersion(2);
+    const edited = byVersion(3);
+    if (moved === undefined || edited === undefined) throw new Error("no actions");
+    const scopes = await fetchTokenScopes(sessionApi(world), {
+      ownerSigningPublicKey: world.account.signing.publicKey,
+      accountId: world.accountId,
+      workspaceId: world.workspaceId,
+      tokenId: world.tokenId,
+    });
+    expect(await web.engine.auditAgentAction(moved, scopes)).toMatchObject({
+      verdict: "allowed",
+      scopeRevision: 1,
+      policy: { mode: "direct" },
+    });
+    expect(await web.engine.auditAgentAction(edited, scopes)).toEqual({
+      verdict: "unchecked",
+      reason: "not_agent_action",
+    });
+    const [first] = scopes.scopes;
+    if (first === undefined) throw new Error("no scope");
+    const without = {
+      ...scopes,
+      scopes: [{ ...first, scope: { ...first.scope, permissions: [] } }],
+    };
+    expect(await web.engine.auditAgentAction(moved, without)).toMatchObject({
+      verdict: "not_allowed",
+      reason: "permission",
+    });
+  });
+
   it("judges every touched folder's mode under the policy revision the action named", async () => {
     const { world, web, cli, home, noteId, scopeRevision } = await seeded(["notes.delete"]);
     const other = await folder(world, web, "Other");

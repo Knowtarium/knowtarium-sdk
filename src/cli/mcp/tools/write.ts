@@ -452,10 +452,23 @@ export async function openProposals(session: WorkspaceSession, noteId: NoteId): 
 async function proposalDetails(
   session: WorkspaceSession,
   changes: readonly PendingChange[],
-): Promise<Map<string, { name: string | null; title: string | null; summary: string | null }>> {
+): Promise<
+  Map<
+    string,
+    {
+      name: string | null;
+      title: string | null;
+      summary: string | null;
+      /** The folder of the version the proposal is based on, as its signed write names it. */
+      baseFolderId: FolderId | null;
+    }
+  >
+> {
   const keys = await session.keys.get();
   const workspaceId = session.workspaceId;
   const summaries = new Map<string, string>();
+  // each note's folder at each version, from the signed writes (the server's word otherwise)
+  const folderAt = new Map<string, FolderId>();
   for (const noteId of new Set(changes.map((pending) => pending.noteId))) {
     try {
       // every page of the note's events: the proposal may be an old one
@@ -466,6 +479,10 @@ async function proposalDetails(
           query: { noteId, limit: EVENTS_PAGE_MAX, ...(since === undefined ? {} : { since }) },
         });
         for (const event of data.events) {
+          const signed = event.signed?.envelope;
+          if (signed !== undefined && "folderId" in signed && event.noteVersion !== null) {
+            folderAt.set(`${noteId} ${String(event.noteVersion)}`, signed.folderId);
+          }
           if (event.authorTokenId !== session.connection.tokenId || event.ciphertext === null) {
             continue;
           }
@@ -494,14 +511,25 @@ async function proposalDetails(
   }
   const details = new Map<
     string,
-    { name: string | null; title: string | null; summary: string | null }
+    {
+      name: string | null;
+      title: string | null;
+      summary: string | null;
+      baseFolderId: FolderId | null;
+    }
   >();
   for (const pending of changes) {
     let name: string | null = null;
     let title: string | null = null;
+    const baseFolderId = folderAt.get(`${pending.noteId} ${String(pending.baseVersion)}`) ?? null;
     // a delete proposal has no blob: it proposes no new name or title
     if (pending.kind === "delete") {
-      details.set(pending.id, { name, title, summary: summaries.get(pending.id) ?? null });
+      details.set(pending.id, {
+        name,
+        title,
+        summary: summaries.get(pending.id) ?? null,
+        baseFolderId,
+      });
       continue;
     }
     try {
@@ -524,7 +552,12 @@ async function proposalDetails(
     } catch {
       // shown without them
     }
-    details.set(pending.id, { name, title, summary: summaries.get(pending.id) ?? null });
+    details.set(pending.id, {
+      name,
+      title,
+      summary: summaries.get(pending.id) ?? null,
+      baseFolderId,
+    });
   }
   return details;
 }
@@ -749,9 +782,9 @@ export function registerWriteTools(server: McpServer, context: ToolContext): Reg
         const details = await proposalDetails(session, items);
         const changes = items.map((pending) => {
           const detail = details.get(pending.id);
-          // a proposal into another folder than the note's own is a move (told while the note
-          // still sits where it was, as for an open one)
-          const from = session.view.notes.get(pending.noteId)?.folderId;
+          // a proposal into another folder than its base version's is a move, open or decided
+          const from =
+            detail?.baseFolderId ?? session.view.notes.get(pending.noteId)?.folderId ?? undefined;
           const folderPath = (folderId: FolderId) =>
             session.view.folders.has(folderId) ? session.view.folderPath(folderId) : folderId;
           const moved =

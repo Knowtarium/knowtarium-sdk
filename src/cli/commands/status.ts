@@ -230,15 +230,18 @@ export async function statusCommand(context: CliContext, argv: readonly string[]
 
 /** The permissions line: what the agent may do beyond read-write, and how sure that is. */
 function describeScope(entry: {
+  readonly access: "read" | "read-write";
   readonly permissions: readonly AgentPermission[];
   readonly scopeRevision: number | null;
   readonly scopeVerified: boolean | null;
   readonly scopeProblem?: AgentScopeProblem;
 }): string {
   const what =
-    entry.permissions.length === 0
-      ? "no permissions beyond read-write"
-      : entry.permissions.join(", ");
+    entry.access === "read"
+      ? "read only: no changes, so no permissions"
+      : entry.permissions.length === 0
+        ? "no permissions beyond read-write"
+        : entry.permissions.join(", ");
   if (entry.scopeProblem !== undefined) {
     return `${what} (the scope Knowtarium served didn't verify: ${entry.scopeProblem}; the last verified one applies)`;
   }

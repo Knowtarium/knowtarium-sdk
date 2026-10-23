@@ -7,6 +7,7 @@ import {
   type AgentPermission,
   agentScopeSha256,
   type FolderId,
+  type PendingId,
   PROTOCOL_HEADER,
   routes,
 } from "../../protocol/index.js";
@@ -341,6 +342,40 @@ describe("organizing tools", () => {
     expect(listChanged()).toBeGreaterThan(before);
   });
 
+  it("reads the scope again on a stale close and on every reconnect, missing no change", async () => {
+    const { world, research } = await seeded();
+    const { session } = await connect(world);
+    const { connect: sockets, sockets: opened } = fakeSockets();
+    session.goLive(sockets);
+    const until = async (done: () => boolean) => {
+      for (let i = 0; i < 400 && !done(); i++) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    };
+    await until(() => opened.length > 0);
+    const hello = { type: "hello", protocolVersion: 3, workspaceVersion: world.server.seq };
+    opened[0]?.receive(hello);
+    // a first change, pinged and closed stale (4000); a second right after, with no ping of its
+    // own: the close and the reconnect's hello read the scope again
+    await world.grantScope({ permissions: ["notes.delete"] });
+    opened[0]?.receive({ type: "scope_changed", revision: 1 });
+    opened[0]?.drop(4000);
+    await world.grantScope({ permissions: ["notes.delete"], folderIds: [research] });
+    await until(() => opened.length > 1);
+    opened[1]?.receive(hello);
+    await until(() => session.scope.revision === 2 && session.loaded);
+    expect(session.scope).toMatchObject({ revision: 2, folderIds: [research] });
+    // asleep: the socket drops, the owner narrows the scope meanwhile, the next hello catches it
+    opened[1]?.drop(1006);
+    await world.grantScope({ permissions: [], folderIds: [research] });
+    await until(() => opened.length > 2);
+    opened[2]?.receive(hello);
+    await until(() => session.scope.revision === 3);
+    expect(session.allows("notes.delete")).toBe(false);
+    // the narrowed copy holds only what is in scope
+    expect([...session.view.folders.keys()]).toEqual([research]);
+  }, 20_000);
+
   it("keeps the tools hidden when the server widens a scope the owner didn't sign", async () => {
     const { world } = await seeded();
     const { session, tools } = await connect(world);
@@ -507,6 +542,20 @@ describe("delete_note and move_note", () => {
     expect(mine.changes).toMatchObject([
       { kind: "move", from: "Research", to: "Archive", summary: "Belongs with the archive" },
     ]);
+    // once the person approved it, it is still a move
+    const pendingId = (answer.json() as { pendingId: PendingId }).pendingId;
+    const review = await web.engine.readPending(pendingId);
+    const approved = await web.engine.approvePending(
+      review.pending,
+      { name: review.proposedName ?? "pricing.md", text: review.proposed },
+      { takenNames: [] },
+    );
+    expect(approved.status).toBe("approved");
+    await session.sync();
+    const after = (await call("my_pending_changes")).json() as { changes: unknown[] };
+    expect(after.changes).toMatchObject([
+      { kind: "move", status: "approved", from: "Research", to: "Archive" },
+    ]);
   });
 
   it("reads the token again and retries once when its scope moved on in between", async () => {
@@ -625,13 +674,19 @@ describe("folder tools", () => {
   });
 
   it("explains another agent's protected folder", async () => {
-    const { world, archive } = await seeded();
+    const { world, archive, research } = await seeded();
     const { session, call } = await connect(world);
     await grant(world, session, all);
     world.server.otherScopeFolderIds = [archive];
     const answer = await call("rename_folder", { folder: "Archive", name: "Old" });
     expect(answer.error).toBe(true);
     expect(answer.text).toMatch(/one a connected agent was given.*can't rename or move/);
+    // a protected folder that holds notes: protected first, never "empty it"
+    world.server.otherScopeFolderIds = [research];
+    const deleting = await call("delete_folder", { folder: "Research" });
+    expect(deleting.error).toBe(true);
+    expect(deleting.text).toMatch(/Keep it, and keep its notes/);
+    expect(deleting.text).not.toMatch(/isn't empty/);
   });
 
   it("points create_note at create_folder when the agent may make folders", async () => {

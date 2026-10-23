@@ -28,6 +28,8 @@ export interface LiveOptions {
   /** Every valid message from the server. */
   readonly onMessage: (message: ServerMessage) => void;
   readonly onState?: (state: LiveState) => void;
+  /** Every close of a socket, with its code (`STALE_CLOSE_CODE`: its state went stale). */
+  readonly onClose?: (code: number) => void;
   readonly scheduler?: Scheduler;
   readonly random?: () => number;
   /** First reconnect delay; doubles per failed attempt, with jitter. */
@@ -149,8 +151,10 @@ export class LiveConnection {
         onMessage: (text) => {
           if (generation === this.generation) this.receive(text, generation);
         },
-        onClose: () => {
-          if (generation === this.generation) this.retry(generation);
+        onClose: (code) => {
+          if (generation !== this.generation) return;
+          this.options.onClose?.(code);
+          this.retry(generation);
         },
         onError: () => undefined,
       });

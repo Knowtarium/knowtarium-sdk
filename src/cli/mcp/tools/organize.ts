@@ -114,22 +114,26 @@ function parentFor(session: WorkspaceSession, reference: string): FolderId | nul
  * folder, one of this connection's own scope folders, and for a delete the clipper's inbox.
  */
 function guardFolder(session: WorkspaceSession, folderId: FolderId, deleting: boolean): void {
+  // a delete is refused for good: the folder stays, so nothing in it should go to empty it
+  const keep = deleting ? ` ${KEEP_PROTECTED}` : " Ask the person.";
   if (session.view.isRoot(folderId)) {
     throw new ToolError(
-      "That is the workspace root folder, which agents can't rename, move or delete.",
+      `That is the workspace root folder, which agents can't rename, move or delete.${keep}`,
     );
   }
   if (session.view.ownScopeFolders.includes(folderId)) {
     throw new ToolError(
-      "That folder is one of the folders this agent was given, which agents can't rename, move or delete (that would change what it was given). Ask the person.",
+      `That folder is one of the folders this agent was given, which agents can't rename, move or delete (that would change what it was given).${keep}`,
     );
   }
   if (deleting && session.inboxFolderId === folderId) {
-    throw new ToolError(
-      "That is the inbox of the web clipper, which agents can't delete. Ask the person if it should go.",
-    );
+    throw new ToolError(`That is the inbox of the web clipper, which agents can't delete.${keep}`);
   }
 }
+
+/** What an agent is told about a protected folder it meant to delete. */
+const KEEP_PROTECTED =
+  "Keep it, and keep its notes (move one elsewhere only if the person asks); never delete notes to empty it. Ask the person if it should go.";
 
 /**
  * A folder name an agent gives, normalized with the workspace path rules, refused when empty or
@@ -207,10 +211,10 @@ async function folderChange<T>(
       const what = deleting ? "rename, move or delete" : "rename or move";
       throw new ToolError(
         folderId !== null && session.view.isRoot(folderId)
-          ? `That is the workspace root folder, which agents can't ${what}.`
+          ? `That is the workspace root folder, which agents can't ${what}.${deleting ? ` ${KEEP_PROTECTED}` : ""}`
           : deleting && folderId !== null && session.inboxFolderId === folderId
-            ? "That is the inbox of the web clipper, which agents can't delete. Ask the person if it should go."
-            : `That folder is one a connected agent was given (this one or another), which agents can't ${what}: it would change what that agent was given. Ask the person.`,
+            ? `That is the inbox of the web clipper, which agents can't delete. ${KEEP_PROTECTED}`
+            : `That folder is one a connected agent was given (this one or another), which agents can't ${what}: it would change what that agent was given. ${deleting ? KEEP_PROTECTED : "Ask the person."}`,
       );
     }
     if (isSyncApiError(error, "not_empty")) throw new ToolError(FOLDER_NOT_EMPTY);
@@ -632,14 +636,8 @@ export function registerOrganizeTools(server: McpServer, context: ToolContext): 
           const path = session.view.folderPath(folderId);
           // where the folder asks first, nothing in it matters: it can't be deleted by an agent
           await guardAskFirst(session, folderId);
-          const holds =
-            [...session.view.folders.values()].some((folder) => folder.parentId === folderId) ||
-            [...session.view.notes.values()].some((note) => note.folderId === folderId);
-          if (holds) {
-            throw new ToolError(
-              `${path} isn't empty: it still holds folders or notes (list_notes shows them). Tell the person what it holds and ask before deleting any of its notes.`,
-            );
-          }
+          // whether it is empty is the server's to say, after whether it is protected (another
+          // agent's folder, which this computer can't tell): `not_empty` comes back then
           const result = await folderChange(session, { folderId, deleting: true }, () =>
             session.engine.deleteFolderAsAgent({ folderId, ...actionOptions(session) }),
           );
