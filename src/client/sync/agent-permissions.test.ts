@@ -328,6 +328,32 @@ describe("agent scopes", () => {
     expect((await read(trust)).problem).toBe("fork");
   });
 
+  it("won't sign a second revision 1 over one the server hides behind revision 0", async () => {
+    const world = new World();
+    await world.grantScope({ permissions: ["notes.delete"] });
+    // the token claims revision 0, but its signed revision 1 is listed: conflict, nothing signed
+    world.server.scopeRevision = 0;
+    const change = {
+      workspaceId: world.workspaceId,
+      tokenId: world.tokenId,
+      baseRevision: 0,
+      access: "read-write" as const,
+      folderIds: [],
+      permissions: [...AGENT_PERMISSIONS],
+    };
+    expect(await updateTokenScope(sessionApi(world), { signer: world.signer }, change)).toEqual({
+      status: "conflict",
+      currentRevision: 1,
+    });
+    // a list that doesn't verify: refused
+    world.server.tamper.scopes = (list) =>
+      list.map((scope) => ({ ...scope, signature: "A".repeat(86) }));
+    await expect(
+      updateTokenScope(sessionApi(world), { signer: world.signer }, change),
+    ).rejects.toThrow(/don't verify/);
+    expect(world.server.agentScopes).toHaveLength(1);
+  });
+
   it("reads every revision, flagging a gap or a list below the device's floor", async () => {
     const world = new World();
     await world.grantScope({ permissions: ["notes.delete"] });

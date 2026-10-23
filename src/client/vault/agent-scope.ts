@@ -260,8 +260,8 @@ export type UpdateTokenScopeResult =
 /**
  * The owner changes a token's access, folders and permissions together (session), signing the
  * next scope revision (`baseRevision + 1`), chained to the scope at `baseRevision`, which it
- * reads and verifies first (`fetchTokenScopes`: a newer revision there answers `conflict`, a list
- * that doesn't verify whole throws `untrusted_signature`). The server keeps each revision's hash,
+ * reads and verifies first (`fetchTokenScopes`, at base 0 too: a newer revision there answers
+ * `conflict`, a list that doesn't verify whole throws `untrusted_signature`). The server keeps each revision's hash,
  * so sending the same change again after a lost answer (or a save that stopped halfway) succeeds
  * rather than conflicting. The answer must hold that revision with this hash, signed by the
  * owner, else `untrusted_signature`; the revision then becomes this device's floor for the token
@@ -291,21 +291,29 @@ export async function updateTokenScope(
     tokenId: change.tokenId,
   };
   // the scope the new revision continues, read and verified (none before revision 1)
+  // the scope the new revision continues, read and verified; at base 0 the list must be empty,
+  // so a server hiding a signed revision 1 can't get a second one signed
+  const listed = await fetchTokenScopes(api, {
+    ...owner,
+    ...(flow.trust === undefined ? {} : { trust: flow.trust }),
+  });
+  const newest = listed.scopes.at(-1);
+  // the same change already stored at the next revision (a lost answer) is sent again: it stands
+  const retry =
+    newest?.revision === change.baseRevision + 1 &&
+    newest.scopeSha256 === (await agentScopeSha256(scope));
+  if (listed.problem === null && newest !== undefined && newest.revision > change.baseRevision) {
+    if (!retry) return { status: "conflict", currentRevision: newest.revision };
+  }
   let prevScopeSha256 = NO_PREVIOUS_AGENT_SCOPE_SHA256;
   if (change.baseRevision > 0) {
-    const listed = await fetchTokenScopes(api, {
-      ...owner,
-      ...(flow.trust === undefined ? {} : { trust: flow.trust }),
-    });
-    const newest = listed.scopes.at(-1)?.revision ?? 0;
-    if (listed.problem === null && newest > change.baseRevision) {
-      return { status: "conflict", currentRevision: newest };
-    }
     const base = listed.scopes.find((each) => each.revision === change.baseRevision);
     if (listed.problem !== null || base === undefined) {
       throw new VaultError("untrusted_signature", "the agent's scope revisions don't verify");
     }
     prevScopeSha256 = base.scopeSha256;
+  } else if (listed.problem !== null) {
+    throw new VaultError("untrusted_signature", "the agent's scope revisions don't verify");
   }
   const revision = change.baseRevision + 1;
   const action = await signAgentScopeRevision(signer, {
