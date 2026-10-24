@@ -143,7 +143,7 @@ agent permissions, t-140) goes out under the npm dist-tag `next` first:
 
 1. **Set the floor and publish under `next`.** Set `AGENT_PERMISSIONS_MIN_CLI_VERSION` (in
    `src/protocol/agent-scope.ts`) to the release's version, so the web app enables the new
-   permissions only for a CLI that knows them. `package.json` carries `"publishConfig": { ..., "tag": "next" }`; the
+   permissions only for a CLI that knows them. Add `"tag": "next"` to `package.json`'s `publishConfig`; the
    publish workflow reads it (only `latest` and `next` are accepted) and runs
    `npm publish --tag next`, so nothing that installs `latest` gets it. The sync and web branches pin
    the exact version. The release-assets workflow doesn't mark its GitHub Release as latest, since
