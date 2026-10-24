@@ -196,6 +196,7 @@ export class SyncEngine {
       agent: options.agent,
       folders: new Map<string, AgentPolicyFolderInfo>(),
       noteFolders: new Map<string, string>(),
+      noteVersions: new Map<string, number>(),
       cache: options.cache,
       emitter: new SyncEmitter(),
       confirmations: new Confirmations(options.workspaceId, options.verifier),
@@ -211,6 +212,7 @@ export class SyncEngine {
     });
     this.context.emitter.on("note", ({ note }) => {
       this.context.noteFolders.set(note.noteId, note.folderId);
+      this.context.noteVersions.set(note.noteId, note.version);
     });
     this.context.emitter.on("workspace", (event) => {
       if (event.rootFolderId !== undefined) this.rootFolder = event.rootFolderId;
@@ -240,6 +242,7 @@ export class SyncEngine {
       this.cursorValue = 0;
       this.context.folders.clear();
       this.context.noteFolders.clear();
+      this.context.noteVersions.clear();
       this.context.quarantine.clear();
       this.context.emitter.emit({ type: "reset" });
     });

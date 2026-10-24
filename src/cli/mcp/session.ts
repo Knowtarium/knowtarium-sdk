@@ -234,6 +234,10 @@ export class WorkspaceSession {
   private retry: NodeJS.Timeout | undefined;
   /** The sync running now, if any (one at a time). */
   private running: Promise<void> | undefined;
+  /** How many times the scope's reach changed and the local copy was dropped. */
+  private resets = 0;
+  /** `resets` when the last pull was asked for: below it, that pull read a copy dropped since. */
+  private pullAsked = 0;
   /** Failed syncs in a row (the backoff doubles with each). */
   private failures = 0;
   /** When the last sync started, by `deps.now`. */
@@ -390,8 +394,8 @@ export class WorkspaceSession {
    * (`SyncEngine.reset`), and pulled again from version 0 when `pull` (else the next sync does);
    * a change of permissions alone needs no pull. `credentials.enc` stays as written at connect.
    * Runs at start, on `scope_changed` and once after `scope_denied`, `permission_required` or
-   * `stale_agent_scope`. A call while a read runs joins it and has it read once more after (its
-   * `pull` counts too), so a scope changed meanwhile isn't missed. Never rejects.
+   * `stale_agent_scope`. A call while a read or its pull runs joins it and has it read once more
+   * after (its `pull` counts too), so a scope changed meanwhile isn't missed. Never rejects.
    */
   refreshScope(options: { readonly pull?: boolean } = {}): Promise<void> {
     if (options.pull === true) this.scopePull = true;
@@ -400,21 +404,33 @@ export class WorkspaceSession {
       this.scopeAgain = true;
       return this.scopeRead;
     }
-    const reads = async () => {
-      let reset = false;
-      do {
-        this.scopeAgain = false;
-        if (await this.readScope()) reset = true;
-      } while (this.readScopeAgain());
-      const pull = this.scopePull;
-      this.scopePull = false;
-      if (reset && pull) await this.sync();
-    };
-    const read = reads().finally(() => {
+    const read = this.readScopes().finally(() => {
       if (this.scopeRead === read) this.scopeRead = undefined;
     });
     this.scopeRead = read;
     return read;
+  }
+
+  /**
+   * Reads the scope until no call came in meanwhile, pulling after a dropped copy when a caller
+   * asked; a call during that pull reads once more too.
+   */
+  private async readScopes(): Promise<void> {
+    let reset = false;
+    do {
+      this.scopeAgain = false;
+      if (await this.readScope()) reset = true;
+      if (reset && this.scopePull && !this.readScopeAgain()) {
+        reset = false;
+        this.scopePull = false;
+        await this.sync();
+        // the sync it joined may have asked for its pull before the copy was dropped
+        if (this.pullAsked !== this.resets) await this.sync();
+      }
+    } while (this.readScopeAgain());
+    this.scopePull = false;
+    // done in the same step as the last check, so a call from here on starts a new read
+    this.scopeRead = undefined;
   }
 
   /** Whether a call came in during the last scope read, so it reads once more. */
@@ -470,6 +486,7 @@ export class WorkspaceSession {
     this.engine.setAgentFolderIds(next.folderIds);
     this.view.setScope(next.folderIds);
     this.lastPolicyAt = Number.NEGATIVE_INFINITY;
+    this.resets++;
     try {
       await this.engine.reset();
       this.loaded = false;
@@ -746,6 +763,7 @@ export class WorkspaceSession {
     this.lastAttempt = this.now();
     if (this.status !== "loading") this.status = this.loaded ? "syncing" : "loading";
     try {
+      this.pullAsked = this.resets;
       await this.engine.pull();
       this.loaded = true;
       await this.refreshChecks();

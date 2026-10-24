@@ -487,6 +487,49 @@ describe("encrypted cache", () => {
       `https://api.test/workspaces/${world.workspaceId}/changes?since=${String(cursor)}&limit=1000`,
     );
   });
+
+  it("reports what another engine sharing the cache and trust marks stored first", async () => {
+    // two MCP servers on one connection (or two tabs) share the cache and the rollback marks
+    const world = new World();
+    const web = world.web();
+    const noteId: NoteId = newId("note");
+    const write = (baseVersion: number, text: string) =>
+      web.engine.writeNote({
+        noteId,
+        folderId: world.folderId,
+        baseVersion,
+        name: "note.md",
+        text: note(text),
+      });
+    await write(0, "first");
+    const adapter = new MemoryCacheAdapter();
+    const trust = new TrustState(new MemoryTrustStorage());
+    const first = world.cli({ cache: new EncryptedCache(adapter), trust });
+    const second = world.cli({ cache: new EncryptedCache(adapter), trust });
+    await first.engine.pull();
+    const seen = record(second);
+    await second.engine.pull();
+    await write(1, "second");
+    await first.engine.pull();
+    await second.engine.pull();
+    expect(notesIn(seen).map((snapshot) => [snapshot.version, snapshot.text])).toEqual([
+      [1, note("first")],
+      [2, note("second")],
+    ]);
+    // a dropped copy comes back whole, though the other engine stored it all again first
+    await second.engine.reset();
+    await first.engine.reset();
+    await first.engine.pull();
+    seen.length = 0;
+    await second.engine.pull();
+    expect(notesIn(seen)).toMatchObject([{ noteId, version: 2, text: note("second") }]);
+    // nothing new: nothing is read again
+    const before = world.server.requests.length;
+    await second.engine.pull();
+    expect(world.server.requests.slice(before).map((call) => call.url)).toEqual([
+      `https://api.test/workspaces/${world.workspaceId}/changes?since=${String(second.engine.cursor)}&limit=1000`,
+    ]);
+  });
 });
 
 describe("live", () => {

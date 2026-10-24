@@ -1,4 +1,4 @@
-import { type ChangeEntry, type NoteEvent, routes } from "../../protocol/index.js";
+import { type ChangeEntry, type NoteEvent, type NoteId, routes } from "../../protocol/index.js";
 import {
   InvalidResponseError,
   isSyncApiError,
@@ -46,6 +46,20 @@ function latestPerObject(changes: readonly ChangeEntry[]): ChangeEntry[] {
   return [...latest.values()];
 }
 
+/**
+ * Whether the version of a note seen before is already here: this engine reported it and the
+ * cache still holds it. Otherwise it is read again: an emptied cache with the trust marks still
+ * there (after sign-out, a memory fallback or `clearWorkspace`), or a cache and trust marks shared
+ * with another engine that stored the version first (a second MCP server on the same connection,
+ * another tab), which this engine never reported.
+ */
+async function holds(context: SyncContext, noteId: NoteId, version: number): Promise<boolean> {
+  return (
+    context.noteVersions.get(noteId) === version &&
+    (await context.cache?.noteVersion(context.workspaceId, noteId)) === version
+  );
+}
+
 async function applyNote(
   context: SyncContext,
   change: Extract<ChangeEntry, { kind: "note" }>,
@@ -56,9 +70,12 @@ async function applyNote(
   if (change.version < seen) {
     throw new VaultError("rollback", "the feed offers an older note version than one seen");
   }
-  if (change.version === seen && !context.quarantine.has(change.noteId)) {
-    const cached = await context.cache?.noteVersion(context.workspaceId, change.noteId);
-    if (cached === seen) return;
+  if (
+    change.version === seen &&
+    !context.quarantine.has(change.noteId) &&
+    (await holds(context, change.noteId, seen))
+  ) {
+    return;
   }
   const ciphertext = prefetched.get(versionKey(change.noteId, change.version));
   let note;
@@ -198,11 +215,8 @@ async function applyPage(
   for (const change of notes) {
     if (change.deleted) continue;
     const seen = await context.trust.noteVersion(context.workspaceId, change.noteId);
-    // the version seen before is read again when the cache lacks it (an emptied cache with the
-    // trust marks still there: after sign-out, a memory fallback or clearWorkspace)
-    const missing =
-      change.version === seen &&
-      (await context.cache?.noteVersion(context.workspaceId, change.noteId)) !== seen;
+    // the version seen before is read again unless it is already here (see `holds`)
+    const missing = change.version === seen && !(await holds(context, change.noteId, seen));
     if (change.version > seen || missing || context.quarantine.has(change.noteId)) {
       wanted.push({ noteId: change.noteId, version: change.version });
     }

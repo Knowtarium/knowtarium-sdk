@@ -106,10 +106,14 @@ async function connect(
     access?: "read" | "read-write";
     folderIds?: FolderId[];
     scopes?: ScopeFloorStore;
+    cacheFolder?: string;
+    trust?: TrustState;
+    fetch?: typeof world.server.fetch;
   } = {},
 ) {
   const dir = await temporaryFolder();
   cleanups.push(dir.cleanup);
+  const cacheFolder = options.cacheFolder ?? dir.path;
   const connection: Connection = {
     apiUrl: "https://api.test",
     workspaceId: world.workspaceId,
@@ -125,10 +129,10 @@ async function connect(
   };
   const [vouched] = world.server.agentKeyRecords;
   if (vouched !== undefined) connection.agentKey = vouched.signed;
-  const adapter = new GuardedCacheAdapter(new FileCacheAdapter(dir.path));
+  const adapter = new GuardedCacheAdapter(new FileCacheAdapter(cacheFolder));
   const session = await WorkspaceSession.open(connection, {
-    fetch: world.server.fetch,
-    trust: new TrustState(new MemoryTrustStorage()),
+    fetch: options.fetch ?? world.server.fetch,
+    trust: options.trust ?? new TrustState(new MemoryTrustStorage()),
     cache: new EncryptedCache(adapter),
     adapter,
     log: () => undefined,
@@ -163,7 +167,7 @@ async function connect(
     };
   };
   const tools = async () => (await client.listTools()).tools.map((tool) => tool.name);
-  return { session, client, call, tools, listChanged: () => listChanged };
+  return { session, client, call, tools, listChanged: () => listChanged, cacheFolder };
 }
 
 /** The owner changes the agent's scope in the web app, and the agent reads it again. */
@@ -697,5 +701,177 @@ describe("folder tools", () => {
     await grant(world, session, ["folders.create"]);
     const with_ = await call("create_note", { folder: "Nowhere", title: "X", text: "x" });
     expect(with_.text).toMatch(/create_folder/);
+  });
+});
+
+describe("scope changes while the server runs", () => {
+  const every: AgentPermission[] = [
+    "notes.move",
+    "notes.delete",
+    "folders.create",
+    "folders.rename",
+    "folders.move",
+    "folders.delete",
+  ];
+  const until = async (done: () => boolean) => {
+    for (let i = 0; i < 400 && !done(); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  };
+
+  /** Holds one route's answers; answers the function that lets them through. */
+  function holding(world: World, route: string) {
+    let open = (): void => undefined;
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    world.server.tamper.hold = (name) => (name === route ? gate : undefined);
+    return () => {
+      delete world.server.tamper.hold;
+      open();
+    };
+  }
+
+  /**
+   * An agent given Research and Archive at revision 1, with a note in Research and another in a
+   * folder outside its scope (Other).
+   */
+  async function scoped(options: { trust?: TrustState } = {}) {
+    const { world, web, folder, research, archive } = await seeded();
+    const outside = newId("note");
+    await web.engine.writeNote({
+      noteId: outside,
+      folderId: await folder("Other"),
+      baseVersion: 0,
+      name: "outside.md",
+      text: note("Outside"),
+    });
+    world.server.agentFolderIds = [research, archive];
+    const agent = await connect(world, { folderIds: [research, archive], ...options });
+    await grant(world, agent.session, [], { folderIds: [research, archive] });
+    const fromZero = () =>
+      world.server.requests.filter((request) => request.url.includes("/changes?since=0&")).length;
+    const listed = async () => {
+      const answer = await agent.call("list_notes");
+      if (answer.error) return answer.text;
+      return (answer.json()["notes"] as { path: string }[]).map((entry) => entry.path);
+    };
+    return { world, research, archive, fromZero, listed, ...agent };
+  }
+
+  // a sync that asked for its pull before the owner widened the scope: still pulling, or past it
+  it.each(["listChanges", "listChecks"])(
+    "pulls the whole copy again when its reach changes while a sync runs (held at %s)",
+    async (route) => {
+      const { world, session, fromZero, listed } = await scoped();
+      expect(await listed()).toEqual(["Research/pricing.md"]);
+      const pulls = fromZero();
+      const release = holding(world, route);
+      const syncing = session.sync();
+      await flush();
+      await world.grantScope({ permissions: every, folderIds: [] });
+      const refreshed = session.refreshScope({ pull: true });
+      await flush();
+      release();
+      await Promise.all([syncing, refreshed]);
+      expect(session.scope).toMatchObject({ revision: 2, folderIds: [] });
+      expect(session.loaded).toBe(true);
+      expect(await listed()).toEqual(["Other/outside.md", "Research/pricing.md"]);
+      expect(fromZero()).toBe(pulls + 1);
+    },
+  );
+
+  it("reads a scope signed while the last change's pull runs, pulling again only for its reach", async () => {
+    const { world, session, fromZero, listed } = await scoped();
+    const pulls = fromZero();
+    await world.grantScope({ permissions: every, folderIds: [] });
+    const release = holding(world, "listChanges");
+    const first = session.refreshScope({ pull: true });
+    await until(() => fromZero() > pulls);
+    // the owner changes the permissions meanwhile, and the ping asks again
+    await world.grantScope({ permissions: ["folders.create"], folderIds: [] });
+    const second = session.refreshScope({ pull: true });
+    release();
+    await Promise.all([first, second]);
+    expect(session.scope).toMatchObject({
+      revision: 3,
+      folderIds: [],
+      permissions: ["folders.create"],
+    });
+    expect(await listed()).toEqual(["Other/outside.md", "Research/pricing.md"]);
+    expect(fromZero()).toBe(pulls + 1);
+    // nothing changed since: a refresh reads the token and pulls nothing
+    const requests = world.server.requests.length;
+    await session.refreshScope({ pull: true });
+    expect(world.server.requests.slice(requests).map((request) => request.url)).toEqual([
+      "https://api.test/tokens/current",
+    ]);
+  });
+
+  it("follows the whole workspace and then new permissions over live pings, as the owner saves them", async () => {
+    const { world, session, call, fromZero, listed } = await scoped();
+    const { connect: sockets, sockets: opened } = fakeSockets();
+    session.goLive(sockets);
+    await until(() => opened.length > 0);
+    const hello = () => ({ type: "hello", protocolVersion: 3, workspaceVersion: world.server.seq });
+    opened.at(-1)?.receive(hello());
+    // under revision 1 the top level is refused
+    expect((await call("create_folder", { parent: "", name: "Top" })).error).toBe(true);
+    const pulls = fromZero();
+    // the sync API pings the token's sockets, then closes them stale (4000)
+    world.server.onScopeChanged = (revision) => {
+      const socket = opened.at(-1);
+      socket?.receive({ type: "scope_changed", revision });
+      socket?.drop(4000);
+    };
+    await world.grantScope({ permissions: every, folderIds: [] });
+    await world.grantScope({ permissions: ["folders.create"], folderIds: [] });
+    await until(() => opened.length > 2);
+    opened.at(-1)?.receive(hello());
+    await until(() => session.scope.revision === 3 && session.loaded);
+    // a write refused as stale meanwhile reads the token again too, and goes through
+    let stale = 1;
+    world.server.tamper.principalScopeRevision = () => (stale-- > 0 ? 2 : undefined);
+    expect((await call("create_folder", { parent: "", name: "Top" })).json()).toMatchObject({
+      mode: "written",
+      path: "Top",
+    });
+    expect(session.scope).toMatchObject({ revision: 3, permissions: ["folders.create"] });
+    expect(await listed()).toEqual(["Other/outside.md", "Research/pricing.md"]);
+    expect(fromZero()).toBe(pulls + 1);
+  }, 20_000);
+
+  it("keeps a whole copy in two servers on one connection, which share the cache", async () => {
+    // the cache and the rollback marks on disk are shared by every server on this computer
+    const trust = new TrustState(new MemoryTrustStorage());
+    const { world, session, research, archive, cacheFolder } = await scoped({ trust });
+    let open = (): void => undefined;
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    let gated = false;
+    // a second server on the same token (another Claude Code window, Claude Desktop)
+    const other = await connect(world, {
+      folderIds: [research, archive],
+      cacheFolder,
+      trust,
+      fetch: async (url, init) => {
+        if (gated && url.includes("/changes?since=0&")) await gate;
+        return world.server.fetch(url, init);
+      },
+    });
+    await world.grantScope({ permissions: [], folderIds: [] });
+    gated = true;
+    // the second drops its copy first; the first stores everything again before it pulls
+    const behind = other.session.refreshScope({ pull: true });
+    await until(() => !other.session.loaded);
+    await session.refreshScope({ pull: true });
+    open();
+    await behind;
+    const listed = await other.call("list_notes");
+    expect((listed.json()["notes"] as { path: string }[]).map((entry) => entry.path)).toEqual([
+      "Other/outside.md",
+      "Research/pricing.md",
+    ]);
   });
 });

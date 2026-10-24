@@ -32,6 +32,12 @@ export interface SyncContext {
   readonly folders: Map<string, AgentPolicyFolderInfo>;
   /** Each note's folder as last reported, so an agent's move checks the folder it leaves. */
   readonly noteFolders: Map<string, string>;
+  /**
+   * Each note's version as this engine last reported it. The cache and the trust marks may be
+   * shared with another engine (a second MCP server on the same connection, another tab) that
+   * stored a version first, so only this says the version was reported here.
+   */
+  readonly noteVersions: Map<string, number>;
   readonly cache: EncryptedCache | undefined;
   readonly emitter: SyncEmitter;
   readonly quarantine: Quarantine;

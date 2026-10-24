@@ -721,6 +721,10 @@ How the engine behaves:
 - **Quarantine**: a note that fails a check is never shown as current. It is reported (`error`
   and `quarantine` events, `engine.quarantined`), kept in the cache, and tried again on every
   pull until a verified version arrives; the rest of the feed still syncs.
+- **A shared cache**: the cache and the trust marks may be shared with another engine (every MCP
+  server on one computer, every tab of the web app), so a version the feed offers again is read
+  again unless this engine reported it itself and the cache still holds it: one that another
+  engine stored first is never taken as known.
 - **Revocation**: a `revoked` ping, a `token_revoked` answer or a live connection refused for
   good stops the engine for good (`revoked` event, `SyncStoppedError` on every later call). The
   CLI then deletes its cached ciphertext with `EncryptedCache.clearWorkspace`; the web app does
@@ -1109,7 +1113,9 @@ permission. `WorkspaceSession.refreshScope()` reads `getCurrentToken` at start, 
 and after `scope_denied`, `permission_required` or `stale_agent_scope` (that one retried once),
 verifies the owner's `agent_scope` under the pinned key at or above the floor kept in
 `agent-scopes.enc` (`credentials.enc` and `agent-keys.enc` stay as older CLIs read them), and drops
-the local copy and pulls from version 0 only when access or folders changed (`SyncEngine.reset`).
+the local copy and pulls from version 0 only when access or folders changed (`SyncEngine.reset`;
+a sync already running that asked for its pull before the drop is followed by one more, and a call
+during that pull reads the token once more after it).
 A note delete or move is written or proposed like an edit (a move keeps the text, with no new
 `generated` stamp); a folder change is written or refused with the reason. The CLI refuses the
 root folder (the marker when the feed names one), its own scope folders, the inbox for deletes and
