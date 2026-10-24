@@ -77,7 +77,8 @@ async function launcher(body: string, args = ["-y", "knowtarium@1.2.3", "mcp"]) 
     errors += chunk.toString();
   });
   const exit = new Promise<number | null>((resolve) => {
-    child.on("exit", (code) => {
+    // "close", not "exit": the output is read to its end only once the pipes close
+    child.on("close", (code) => {
       resolve(code);
     });
   });

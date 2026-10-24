@@ -59,7 +59,8 @@ function run(
     child.stdout.on("data", collect);
     child.stderr.on("data", collect);
     child.on("error", reject);
-    child.on("exit", (code) => {
+    // "close", not "exit": the output is read to its end only once the pipes close
+    child.on("close", (code) => {
       resolve({ code, output: output.replaceAll("\r", "") });
     });
   });
