@@ -158,27 +158,34 @@ export function guardedWrite(
   });
 }
 
+/** What a write refused under a scope that moved on says while the copy is read again. */
+const SCOPE_RELOADING =
+  "Nothing was saved: the person changed which folders this agent may use, and its local copy is being read again. Try again in a few seconds.";
+
 /**
  * Runs a writing call with the scope kept fresh (protocol 3): a `stale_agent_scope` answer reads the token
  * again and tries once more; `scope_denied` and `permission_required` read it again (so the tools
- * follow) and say why.
+ * follow) and say why. Each waits for the read at most as long as a retry: a reach that changed
+ * pulls the whole copy again in the background, and the write isn't tried again meanwhile.
  */
 export async function withScope<T>(session: WorkspaceSession, run: () => Promise<T>): Promise<T> {
   try {
     return await run();
   } catch (error) {
     if (isSyncApiError(error, "stale_agent_scope")) {
-      await session.refreshScope({ pull: true });
+      await session.refreshScopeForCall();
+      // its reach changed: the copy is read again in the background, and the write would wait
+      if (!session.loaded) throw new ToolError(SCOPE_RELOADING);
       return run();
     }
     if (isSyncApiError(error, "permission_required")) {
-      await session.refreshScope({ pull: true });
+      await session.refreshScopeForCall();
       throw new ToolError(
         "This agent's permissions don't include this any more: the person changed them in Knowtarium. Tell the person, or ask them to allow it in the workspace's agent settings.",
       );
     }
     if (isSyncApiError(error, "scope_denied")) {
-      await session.refreshScope({ pull: true });
+      await session.refreshScopeForCall();
     }
     throw error;
   }

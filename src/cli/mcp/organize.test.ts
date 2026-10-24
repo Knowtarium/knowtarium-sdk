@@ -109,6 +109,7 @@ async function connect(
     cacheFolder?: string;
     trust?: TrustState;
     fetch?: typeof world.server.fetch;
+    retryWaitMs?: number;
   } = {},
 ) {
   const dir = await temporaryFolder();
@@ -140,6 +141,7 @@ async function connect(
     retryAfterMs: 3_600_000,
     apiRetry: { maxAttempts: 1 },
     ...(options.scopes === undefined ? {} : { scopes: options.scopes }),
+    ...(options.retryWaitMs === undefined ? {} : { retryWaitMs: options.retryWaitMs }),
   });
   await session.start();
   cleanups.push(() => {
@@ -719,13 +721,13 @@ describe("scope changes while the server runs", () => {
     }
   };
 
-  /** Holds one route's answers; answers the function that lets them through. */
-  function holding(world: World, route: string) {
+  /** Holds some routes' answers; answers the function that lets them through. */
+  function holding(world: World, ...held: string[]) {
     let open = (): void => undefined;
     const gate = new Promise<void>((resolve) => {
       open = resolve;
     });
-    world.server.tamper.hold = (name) => (name === route ? gate : undefined);
+    world.server.tamper.hold = (name) => (held.includes(name) ? gate : undefined);
     return () => {
       delete world.server.tamper.hold;
       open();
@@ -736,7 +738,7 @@ describe("scope changes while the server runs", () => {
    * An agent given Research and Archive at revision 1, with a note in Research and another in a
    * folder outside its scope (Other).
    */
-  async function scoped(options: { trust?: TrustState } = {}) {
+  async function scoped(options: { trust?: TrustState; retryWaitMs?: number } = {}) {
     const { world, web, folder, research, archive } = await seeded();
     const outside = newId("note");
     await web.engine.writeNote({
@@ -780,6 +782,47 @@ describe("scope changes while the server runs", () => {
       expect(fromZero()).toBe(pulls + 1);
     },
   );
+
+  it("pulls after the drop when a sync asks while a pinged pull still waits in the queue", async () => {
+    const { world, session, fromZero, listed } = await scoped();
+    const pulls = fromZero();
+    const release = holding(world, "listChanges", "listChecks");
+    // a ping's pull running, and another queued behind it
+    const running = session.engine.pull();
+    await flush();
+    const pinged = [running, session.engine.pull()];
+    await world.grantScope({ permissions: every, folderIds: [] });
+    const refreshed = session.refreshScope({ pull: true });
+    // the copy is being dropped (behind the queued pull) when a retry starts a sync
+    await until(() => session.scope.revision === 2);
+    const syncing = session.sync();
+    await flush();
+    release();
+    await Promise.all([...pinged, refreshed, syncing]);
+    expect(session.loaded).toBe(true);
+    expect(await listed()).toEqual(["Other/outside.md", "Research/pricing.md"]);
+    expect(fromZero()).toBe(pulls + 1);
+  });
+
+  it("answers a write refused under a scope that moved on without waiting for the whole pull", async () => {
+    const { world, session, call, listed } = await scoped({ retryWaitMs: 200 });
+    // the owner widened the scope; no ping reached this server
+    await world.grantScope({ permissions: [], folderIds: [] });
+    let stale = 1;
+    world.server.tamper.refuse = (route) =>
+      route === "writeNoteAsAgent" && stale-- > 0 ? "stale_agent_scope" : undefined;
+    const release = holding(world, "listChanges");
+    const create = () => call("create_note", { folder: "Research", title: "New", text: "New." });
+    const started = Date.now();
+    const refused = await create();
+    expect(refused.error).toBe(true);
+    expect(refused.text).toMatch(/Nothing was saved/);
+    expect(Date.now() - started).toBeLessThan(5_000);
+    release();
+    await until(() => session.loaded);
+    expect((await create()).json()).toMatchObject({ mode: "written" });
+    expect(await listed()).toEqual(["Other/outside.md", "Research/new.md", "Research/pricing.md"]);
+  });
 
   it("reads a scope signed while the last change's pull runs, pulling again only for its reach", async () => {
     const { world, session, fromZero, listed } = await scoped();

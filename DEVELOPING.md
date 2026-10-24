@@ -1114,8 +1114,11 @@ and after `scope_denied`, `permission_required` or `stale_agent_scope` (that one
 verifies the owner's `agent_scope` under the pinned key at or above the floor kept in
 `agent-scopes.enc` (`credentials.enc` and `agent-keys.enc` stay as older CLIs read them), and drops
 the local copy and pulls from version 0 only when access or folders changed (`SyncEngine.reset`;
-a sync already running that asked for its pull before the drop is followed by one more, and a call
-during that pull reads the token once more after it).
+a sync already running that asked for its pull before the drop is followed by one more, a pull
+asked for after it never joins one queued before it, and a call during that pull reads the token
+once more after it). A tool waits for that read at most as long as for a retry (`retryWaitMs`); a
+write refused as `stale_agent_scope` whose reach changed says nothing was saved while the copy is
+read again, rather than waiting for the whole pull.
 A note delete or move is written or proposed like an edit (a move keeps the text, with no new
 `generated` stamp); a folder change is written or refused with the reason. The CLI refuses the
 root folder (the marker when the feed names one), its own scope folders, the inbox for deletes and

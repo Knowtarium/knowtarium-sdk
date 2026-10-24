@@ -433,6 +433,15 @@ export class WorkspaceSession {
     this.scopeRead = undefined;
   }
 
+  /**
+   * `refreshScope({ pull: true })` for a tool call: waits at most `retryWaitMs` (default 10
+   * seconds), so the full pull after a reach change doesn't hold the tool, which answers from the
+   * copy as it is or says it is still loading. Never rejects.
+   */
+  async refreshScopeForCall(): Promise<void> {
+    await within(this.refreshScope({ pull: true }), this.deps.retryWaitMs ?? 10_000);
+  }
+
   /** Whether a call came in during the last scope read, so it reads once more. */
   private readScopeAgain(): boolean {
     return this.scopeAgain && !this.ended;

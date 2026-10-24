@@ -234,9 +234,10 @@ export class SyncEngine {
    * knows of folders and notes) and reports `reset`, so the next pull reads everything in scope
    * from version 0: the changes feed after a cursor never returns older objects in folders that
    * just became visible, and what left the scope must leave the copy. The device's rollback marks
-   * stay.
+   * stay. A pull asked for from now on runs after the drop, never joining one queued before it.
    */
   reset(): Promise<void> {
+    this.queuedPull = undefined;
     return this.run(async () => {
       await this.context.cache?.clearWorkspace(this.context.workspaceId);
       this.cursorValue = 0;
@@ -333,8 +334,10 @@ export class SyncEngine {
    * Resolves with the new cursor.
    */
   pull(): Promise<number> {
-    this.queuedPull ??= this.run(async () => {
-      this.queuedPull = undefined;
+    if (this.queuedPull !== undefined) return this.queuedPull;
+    const queued = this.run(async () => {
+      // a reset meanwhile may have queued another behind it, which stays to be joined
+      if (this.queuedPull === queued) this.queuedPull = undefined;
       await this.loadOnce();
       await retryQuarantine(this.context);
       await pullFeed(this.context, this.cursorValue, this.pageSize, async (cursor) => {
@@ -344,7 +347,8 @@ export class SyncEngine {
       this.context.emitter.emit({ type: "synced", cursor: this.cursorValue });
       return this.cursorValue;
     });
-    return this.queuedPull;
+    this.queuedPull = queued;
+    return queued;
   }
 
   /** The current version of a note, fetched, verified and decrypted. */
