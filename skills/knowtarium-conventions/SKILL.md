@@ -1,6 +1,6 @@
 ---
 name: knowtarium-conventions
-description: Work in a Knowtarium knowledge base through its MCP tools. Use when reading, writing or checking notes in a Knowtarium workspace, when asked to check a person's edit, when list_pending_checks has work, or when asked about the inbox, clips or saved links. Teaches the workspace conventions (its own index.md where it has one, OKF fields, file names named like the app names them), how changes land (saved at once, or proposed for approval in folders that ask for review), the consistency check that verifies a person's edit against connected notes, and how to triage the clips the person saved with the web clipper.
+description: Work in a Knowtarium knowledge base through its MCP tools. Use when reading, writing or checking notes in a Knowtarium workspace, when asked to check a person's edit, when list_pending_checks has work, or when asked about the inbox, clips or saved links. Teaches the workspace conventions (what its notes use, as the tools report it, its own index.md where it has one, OKF fields, file names named like the app names them), how changes land (saved at once, or proposed for approval in folders that ask for review), the consistency check that verifies a person's edit against connected notes, and how to triage the clips the person saved with the web clipper.
 ---
 
 # Knowtarium conventions
@@ -46,20 +46,28 @@ agent's consistency check, so both sides verify each other.
 1. `list_workspaces`: what you may use, with your access (`read` or `read-write`), your
    `permissions` beyond that (moving and deleting notes, creating, renaming, moving and deleting
    folders), how your changes land (`agentChanges`), how long older versions of notes are kept
-   (`history`) and status.
-2. Read the workspace's own conventions where it has them: the root `index.md` and the
-   `index.md` of each folder you work in, if there is one (`read_note`; `list_notes` shows what a
-   folder holds). They say what belongs where and how notes are written. A `log.md`, if there is
-   one, records notable changes. Many workspaces have neither, those made in the web app
-   especially: then the notes themselves show the conventions, so look at how the folder's notes
-   are named and written, and do the same. Don't create an `index.md` or `log.md` unless the
-   person asks or the workspace already uses them.
-3. Find notes with `search_notes` (filter by `folder`, `type` or `status`), `list_notes` and
+   (`history`), what its notes use (`conventions`) and status.
+2. Follow the workspace's own conventions. The tools report what the notes actually use:
+   `list_workspaces` for the whole workspace and `list_folders` for each folder (`conventions`):
+   the most used `type` values and tags, how files are named (`naming`: `title`, `dashed` or
+   `mixed`), and whether there is an `index.md` or `log.md`. Write new notes the same way: the
+   folder's usual `type`, tags it already uses, its naming. Where there is an `index.md` (the
+   root's, or that of a folder you work in), read it (`read_note`): it says what belongs where and
+   how notes are written, and it outranks what the counts suggest. A `log.md`, if there is one,
+   records notable changes. Many workspaces have neither, those made in the web app especially,
+   and that is fine.
+3. Offer an index, don't require one. When you are about to create the first notes or folders in
+   a workspace or folder that has no `index.md` (setting it up, not adding a note to a folder that
+   already has notes), ask the person once whether to add an `index.md` that says what belongs
+   where: what each folder is for and how notes are written there, not a list of every note (that
+   goes stale). Add it only if they say yes, and don't ask again if they say no. Otherwise don't
+   create an `index.md` or `log.md` unless the person asks or the workspace already uses them.
+4. Find notes with `search_notes` (filter by `folder`, `type` or `status`), `list_notes` and
    `list_folders`. Follow connections with `related_notes` and `resolve_link`.
-4. Read titles and descriptions before bodies (progressive disclosure). Open a body with
+5. Read titles and descriptions before bodies (progressive disclosure). Open a body with
    `read_note` only when the title and description say it matters. Long notes come in parts:
    when `truncated` is true, call again with `offset` set to `next_offset`.
-5. `list_notes`, `search_notes`, `list_stale`, `note_history`, `list_comments`,
+6. `list_notes`, `search_notes`, `list_stale`, `note_history`, `list_comments`,
    `my_pending_changes` and `list_pending_checks` are paged: when `truncated` is true, pass
    `offset` set to `next_offset` to see more. `search_notes` lists the best matches first.
 
@@ -68,13 +76,14 @@ agent's consistency check, so both sides verify each other.
 ### File names and places
 
 - A note is a file in a folder: `create_note` takes the `folder`, a `title` (always required) and
-  a `name` ending in `.md`. Name a note the way the folder's other notes are named. The web app
-  names a note after its title, as Obsidian does: `Travel expenses.md`, spaces and capitals kept
-  (characters a file name can't hold, such as `/`, `:` or `?`, become `-`), and
-  `Travel expenses 2.md` when that name is taken. Some workspaces (imported OKF bundles, say) use
-  lowercase words joined by dashes instead: `travel-expenses.md`. Without a `name`, the note is
-  named after its title, or in lowercase with dashes when every note in the folder is named that
-  way. A name already used in that folder is refused.
+  a `name` ending in `.md`. Name a note the way the folder's other notes are named (`list_folders`
+  shows it as `naming`). The web app names a note after its title, as Obsidian does:
+  `Travel expenses.md`, spaces and capitals kept (characters a file name can't hold, such as `/`,
+  `:` or `?`, become `-`), and `Travel expenses 2.md` when that name is taken (`naming: title`).
+  Some workspaces (imported OKF bundles, say) use lowercase words joined by dashes instead:
+  `travel-expenses.md` (`naming: dashed`). Without a `name`, the note is named after its title, or
+  in lowercase with dashes when every note in the folder is named that way. A name already used in
+  that folder is refused.
 - Put a note where the folder's `index.md` says it belongs, or else next to the notes like it.
   If no folder fits, ask the person; make one with `create_folder` only when this connection may
   (`folders.create`) and the person asked for it.

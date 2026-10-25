@@ -1151,6 +1151,161 @@ describe("the MCP tools' guardrails", () => {
   });
 });
 
+describe("the conventions the notes show, for agents", () => {
+  /** A workspace with a root folder and folders named like the web app, OKF bundles, or both. */
+  async function styled() {
+    const world = new World();
+    const web = world.web();
+    const root = await world.createFolder("");
+    const meetings = await world.createFolder("Meetings");
+    const policies = await world.createFolder("policies");
+    const misc = await world.createFolder("Misc");
+    const write = (folderId: FolderId, name: string, text: string) =>
+      web.engine.writeNote({ noteId: newId("note"), folderId, baseVersion: 0, name, text });
+    await write(root, "index.md", "---\ntype: Index\ntitle: Home\n---\nWhat goes where.\n");
+    // the web app: notes named after their titles, `type: Note`, no tags
+    await write(meetings, "Kickoff.md", "---\ntype: Note\ntitle: Kickoff\n---\nFirst one.\n");
+    await write(meetings, "Q3 review.md", "---\ntype: Note\ntitle: Q3 review\n---\nSecond.\n");
+    // an OKF bundle: lowercase words joined by dashes, with an index.md and a log.md
+    const policy = (title: string, tags: string) =>
+      `---\ntype: Policy\ntitle: ${title}\ntags: [${tags}]\n---\n${title}.\n`;
+    await write(policies, "travel-expenses.md", policy("Travel expenses", "hr, money"));
+    await write(policies, "leave.md", policy("Leave", "hr"));
+    await write(policies, "index.md", "---\ntype: Index\ntitle: Policies\n---\nOur rules.\n");
+    await write(policies, "log.md", "---\ntype: Log\ntitle: Log\n---\nChanges.\n");
+    // both styles in one folder
+    await write(misc, "Reading list.md", "---\ntype: Note\ntitle: Reading list\n---\nBooks.\n");
+    await write(misc, "old-ideas.md", "---\ntype: Idea\ntitle: Old ideas\n---\nIdeas.\n");
+    return { world, root, meetings, policies, misc };
+  }
+
+  type Listed = { path: string; conventions: Record<string, unknown> }[];
+
+  it("reports each folder's types, tags, naming and index.md, and the workspace's", async () => {
+    const { world } = await styled();
+    const { call } = await connect(world);
+    const folders = (await call("list_folders")).json() as Listed;
+    expect(Object.fromEntries(folders.map((folder) => [folder.path, folder.conventions]))).toEqual({
+      "": { notes: 0, types: [], tags: [], naming: null, index: true, log: false },
+      Meetings: {
+        notes: 2,
+        types: [{ type: "Note", notes: 2 }],
+        tags: [],
+        naming: "title",
+        index: false,
+        log: false,
+      },
+      Misc: {
+        notes: 2,
+        types: [
+          { type: "Idea", notes: 1 },
+          { type: "Note", notes: 1 },
+        ],
+        tags: [],
+        naming: "mixed",
+        index: false,
+        log: false,
+      },
+      policies: {
+        notes: 2,
+        types: [{ type: "Policy", notes: 2 }],
+        tags: [
+          { tag: "hr", notes: 2 },
+          { tag: "money", notes: 1 },
+        ],
+        naming: "dashed",
+        index: true,
+        log: true,
+      },
+    });
+    const [listed] = (await call("list_workspaces")).json() as { conventions: unknown }[];
+    expect(listed?.conventions).toEqual({
+      types: [
+        { type: "Note", notes: 3 },
+        { type: "Policy", notes: 2 },
+        { type: "Idea", notes: 1 },
+      ],
+      tags: [
+        { tag: "hr", notes: 2 },
+        { tag: "money", notes: 1 },
+      ],
+      naming: "mixed",
+      rootIndex: true,
+      rootLog: false,
+      foldersWithIndex: 2,
+    });
+  });
+
+  it("counts only the folders in the agent's scope", async () => {
+    const { world, policies } = await styled();
+    const { call } = await connect(world, { folderIds: [policies] });
+    const folders = (await call("list_folders")).json() as Listed;
+    expect(folders.map((folder) => folder.path)).toEqual(["policies"]);
+    const [listed] = (await call("list_workspaces")).json() as { conventions: unknown }[];
+    // the root, outside its folders, is unknown rather than without an index.md
+    expect(listed?.conventions).toEqual({
+      types: [{ type: "Policy", notes: 2 }],
+      tags: [
+        { tag: "hr", notes: 2 },
+        { tag: "money", notes: 1 },
+      ],
+      naming: "dashed",
+      rootIndex: null,
+      rootLog: null,
+      foldersWithIndex: 1,
+    });
+  });
+
+  it("knows nothing yet about an empty workspace", async () => {
+    const world = new World();
+    await world.createFolder("");
+    const empty = await world.createFolder("Empty");
+    const { call } = await connect(world);
+    const folders = (await call("list_folders")).json() as (Listed[number] & { id: string })[];
+    expect(folders.find((folder) => folder.id === empty)?.conventions).toEqual({
+      notes: 0,
+      types: [],
+      tags: [],
+      naming: null,
+      index: false,
+      log: false,
+    });
+    const [listed] = (await call("list_workspaces")).json() as { conventions: unknown }[];
+    expect(listed?.conventions).toEqual({
+      types: [],
+      tags: [],
+      naming: null,
+      rootIndex: false,
+      rootLog: false,
+      foldersWithIndex: 0,
+    });
+  });
+
+  it("follows the notes as they change, and create_note names by the same rule", async () => {
+    const { world } = await styled();
+    const { call } = await connect(world, { direct: true });
+    const naming = async (path: string) => {
+      const folders = (await call("list_folders")).json() as Listed;
+      return folders.find((folder) => folder.path === path)?.conventions["naming"];
+    };
+    expect(await naming("policies")).toBe("dashed");
+    expect(
+      (await call("create_note", { folder: "policies", title: "Sick Days", text: "Rest." })).json(),
+    ).toMatchObject({ mode: "written", name: "sick-days.md" });
+    // a title-named note makes the folder mixed, and the next note is named after its title
+    await call("create_note", {
+      folder: "policies",
+      name: "Remote work.md",
+      title: "Remote work",
+      text: "Yes.",
+    });
+    expect(await naming("policies")).toBe("mixed");
+    expect(
+      (await call("create_note", { folder: "policies", title: "On call", text: "Paid." })).json(),
+    ).toMatchObject({ name: "On call.md" });
+  });
+});
+
 describe("confirming a person's entries", () => {
   it("counts a human: entry only at the time the version's signed write names", async () => {
     const seed = await seeded();

@@ -5,7 +5,6 @@ import { z } from "zod";
 import {
   addVerified,
   fileNameOf,
-  isReservedFile,
   normalizeNoteName,
   noteNameFromTitle,
   noteTitle,
@@ -34,6 +33,7 @@ import {
   isVersionPruned,
   newId,
 } from "../../../client/index.js";
+import { KEBAB_NAME } from "../folder-style.js";
 import type { WorkspaceSession } from "../session.js";
 import { commentOf } from "./read.js";
 import {
@@ -118,21 +118,15 @@ export function fileName(
   return normalized;
 }
 
-/** Lowercase words joined by dashes, ending in `.md`, as many OKF bundles name their notes. */
-const KEBAB_NAME = /^[\p{Ll}\p{Lo}\p{N}]+(?:-[\p{Ll}\p{Lo}\p{N}]+)*\.md$/u;
-
 /**
  * The file name of a new note the agent gave no name: its title, as the web app names notes
  * (`Travel expenses.md`, with characters a file name can't hold replaced), or lowercase words
- * joined by dashes (`travel-expenses.md`) when every other note in the folder is named that way,
- * so the folder keeps its own style. `index.md` and `log.md` don't count.
+ * joined by dashes (`travel-expenses.md`) when every other note in the folder is named that way
+ * (the folder's `naming` is `dashed`, as `list_folders` reports it), so the folder keeps its own
+ * style. `index.md` and `log.md` don't count.
  */
 function defaultNoteName(session: WorkspaceSession, folderId: FolderId, title: string): string {
-  const names = [...session.view.notes.values()]
-    .filter((note) => note.folderId === folderId)
-    .map((note) => fileNameOf(session.view.pathOf(note.noteId)))
-    .filter((name) => !isReservedFile(name));
-  return names.length > 0 && names.every((name) => KEBAB_NAME.test(name))
+  return session.view.conventions().folders.get(folderId)?.naming === "dashed"
     ? kebabNoteName(title)
     : noteNameFromTitle(title);
 }
@@ -673,7 +667,7 @@ export function registerWriteTools(server: McpServer, context: ToolContext): Reg
     {
       title: "Create a note",
       description:
-        "Add a new note to a folder: a file name and the whole file, or just a title and body (a `type` and `title` are added); follow the folder's conventions (its `index.md`, if it has one, and how its notes are named and written). Depending on the folder, it is saved at once (the person sees it as made by you and can undo it) or proposed for the person's approval; the result's `mode` says which (`written` or `proposed`). Search first, so you don't duplicate a note that exists.",
+        "Add a new note to a folder: a file name and the whole file, or just a title and body (a `type` and `title` are added); follow the folder's conventions (its `index.md`, if it has one, and how its notes are named and written, which list_folders reports as `conventions`). Depending on the folder, it is saved at once (the person sees it as made by you and can undo it) or proposed for the person's approval; the result's `mode` says which (`written` or `proposed`). Search first, so you don't duplicate a note that exists.",
       inputSchema: {
         workspace,
         folder: z

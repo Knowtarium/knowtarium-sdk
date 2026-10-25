@@ -10,6 +10,7 @@ import {
 } from "../../core/index.js";
 import type { FolderId, NoteId } from "../../protocol/index.js";
 import type { NoteSnapshot, SyncEngine } from "../../client/index.js";
+import { type Conventions, stylesOf } from "./folder-style.js";
 
 interface FolderEntry {
   readonly name: string;
@@ -31,6 +32,8 @@ export class WorkspaceView {
   readonly folders = new Map<FolderId, FolderEntry>();
   private built: { workspace: Workspace; layout: WorkspaceLayout } | undefined;
   private index: SearchIndex | undefined;
+  /** The conventions the notes show, for the core workspace they were counted from. */
+  private styles: { of: Workspace; conventions: Conventions } | undefined;
 
   constructor(
     engine: SyncEngine,
@@ -172,6 +175,24 @@ export class WorkspaceView {
   /** The core workspace of the notes in scope. */
   workspace(): Workspace {
     return this.build().workspace;
+  }
+
+  /**
+   * The conventions the notes in scope show, per folder and for the workspace (see `stylesOf`),
+   * counted again only after the notes, folders or scope changed.
+   */
+  conventions(): Conventions {
+    const workspace = this.workspace();
+    if (this.styles?.of !== workspace) {
+      const root = this.build().layout.root as FolderId | null;
+      const notes = [...workspace.notes.values()].flatMap((note) => {
+        const folderId = this.notes.get(note.id as NoteId)?.folderId;
+        return folderId === undefined ? [] : [{ folderId, note }];
+      });
+      const counted = stylesOf(notes, root !== null && this.inScope(root) ? root : null);
+      this.styles = { of: workspace, conventions: counted };
+    }
+    return this.styles.conventions;
   }
 
   /** The search index over the notes in scope, kept in step with them. */

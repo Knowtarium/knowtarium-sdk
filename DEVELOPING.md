@@ -1056,6 +1056,19 @@ workspaces have none), and that a passing `record_check` is applied automaticall
 records count in every verification state the tools show, so a recorded pass is reflected at once
 and a failed check shows as a conflict.
 
+**Conventions from the notes.** Most workspaces (all made in the web app) have no `index.md`, so
+`list_folders` reports what each folder's own notes use (`conventions`: how many notes, the five
+most used `type` values and tags with how many notes use each, the file `naming`, and whether it
+has an `index.md` and a `log.md`), and `list_workspaces` the same for the whole workspace (the ten
+most used types and tags, the naming, `rootIndex` and `rootLog`, null when the root is outside the
+agent's folders, and `foldersWithIndex`), leaving clips (`type: Clip`) out so a full inbox doesn't
+drown the person's notes. `naming` is `dashed` when every name is lowercase words joined by dashes,
+`title` when none joins words with dashes (a single lowercase word fits both), else `mixed`, and
+null without notes; `index.md` and `log.md` don't count. It is the one rule `create_note` names a
+note by (`folder-style.ts`), so the two never disagree. It is counted locally, in one pass over the
+notes in scope and without their bodies, and `WorkspaceView` keeps it until the notes, folders or
+scope change.
+
 **The web clipper's clips.** A connection files the workspace's waiting clips (`fileClips`, as
 the agent the MCP client says it is, from `SessionDeps.actor`, with `generated` stamped and an
 unsigned `clipped` record) only when its token is `read-write`, the owner vouched for its signing
@@ -1170,8 +1183,11 @@ it matched (`matched`) next to core's snippet text; `list_stale` gives `stale_af
 ## The agent skill
 
 `skills/knowtarium-conventions/SKILL.md` teaches agents to work in a Knowtarium workspace through
-the MCP tools: read the workspace's own `index.md` and `log.md` first where it has them (never
-assuming they exist, nor creating them unasked), read titles and descriptions before bodies, name
+the MCP tools: follow the conventions `list_workspaces` and `list_folders` report from the notes,
+read the workspace's own `index.md` and `log.md` first where it has them (never assuming they
+exist, nor creating them unasked, except that when setting up a workspace or folder without one it
+asks the person once whether to add an `index.md` saying what belongs where, not listing every
+note), read titles and descriptions before bodies, name
 notes after their title as the web app does (or as the folder already names them), write OKF
 fields without treating a missing optional one (a `description`) as a problem, know how a change
 lands (saved at once and undoable, so be conservative, or proposed in folders that ask for review)
