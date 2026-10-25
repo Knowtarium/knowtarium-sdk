@@ -1065,7 +1065,7 @@ the root is outside the agent's folders, and `foldersWithIndex`), leaving clips 
 letter case ignored) out so a full inbox doesn't drown the person's notes. Pairs, not an object:
 an object's whole-number keys (`2024`) would come first and `__proto__` would vanish. Every folder
 carries its conventions, so `list_folders` is paged (sorted by path, 150 folders a page by default,
-500 at most) and answers one folder per line (`jsonLines`), and a folder's entry leaves out what is
+250 at most, so even a full page of busy folders stays under the cap) and answers one folder per line (`jsonLines`), and a folder's entry leaves out what is
 empty, false or unknown: a default page of busy folders with Latin names is about half Claude
 Code's 25,000-token cap on an answer (a test holds it), and names in other scripts cost more
 tokens. Types and tags are grouped with letter case ignored (core's `foldName`; a tag's leading `#`

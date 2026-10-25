@@ -1187,7 +1187,7 @@ describe("the conventions the notes show, for agents", () => {
   type Listed = { id: string; path: string; conventions: Record<string, unknown> }[];
   /** list_folders' folders, from one page as large as it gets. */
   const listFolders = async (call: Awaited<ReturnType<typeof connect>>["call"]) =>
-    ((await call("list_folders", { limit: 500 })).json() as { folders: Listed }).folders;
+    ((await call("list_folders", { limit: 250 })).json() as { folders: Listed }).folders;
 
   it("reports each folder's types, tags, naming and index.md, and the workspace's", async () => {
     const { world } = await styled();
