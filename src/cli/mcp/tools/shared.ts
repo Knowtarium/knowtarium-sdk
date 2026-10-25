@@ -115,13 +115,25 @@ export function json(value: unknown, session?: WorkspaceSession): CallToolResult
 }
 
 /**
- * A long list's answer as JSON with one entry per line: still one JSON array, a fraction of the
- * size of pretty JSON, for lists that aren't paged and grow with the workspace (`list_folders`).
+ * A page of a long list as JSON, its fields pretty and its entries (under `key`) one per line:
+ * still one JSON object, a fraction of the size of pretty JSON, for lists whose every entry carries
+ * a lot (`list_folders`).
  */
-export function jsonLines(items: readonly unknown[], session?: WorkspaceSession): CallToolResult {
+export function jsonLines(
+  fields: Readonly<Record<string, unknown>>,
+  key: string,
+  items: readonly object[],
+  session?: WorkspaceSession,
+): CallToolResult {
   const notice = noticeOf(session);
-  const text =
-    items.length === 0 ? "[]" : `[\n${items.map((item) => JSON.stringify(item)).join(",\n")}\n]`;
+  const head = Object.entries(fields).map(
+    ([name, value]) => `  ${JSON.stringify(name)}: ${JSON.stringify(value)}`,
+  );
+  const list =
+    items.length === 0
+      ? "[]"
+      : `[\n${items.map((item) => `    ${JSON.stringify(item)}`).join(",\n")}\n  ]`;
+  const text = `{\n${[...head, `  ${JSON.stringify(key)}: ${list}`].join(",\n")}\n}`;
   return {
     content: [
       { type: "text", text },

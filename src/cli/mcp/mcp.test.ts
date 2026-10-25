@@ -264,10 +264,11 @@ describe("the MCP server", () => {
     expect((await call("list_workspaces")).json()).toMatchObject([
       { id: world.workspaceId, name: "Clients", notes: 3 },
     ]);
-    expect((await call("list_folders")).json()).toMatchObject([
-      { path: "Archive" },
-      { path: "Research" },
-    ]);
+    expect((await call("list_folders")).json()).toMatchObject({
+      total: 2,
+      truncated: false,
+      folders: [{ path: "Archive" }, { path: "Research" }],
+    });
     const { notes: hits } = (await call("search_notes", { query: "pro month" })).json() as {
       notes: { title: string }[];
     };
@@ -723,10 +724,11 @@ describe("the MCP server's states", () => {
     const { call } = await serve([a.session, b.session]);
     const listed = (await call("list_notes")).json() as { total: number };
     expect(listed.total).toBe(3);
-    expect((await call("list_folders")).json()).toMatchObject([
-      { path: "Archive" },
-      { path: "Research" },
-    ]);
+    expect((await call("list_folders")).json()).toMatchObject({
+      total: 2,
+      truncated: false,
+      folders: [{ path: "Archive" }, { path: "Research" }],
+    });
     // list_workspaces says what is wrong with the other one, and how the person removes it
     const workspaces = (await call("list_workspaces")).json() as {
       status: string;
@@ -1183,20 +1185,33 @@ describe("the conventions the notes show, for agents", () => {
   }
 
   type Listed = { id: string; path: string; conventions: Record<string, unknown> }[];
+  /** list_folders' folders, from one page as large as it gets. */
+  const listFolders = async (call: Awaited<ReturnType<typeof connect>>["call"]) =>
+    ((await call("list_folders", { limit: 500 })).json() as { folders: Listed }).folders;
 
   it("reports each folder's types, tags, naming and index.md, and the workspace's", async () => {
     const { world } = await styled();
     const { call } = await connect(world);
-    const folders = (await call("list_folders")).json() as Listed;
+    const folders = await listFolders(call);
     expect(Object.fromEntries(folders.map((folder) => [folder.path, folder.conventions]))).toEqual({
       "": { notes: 0, index: true },
-      Ideas: { notes: 1, types: { note: 1 }, naming: "title" },
-      Meetings: { notes: 2, types: { Note: 2 }, naming: "title" },
-      Misc: { notes: 2, types: { Idea: 1, Note: 1 }, naming: "mixed" },
+      Ideas: { notes: 1, types: [["note", 1]], naming: "title" },
+      Meetings: { notes: 2, types: [["Note", 2]], naming: "title" },
+      Misc: {
+        notes: 2,
+        types: [
+          ["Idea", 1],
+          ["Note", 1],
+        ],
+        naming: "mixed",
+      },
       policies: {
         notes: 2,
-        types: { Policy: 2 },
-        tags: { HR: 2, money: 1 },
+        types: [["Policy", 2]],
+        tags: [
+          ["HR", 2],
+          ["money", 1],
+        ],
         naming: "dashed",
         index: true,
         log: true,
@@ -1205,8 +1220,15 @@ describe("the conventions the notes show, for agents", () => {
     const [listed] = (await call("list_workspaces")).json() as { conventions: unknown }[];
     expect(listed?.conventions).toEqual({
       // `note` and `Note` are one type, under the spelling most notes use
-      types: { Note: 4, Policy: 2, Idea: 1 },
-      tags: { HR: 2, money: 1 },
+      types: [
+        ["Note", 4],
+        ["Policy", 2],
+        ["Idea", 1],
+      ],
+      tags: [
+        ["HR", 2],
+        ["money", 1],
+      ],
       naming: "mixed",
       rootIndex: true,
       rootLog: false,
@@ -1217,13 +1239,16 @@ describe("the conventions the notes show, for agents", () => {
   it("counts only the folders in the agent's scope", async () => {
     const { world, policies } = await styled();
     const { call } = await connect(world, { folderIds: [policies] });
-    const folders = (await call("list_folders")).json() as Listed;
+    const folders = await listFolders(call);
     expect(folders.map((folder) => folder.path)).toEqual(["policies"]);
     const [listed] = (await call("list_workspaces")).json() as { conventions: unknown }[];
     // the root, outside its folders, is unknown rather than without an index.md
     expect(listed?.conventions).toEqual({
-      types: { Policy: 2 },
-      tags: { HR: 2, money: 1 },
+      types: [["Policy", 2]],
+      tags: [
+        ["HR", 2],
+        ["money", 1],
+      ],
       naming: "dashed",
       rootIndex: null,
       rootLog: null,
@@ -1236,12 +1261,12 @@ describe("the conventions the notes show, for agents", () => {
     await world.createFolder("");
     const empty = await world.createFolder("Empty");
     const { call } = await connect(world);
-    const folders = (await call("list_folders")).json() as Listed;
+    const folders = await listFolders(call);
     expect(folders.find((folder) => folder.id === empty)?.conventions).toEqual({ notes: 0 });
     const [listed] = (await call("list_workspaces")).json() as { conventions: unknown }[];
     expect(listed?.conventions).toEqual({
-      types: {},
-      tags: {},
+      types: [],
+      tags: [],
       naming: null,
       rootIndex: false,
       rootLog: false,
@@ -1253,7 +1278,7 @@ describe("the conventions the notes show, for agents", () => {
     const { world } = await styled();
     const { call } = await connect(world, { direct: true });
     const naming = async (path: string) => {
-      const folders = (await call("list_folders")).json() as Listed;
+      const folders = await listFolders(call);
       return folders.find((folder) => folder.path === path)?.conventions["naming"];
     };
     const create = async (folder: string, title: string, name?: string) =>
@@ -1304,17 +1329,34 @@ describe("the conventions the notes show, for agents", () => {
     }
     const { call } = await connect(world);
     const answer = await call("list_folders");
-    const folders = JSON.parse(answer.text) as Listed;
-    expect(folders).toHaveLength(301);
-    expect(Object.keys(folders[1]?.conventions["types"] as object)).toHaveLength(3);
-    expect(Object.keys(folders[1]?.conventions["tags"] as object)).toHaveLength(3);
-    // Claude Code cuts an MCP answer past 25,000 tokens, and JSON like this runs at 3 to 4
-    // characters a token: 75 KB is that cap at the pessimistic 3, and 300 busy folders must fit in
-    // it (about 72 KB here, one folder per line), the conventions taking at most 150 bytes a
-    // folder (about 130 here).
-    const own = folders.reduce((sum, folder) => sum + JSON.stringify(folder.conventions).length, 0);
-    expect(own).toBeLessThan(300 * 150);
-    expect(answer.text.length).toBeLessThan(75_000);
+    const first = JSON.parse(answer.text) as {
+      total: number;
+      truncated: boolean;
+      next_offset: number | null;
+      folders: Listed;
+    };
+    expect(first).toMatchObject({ total: 301, truncated: true, next_offset: 150 });
+    expect(first.folders).toHaveLength(150);
+    // one folder per line inside the page
+    expect(answer.text.split("\n").filter((line) => line.includes('"id":'))).toHaveLength(150);
+    expect(first.folders[1]?.conventions["types"]).toHaveLength(3);
+    expect(first.folders[1]?.conventions["tags"]).toHaveLength(3);
+    // Claude Code cuts an MCP answer past 25,000 tokens. A default page of 150 busy folders is
+    // about 38 KB, held under 42 KB: at a pessimistic 3 characters a token, about half that cap,
+    // which leaves room for names that cost more tokens (non-Latin scripts, emoji). The
+    // conventions take at most 150 bytes a folder (about 130 here).
+    expect(answer.text.length).toBeLessThan(42_000);
+    const own = first.folders.reduce(
+      (sum, folder) => sum + JSON.stringify(folder.conventions).length,
+      0,
+    );
+    expect(own).toBeLessThan(150 * 150);
+    // the next page goes on where the first stopped, sorted by path
+    const second = (await call("list_folders", { offset: 150 })).json() as typeof first;
+    expect(second).toMatchObject({ total: 301, offset: 150, truncated: true, next_offset: 300 });
+    const paths = [...first.folders, ...second.folders].map((folder) => folder.path);
+    expect(new Set(paths).size).toBe(300);
+    expect(paths).toEqual([...paths].sort((a, b) => a.localeCompare(b)));
   }, 60_000);
 });
 

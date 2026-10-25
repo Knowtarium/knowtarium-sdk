@@ -41,8 +41,8 @@ describe("the conventions the notes show", () => {
     const { folders, workspace } = stylesOf([], ROOT);
     expect(folders.size).toBe(0);
     expect(workspace).toEqual({
-      types: {},
-      tags: {},
+      types: [],
+      tags: [],
       naming: null,
       rootIndex: false,
       rootLog: false,
@@ -56,7 +56,7 @@ describe("the conventions the notes show", () => {
   it("reads a web app folder: named after the titles, `type: Note`, empty fields left out", () => {
     expect(
       folderOf([["Meeting notes.md"], ["Q3- plans - goals.md"], ["Ideas 2.md"], ["todo.md"]]),
-    ).toEqual({ notes: 4, types: { Note: 4 }, naming: "title" });
+    ).toEqual({ notes: 4, types: [["Note", 4]], naming: "title" });
   });
 
   it("names a folder `dashed` only when one name at least has a dash", () => {
@@ -78,7 +78,11 @@ describe("the conventions the notes show", () => {
         ["leave.md", "type: Policy"],
         ["faq.md", "type: FAQ"],
       ])?.types,
-    ).toEqual({ Policy: 2, FAQ: 1, Guide: 1 });
+    ).toEqual([
+      ["Policy", 2],
+      ["FAQ", 1],
+      ["Guide", 1],
+    ]);
   });
 
   it("finds index.md and log.md, which count as neither notes nor names", () => {
@@ -95,13 +99,13 @@ describe("the conventions the notes show", () => {
     expect(folders.get(ROOT)).toEqual({ notes: 0, index: true, log: true });
     expect(folders.get(OKF)).toEqual({
       notes: 1,
-      types: { Policy: 1 },
+      types: [["Policy", 1]],
       naming: "dashed",
       index: true,
     });
     expect(folders.get(MIXED)).toEqual({ notes: 0, log: true });
     expect(workspace).toMatchObject({
-      types: { Policy: 1 },
+      types: [["Policy", 1]],
       rootIndex: true,
       rootLog: true,
       foldersWithIndex: 2,
@@ -118,11 +122,15 @@ describe("the conventions the notes show", () => {
       ),
     );
     const { folders, workspace } = stylesOf(notes, null);
-    expect(folders.get(NOTES)?.tags).toEqual({ "tag-0": 12, "tag-1": 11, "tag-2": 10 });
-    expect(Object.keys(folders.get(NOTES)?.types ?? {})).toHaveLength(FOLDER_MOST_USED);
-    expect(Object.keys(workspace.tags)).toHaveLength(WORKSPACE_MOST_USED);
-    expect(Object.entries(workspace.tags).at(-1)).toEqual(["tag-9", 3]);
-    expect(Object.keys(workspace.types)).toHaveLength(7);
+    expect(folders.get(NOTES)?.tags).toEqual([
+      ["tag-0", 12],
+      ["tag-1", 11],
+      ["tag-2", 10],
+    ]);
+    expect(folders.get(NOTES)?.types).toHaveLength(FOLDER_MOST_USED);
+    expect(workspace.tags).toHaveLength(WORKSPACE_MOST_USED);
+    expect(workspace.tags.at(-1)).toEqual(["tag-9", 3]);
+    expect(workspace.types).toHaveLength(7);
   });
 
   it("groups types and tags whatever their case or `#`, under the spelling most notes use", () => {
@@ -132,9 +140,9 @@ describe("the conventions the notes show", () => {
       ["b.md", "type: Decision\ntags: [pricing, Plans]"],
       ["c.md", "type: Decision\ntags: ['#plans', pricing]"],
     ]);
-    expect(folder?.types).toEqual({ Decision: 3 });
+    expect(folder?.types).toEqual([["Decision", 3]]);
     // a tie between spellings goes by code unit order
-    expect(Object.entries(folder?.tags ?? {})).toEqual([
+    expect(folder?.tags).toEqual([
       ["pricing", 3],
       ["Plans", 2],
     ]);
@@ -156,10 +164,80 @@ describe("the conventions the notes show", () => {
       ]),
     ).toEqual({
       notes: 4,
-      types: { "2024": 1 },
-      tags: { pricing: 2, ["y".repeat(48)]: 1 },
+      types: [["2024", 1]],
+      tags: [
+        ["pricing", 2],
+        ["y".repeat(48), 1],
+      ],
       naming: "title",
     });
+  });
+
+  it("skips a type or tag holding any invisible character, of every kind", () => {
+    // YAML escapes, so the frontmatter itself stays plain
+    const invisible = {
+      control: "\\x07",
+      "left-to-right mark": "\\u200E",
+      "right-to-left mark": "\\u200F",
+      "Arabic letter mark": "\\u061C",
+      "zero-width space": "\\u200B",
+      "word joiner": "\\u2060",
+      "byte order mark": "\\uFEFF",
+      "soft hyphen": "\\u00AD",
+      "Unicode tag character": "\\U000E0041",
+      "interlinear annotation": "\\uFFF9",
+      "line separator": "\\u2028",
+      "paragraph separator": "\\u2029",
+      "private use": "\\uE000",
+    };
+    for (const [kind, escape] of Object.entries(invisible)) {
+      expect(
+        folderOf([["a.md", `type: "Pol${escape}icy"\ntags: ["hr", "fin${escape}ance"]`]]),
+        kind,
+      ).toEqual({ notes: 1, tags: [["hr", 1]], naming: "title" });
+    }
+  });
+
+  it("counts the length limit in characters, not UTF-16 units", () => {
+    // 48 emoji take 96 UTF-16 units
+    expect(
+      folderOf([["a.md", `tags: ["${"🙂".repeat(48)}", "${"🙂".repeat(49)}"]`]])?.tags,
+    ).toEqual([["🙂".repeat(48), 1]]);
+  });
+
+  it("keeps the tags a list still has when one element is bad", () => {
+    expect(
+      folderOf([
+        // null, and the nested list an Obsidian `[[Link]]` makes, next to good tags
+        ["a.md", "tags: [hr, null, [[Leave]], 2024, { a: 1 }]"],
+        ["b.md", "tags: [hr]"],
+      ])?.tags,
+    ).toEqual([
+      ["hr", 2],
+      ["2024", 1],
+    ]);
+  });
+
+  it("lists values in the order of use, whatever they are: numbers, `__proto__`", () => {
+    const folder = folderOf([
+      ["a.md", "type: travel\ntags: [travel, __proto__, constructor]"],
+      ["b.md", "type: travel\ntags: [travel, __proto__]"],
+      ["c.md", "type: travel\ntags: [travel]"],
+      ["d.md", "type: 2024\ntags: [2024]"],
+    ]);
+    expect(folder?.types).toEqual([
+      ["travel", 3],
+      ["2024", 1],
+    ]);
+    expect(folder?.tags).toEqual([
+      ["travel", 3],
+      ["__proto__", 2],
+      ["2024", 1],
+    ]);
+    // and as JSON, in the same order
+    expect(JSON.stringify(folder?.tags)).toBe('[["travel",3],["__proto__",2],["2024",1]]');
+    expect(Object.keys(Object.prototype)).toEqual([]);
+    expect(({} as Record<string, unknown>)["travel"]).toBeUndefined();
   });
 
   it("leaves clips out of the workspace's summary, not out of their folder's", () => {
@@ -170,13 +248,14 @@ describe("the conventions the notes show", () => {
       [...clips, note(OKF, "leave-policy.md", "type: Policy\ntags: [hr]")],
       null,
     );
-    expect(folders.get(INBOX)).toMatchObject({ notes: 30, types: { Clip: 30 } });
+    expect(folders.get(INBOX)).toMatchObject({ notes: 30, types: [["Clip", 30]] });
     expect(workspace).toMatchObject({
-      types: { Policy: 1 },
-      tags: { hr: 1 },
+      types: [["Policy", 1]],
+      tags: [["hr", 1]],
       naming: "dashed",
     });
     expect(isClipType(" Clip ")).toBe(true);
+    expect(isClipType("clip")).toBe(true);
     expect(isClipType("Note")).toBe(false);
     expect(isClipType(undefined)).toBe(false);
   });

@@ -15,15 +15,25 @@ export type NamingStyle = "title" | "dashed" | "mixed";
 export const FOLDER_MOST_USED = 3;
 /** The most types and tags `list_workspaces` shows for a workspace, most used first. */
 export const WORKSPACE_MOST_USED = 10;
-/** The longest type or tag counted: longer ones are skipped, never cut. */
+/** The longest type or tag counted, in code points: longer ones are skipped, never cut. */
 const MAX_VALUE_LENGTH = 48;
-/** Control characters and bidirectional overrides: a value holding one is skipped. */
-const CONTROL = /[\p{Cc}‪-‮⁦-⁩]/u;
+/**
+ * Characters a value can't show plainly: control and format characters (bidirectional marks,
+ * zero-width ones, the soft hyphen, Unicode tag characters, U+FEFF, U+FFF9..FFFB), line and
+ * paragraph separators, and private-use ones. A value holding one is skipped, never stripped.
+ */
+const INVISIBLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Co}]/u;
 
-/** Whether a note's `type` (a frontmatter value) says it is a clip from the web clipper. */
+/**
+ * Whether a note's `type` (a frontmatter value) says it is a clip from the web clipper, letter case
+ * ignored as when types are counted.
+ */
 export function isClipType(type: unknown): boolean {
-  return typeof type === "string" && type.trim() === CLIP_NOTE_TYPE;
+  return typeof type === "string" && foldName(type.trim()) === foldName(CLIP_NOTE_TYPE);
 }
+
+/** A type or tag with how many notes use it. */
+export type Used = readonly [value: string, notes: number];
 
 /**
  * How note file names (`index.md` and `log.md` left out) are named, counted one at a time: the one
@@ -54,13 +64,34 @@ class NameTally {
 
 /**
  * A type or tag as counted: trimmed (a tag without its leading `#`), or null when it is empty,
- * longer than `MAX_VALUE_LENGTH` or holds a control character. Values come from note frontmatter,
- * so anything that could break a listing or pass for something else is left out, never cut.
+ * longer than `MAX_VALUE_LENGTH` or holds an invisible character. Values come from note
+ * frontmatter, so anything that could break a listing or pass for something else is left out, never
+ * cut.
  */
-function cleaned(value: string, tag: boolean): string | null {
-  if (CONTROL.test(value)) return null;
+function cleaned(value: unknown, tag: boolean): string | null {
+  // text, as the OKF fields read it (`tags: [2024]` is the tag `2024`)
+  if (typeof value === "number" || typeof value === "boolean") value = String(value);
+  if (typeof value !== "string" || INVISIBLE.test(value)) return null;
   const text = tag ? value.trim().replace(/^#/, "").trim() : value.trim();
-  return text === "" || text.length > MAX_VALUE_LENGTH ? null : text;
+  return text === "" || codePoints(text) > MAX_VALUE_LENGTH ? null : text;
+}
+
+/** How many code points a text holds (an emoji is one, though two UTF-16 units). */
+function codePoints(text: string): number {
+  return Array.from(text).length;
+}
+
+/**
+ * A note's tags, leniently: each usable element of its `tags` list (or the one tag a string names),
+ * so one bad element (`null`, or the nested list an Obsidian `[[Link]]` makes) doesn't lose the
+ * others, as it would in the OKF field.
+ */
+function tagsOf(note: Note): string[] {
+  const raw = note.frontmatter["tags"];
+  return (Array.isArray(raw) ? (raw as unknown[]) : [raw]).flatMap((tag) => {
+    const kept = cleaned(tag, true);
+    return kept === null ? [] : [kept];
+  });
 }
 
 /**
@@ -86,21 +117,22 @@ class Counts {
   }
 
   /**
-   * The `max` most used, most used first, as a map of the spelling to how many notes use it. Ties
-   * go by code unit order (not the locale's), so answers stay the same everywhere.
+   * The `max` most used, most used first, each as its spelling and how many notes use it: pairs
+   * in a list, not an object, whose keys would reorder (`2024` before `travel`) or vanish
+   * (`__proto__`). Ties go by code unit order (not the locale's), so answers stay the same
+   * everywhere.
    */
-  top(max: number): Record<string, number> {
+  top(max: number): Used[] {
     const before = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
-    const shown: Record<string, number> = {};
-    for (const [, entry] of [...this.counts]
+    return [...this.counts]
       .sort(([a, x], [b, y]) => y.notes - x.notes || before(a, b))
-      .slice(0, max)) {
-      const [spelling] = [...entry.spellings].reduce((best, next) =>
-        next[1] > best[1] || (next[1] === best[1] && next[0] < best[0]) ? next : best,
-      );
-      shown[spelling] = entry.notes;
-    }
-    return shown;
+      .slice(0, max)
+      .map(([, entry]) => {
+        const [spelling] = [...entry.spellings].reduce((best, next) =>
+          next[1] > best[1] || (next[1] === best[1] && next[0] < best[0]) ? next : best,
+        );
+        return [spelling, entry.notes] as const;
+      });
   }
 
   get size(): number {
@@ -118,28 +150,23 @@ class Usage {
   add(note: Note): void {
     this.notes += 1;
     this.naming.add(note.fileName);
-    const type = note.fields.type === undefined ? null : cleaned(note.fields.type, false);
+    const type = cleaned(note.fields.type, false);
     this.types.add(type === null ? [] : [type]);
-    this.tags.add(
-      (note.fields.tags ?? []).flatMap((tag) => {
-        const kept = cleaned(tag, true);
-        return kept === null ? [] : [kept];
-      }),
-    );
+    this.tags.add(tagsOf(note));
   }
 }
 
 /**
  * The conventions one folder's own notes (not its subfolders') show, for `list_folders`, kept small
  * since every folder has one: how many notes it holds (`index.md` and `log.md` left out); its most
- * used `type` values and tags, each with how many notes use it (left out when there are none); how
- * its files are named (left out without notes); and `index` and `log` only when it has an
- * `index.md` or a `log.md`.
+ * used `type` values and tags as `[value, notes]` pairs, most used first (left out when there are
+ * none); how its files are named (left out without notes); and `index` and `log` only when it has
+ * an `index.md` or a `log.md`.
  */
 export interface FolderStyle {
   readonly notes: number;
-  readonly types?: Readonly<Record<string, number>>;
-  readonly tags?: Readonly<Record<string, number>>;
+  readonly types?: readonly Used[];
+  readonly tags?: readonly Used[];
   readonly naming?: NamingStyle;
   readonly index?: true;
   readonly log?: true;
@@ -155,8 +182,8 @@ export const EMPTY_FOLDER_STYLE: FolderStyle = { notes: 0 };
  * are left out, so a full inbox doesn't drown the person's own notes.
  */
 export interface WorkspaceStyle {
-  readonly types: Readonly<Record<string, number>>;
-  readonly tags: Readonly<Record<string, number>>;
+  readonly types: readonly Used[];
+  readonly tags: readonly Used[];
   readonly naming: NamingStyle | null;
   readonly rootIndex: boolean | null;
   readonly rootLog: boolean | null;

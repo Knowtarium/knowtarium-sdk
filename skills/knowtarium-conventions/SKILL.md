@@ -69,7 +69,7 @@ agent's consistency check, so both sides verify each other.
 5. Read titles and descriptions before bodies (progressive disclosure). Open a body with
    `read_note` only when the title and description say it matters. Long notes come in parts:
    when `truncated` is true, call again with `offset` set to `next_offset`.
-6. `list_notes`, `search_notes`, `list_stale`, `note_history`, `list_comments`,
+6. `list_folders`, `list_notes`, `search_notes`, `list_stale`, `note_history`, `list_comments`,
    `my_pending_changes` and `list_pending_checks` are paged: when `truncated` is true, pass
    `offset` set to `next_offset` to see more. `search_notes` lists the best matches first.
 

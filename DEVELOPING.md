@@ -1058,23 +1058,27 @@ and a failed check shows as a conflict.
 
 **Conventions from the notes.** Most workspaces (all made in the web app) have no `index.md`, so
 `list_folders` reports what each folder's own notes use (`conventions`: how many notes, the three
-most used `type` values and tags as maps of spelling to note count, the file `naming`, and `index`
-and `log` when it has an `index.md` or a `log.md`), and `list_workspaces` the same for the whole
-workspace (the ten most used types and tags, the naming, `rootIndex` and `rootLog`, null when the
-root is outside the agent's folders, and `foldersWithIndex`), leaving clips (`type: Clip`) out so a
-full inbox doesn't drown the person's notes. `list_folders` isn't paged and every folder has an
-entry, so it answers one folder per line (`jsonLines`) and a folder's entry leaves out what is
-empty, false or unknown: 300 busy folders stay under Claude Code's 25,000-token cap on an answer (a
-test holds it). Types and tags are grouped
-with letter case ignored (core's `foldName`; a tag's leading `#` dropped) under the spelling most
-notes use; a value longer than 48 characters or holding a control character is skipped, never cut,
-since frontmatter is written by anyone. `naming` is `dashed` when every name is lowercase words or
-digits joined by dashes and one at least has a dash (`2024-10-25.md` counts), `title` when no name
-joins words with dashes (so a folder of single words, `ideas.md` or `会议记录.md`, is `title`), else
-`mixed`, and absent without notes; `index.md` and `log.md` don't count. It is the one rule
-`create_note` names a note by (`folder-style.ts`), so the two never disagree. It is counted
-locally, in one pass over the notes in scope and without their bodies, and `WorkspaceView` keeps it
-until the notes, folders or scope change.
+most used `type` values and tags as `[value, notes]` pairs, most used first, the file `naming`, and
+`index` and `log` when it has an `index.md` or a `log.md`), and `list_workspaces` the same for the
+whole workspace (the ten most used types and tags, the naming, `rootIndex` and `rootLog`, null when
+the root is outside the agent's folders, and `foldersWithIndex`), leaving clips (`type: Clip`,
+letter case ignored) out so a full inbox doesn't drown the person's notes. Pairs, not an object:
+an object's whole-number keys (`2024`) would come first and `__proto__` would vanish. Every folder
+carries its conventions, so `list_folders` is paged (sorted by path, 150 folders a page by default,
+500 at most) and answers one folder per line (`jsonLines`), and a folder's entry leaves out what is
+empty, false or unknown: a default page of busy folders with Latin names is about half Claude
+Code's 25,000-token cap on an answer (a test holds it), and names in other scripts cost more
+tokens. Types and tags are grouped with letter case ignored (core's `foldName`; a tag's leading `#`
+dropped) under the spelling most notes use; a value longer than 48 code points or holding a
+control, format, separator or private-use character is skipped, never cut or stripped, since
+frontmatter is written by anyone. Tags are read leniently from the raw frontmatter, so a bad element
+(`null`, an Obsidian `[[Link]]`) doesn't lose the note's other tags. `naming` is `dashed` when every
+name is lowercase words or digits joined by dashes and one at least has a dash (`2024-10-25.md`
+counts), `title` when no name joins words with dashes (so a folder of single words, `ideas.md` or
+`会议记录.md`, is `title`), else `mixed`, and absent without notes; `index.md` and `log.md` don't
+count. It is the one rule `create_note` names a note by (`folder-style.ts`), so the two never
+disagree. It is counted locally, in one pass over the notes in scope and without their bodies, and
+`WorkspaceView` keeps it until the notes, folders or scope change.
 
 **The web clipper's clips.** A connection files the workspace's waiting clips (`fileClips`, as
 the agent the MCP client says it is, from `SessionDeps.actor`, with `generated` stamped and an

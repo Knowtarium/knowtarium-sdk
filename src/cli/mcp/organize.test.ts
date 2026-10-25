@@ -234,10 +234,9 @@ describe("organizing tools", () => {
     });
     const { session, call } = await connect(world);
     const conventions = async () => {
-      const folders = JSON.parse((await call("list_folders")).text) as {
-        path: string;
-        conventions: unknown;
-      }[];
+      const { folders } = JSON.parse((await call("list_folders")).text) as {
+        folders: { path: string; conventions: unknown }[];
+      };
       const [listed] = (await call("list_workspaces")).json() as unknown as {
         conventions: { types: unknown; tags: unknown };
       }[];
@@ -249,18 +248,21 @@ describe("organizing tools", () => {
     };
     expect(await conventions()).toEqual({
       folders: {
-        Archive: { notes: 1, types: { Decision: 1 }, tags: { plans: 1 }, naming: "dashed" },
-        Research: { notes: 1, types: { Note: 1 }, naming: "title" },
+        Archive: { notes: 1, types: [["Decision", 1]], tags: [["plans", 1]], naming: "dashed" },
+        Research: { notes: 1, types: [["Note", 1]], naming: "title" },
       },
-      types: { Decision: 1, Note: 1 },
-      tags: { plans: 1 },
+      types: [
+        ["Decision", 1],
+        ["Note", 1],
+      ],
+      tags: [["plans", 1]],
     });
     // while the server runs, the owner keeps the agent to Research
     await grant(world, session, [], { folderIds: [research] });
     expect(await conventions()).toEqual({
-      folders: { Research: { notes: 1, types: { Note: 1 }, naming: "title" } },
-      types: { Note: 1 },
-      tags: {},
+      folders: { Research: { notes: 1, types: [["Note", 1]], naming: "title" } },
+      types: [["Note", 1]],
+      tags: [],
     });
   });
 
