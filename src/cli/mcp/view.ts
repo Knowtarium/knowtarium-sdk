@@ -46,6 +46,7 @@ export class WorkspaceView {
         this.notes.clear();
         this.folders.clear();
         this.index = undefined;
+        this.styles = undefined;
         this.built = undefined;
         return;
       }

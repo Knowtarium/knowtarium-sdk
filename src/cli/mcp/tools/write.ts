@@ -122,8 +122,8 @@ export function fileName(
  * The file name of a new note the agent gave no name: its title, as the web app names notes
  * (`Travel expenses.md`, with characters a file name can't hold replaced), or lowercase words
  * joined by dashes (`travel-expenses.md`) when every other note in the folder is named that way
- * (the folder's `naming` is `dashed`, as `list_folders` reports it), so the folder keeps its own
- * style. `index.md` and `log.md` don't count.
+ * and one at least has a dash (the folder's `naming` is `dashed`, as `list_folders` reports it), so
+ * the folder keeps its own style. `index.md` and `log.md` don't count.
  */
 function defaultNoteName(session: WorkspaceSession, folderId: FolderId, title: string): string {
   return session.view.conventions().folders.get(folderId)?.naming === "dashed"
@@ -679,7 +679,7 @@ export function registerWriteTools(server: McpServer, context: ToolContext): Reg
           .string()
           .optional()
           .describe(
-            "The file name within the folder, ending in `.md`: named like the folder's other notes, which in the web app is the title (`Travel expenses.md`). Default: the title, or lowercase words joined by dashes (`travel-expenses.md`) when every note in the folder is named that way.",
+            "The file name within the folder, ending in `.md`: named like the folder's other notes, which in the web app is the title (`Travel expenses.md`). Default: the title, or lowercase words joined by dashes (`travel-expenses.md`) when the folder's notes are named that way (list_folders' `naming` is `dashed`).",
           ),
         title: z.string().min(1).max(200),
         text: z.string().describe("The note: a full OKF file with frontmatter, or just the body."),

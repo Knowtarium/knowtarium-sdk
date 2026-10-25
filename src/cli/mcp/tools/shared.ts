@@ -114,6 +114,22 @@ export function json(value: unknown, session?: WorkspaceSession): CallToolResult
   };
 }
 
+/**
+ * A long list's answer as JSON with one entry per line: still one JSON array, a fraction of the
+ * size of pretty JSON, for lists that aren't paged and grow with the workspace (`list_folders`).
+ */
+export function jsonLines(items: readonly unknown[], session?: WorkspaceSession): CallToolResult {
+  const notice = noticeOf(session);
+  const text =
+    items.length === 0 ? "[]" : `[\n${items.map((item) => JSON.stringify(item)).join(",\n")}\n]`;
+  return {
+    content: [
+      { type: "text", text },
+      ...(notice === null ? [] : [{ type: "text" as const, text: `Note: ${notice}` }]),
+    ],
+  };
+}
+
 /** Runs a tool body, turning failures into clear tool errors instead of protocol errors. */
 export async function guarded(run: () => Promise<CallToolResult>): Promise<CallToolResult> {
   try {

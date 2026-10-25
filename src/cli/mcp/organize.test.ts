@@ -223,6 +223,47 @@ describe("organizing tools", () => {
     expect(await tools()).not.toContain("propose_edit");
   });
 
+  it("reports conventions only for the folders still in scope after the owner narrows it", async () => {
+    const { world, web, research, archive } = await seeded();
+    await web.engine.writeNote({
+      noteId: newId("note"),
+      folderId: archive,
+      baseVersion: 0,
+      name: "old-plans.md",
+      text: "---\ntype: Decision\ntitle: Old plans\ntags: [plans]\n---\nGone.\n",
+    });
+    const { session, call } = await connect(world);
+    const conventions = async () => {
+      const folders = JSON.parse((await call("list_folders")).text) as {
+        path: string;
+        conventions: unknown;
+      }[];
+      const [listed] = (await call("list_workspaces")).json() as unknown as {
+        conventions: { types: unknown; tags: unknown };
+      }[];
+      return {
+        folders: Object.fromEntries(folders.map((folder) => [folder.path, folder.conventions])),
+        types: listed?.conventions.types,
+        tags: listed?.conventions.tags,
+      };
+    };
+    expect(await conventions()).toEqual({
+      folders: {
+        Archive: { notes: 1, types: { Decision: 1 }, tags: { plans: 1 }, naming: "dashed" },
+        Research: { notes: 1, types: { Note: 1 }, naming: "title" },
+      },
+      types: { Decision: 1, Note: 1 },
+      tags: { plans: 1 },
+    });
+    // while the server runs, the owner keeps the agent to Research
+    await grant(world, session, [], { folderIds: [research] });
+    expect(await conventions()).toEqual({
+      folders: { Research: { notes: 1, types: { Note: 1 }, naming: "title" } },
+      types: { Note: 1 },
+      tags: {},
+    });
+  });
+
   it("refuses a scope the owner didn't sign, keeping the one it verified", async () => {
     const { world } = await seeded();
     const floors = memoryFloors();
@@ -821,7 +862,8 @@ describe("scope changes while the server runs", () => {
     release();
     await until(() => session.loaded);
     expect((await create()).json()).toMatchObject({ mode: "written" });
-    expect(await listed()).toEqual(["Other/outside.md", "Research/new.md", "Research/pricing.md"]);
+    // named after its title: Research's single-word `pricing.md` doesn't make it dashed
+    expect(await listed()).toEqual(["Other/outside.md", "Research/New.md", "Research/pricing.md"]);
   });
 
   it("reads a scope signed while the last change's pull runs, pulling again only for its reach", async () => {

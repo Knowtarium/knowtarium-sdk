@@ -1057,17 +1057,24 @@ records count in every verification state the tools show, so a recorded pass is 
 and a failed check shows as a conflict.
 
 **Conventions from the notes.** Most workspaces (all made in the web app) have no `index.md`, so
-`list_folders` reports what each folder's own notes use (`conventions`: how many notes, the five
-most used `type` values and tags with how many notes use each, the file `naming`, and whether it
-has an `index.md` and a `log.md`), and `list_workspaces` the same for the whole workspace (the ten
-most used types and tags, the naming, `rootIndex` and `rootLog`, null when the root is outside the
-agent's folders, and `foldersWithIndex`), leaving clips (`type: Clip`) out so a full inbox doesn't
-drown the person's notes. `naming` is `dashed` when every name is lowercase words joined by dashes,
-`title` when none joins words with dashes (a single lowercase word fits both), else `mixed`, and
-null without notes; `index.md` and `log.md` don't count. It is the one rule `create_note` names a
-note by (`folder-style.ts`), so the two never disagree. It is counted locally, in one pass over the
-notes in scope and without their bodies, and `WorkspaceView` keeps it until the notes, folders or
-scope change.
+`list_folders` reports what each folder's own notes use (`conventions`: how many notes, the three
+most used `type` values and tags as maps of spelling to note count, the file `naming`, and `index`
+and `log` when it has an `index.md` or a `log.md`), and `list_workspaces` the same for the whole
+workspace (the ten most used types and tags, the naming, `rootIndex` and `rootLog`, null when the
+root is outside the agent's folders, and `foldersWithIndex`), leaving clips (`type: Clip`) out so a
+full inbox doesn't drown the person's notes. `list_folders` isn't paged and every folder has an
+entry, so it answers one folder per line (`jsonLines`) and a folder's entry leaves out what is
+empty, false or unknown: 300 busy folders stay under Claude Code's 25,000-token cap on an answer (a
+test holds it). Types and tags are grouped
+with letter case ignored (core's `foldName`; a tag's leading `#` dropped) under the spelling most
+notes use; a value longer than 48 characters or holding a control character is skipped, never cut,
+since frontmatter is written by anyone. `naming` is `dashed` when every name is lowercase words or
+digits joined by dashes and one at least has a dash (`2024-10-25.md` counts), `title` when no name
+joins words with dashes (so a folder of single words, `ideas.md` or `会议记录.md`, is `title`), else
+`mixed`, and absent without notes; `index.md` and `log.md` don't count. It is the one rule
+`create_note` names a note by (`folder-style.ts`), so the two never disagree. It is counted
+locally, in one pass over the notes in scope and without their bodies, and `WorkspaceView` keeps it
+until the notes, folders or scope change.
 
 **The web clipper's clips.** A connection files the workspace's waiting clips (`fileClips`, as
 the agent the MCP client says it is, from `SessionDeps.actor`, with `generated` stamped and an
@@ -1169,7 +1176,7 @@ open proposal from the same agent for the same note unless `allow_duplicate` is 
 `list_pending_checks` lists only notes in `review` folders. `create_note` takes any file name the
 path rules accept; without one, the note is named after its title as the web app names notes
 (core's `noteNameFromTitle`: `Travel expenses.md`), or in lowercase words joined by dashes when
-every other note in the folder is named that way. A name taken in the folder is refused with a
+the folder's `naming` is `dashed`. A name taken in the folder is refused with a
 numbered one to try (`Travel expenses 2.md`), so an agent that meant the same note edits it
 instead. `reply_comment` refuses an unknown comment, and a write that can't reach Knowtarium says
 that nothing was proposed or recorded. `my_pending_changes` shows when each proposal was
@@ -1187,7 +1194,7 @@ the MCP tools: follow the conventions `list_workspaces` and `list_folders` repor
 read the workspace's own `index.md` and `log.md` first where it has them (never assuming they
 exist, nor creating them unasked, except that when setting up a workspace or folder without one it
 asks the person once whether to add an `index.md` saying what belongs where, not listing every
-note), read titles and descriptions before bodies, name
+note, for a folder or root in its scope), read titles and descriptions before bodies, name
 notes after their title as the web app does (or as the folder already names them), write OKF
 fields without treating a missing optional one (a `description`) as a problem, know how a change
 lands (saved at once and undoable, so be conservative, or proposed in folders that ask for review)

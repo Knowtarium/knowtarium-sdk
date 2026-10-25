@@ -1160,6 +1160,7 @@ describe("the conventions the notes show, for agents", () => {
     const meetings = await world.createFolder("Meetings");
     const policies = await world.createFolder("policies");
     const misc = await world.createFolder("Misc");
+    const ideas = await world.createFolder("Ideas");
     const write = (folderId: FolderId, name: string, text: string) =>
       web.engine.writeNote({ noteId: newId("note"), folderId, baseVersion: 0, name, text });
     await write(root, "index.md", "---\ntype: Index\ntitle: Home\n---\nWhat goes where.\n");
@@ -1170,49 +1171,32 @@ describe("the conventions the notes show, for agents", () => {
     const policy = (title: string, tags: string) =>
       `---\ntype: Policy\ntitle: ${title}\ntags: [${tags}]\n---\n${title}.\n`;
     await write(policies, "travel-expenses.md", policy("Travel expenses", "hr, money"));
-    await write(policies, "leave.md", policy("Leave", "hr"));
+    await write(policies, "leave.md", policy("Leave", "HR"));
     await write(policies, "index.md", "---\ntype: Index\ntitle: Policies\n---\nOur rules.\n");
     await write(policies, "log.md", "---\ntype: Log\ntitle: Log\n---\nChanges.\n");
     // both styles in one folder
     await write(misc, "Reading list.md", "---\ntype: Note\ntitle: Reading list\n---\nBooks.\n");
     await write(misc, "old-ideas.md", "---\ntype: Idea\ntitle: Old ideas\n---\nIdeas.\n");
-    return { world, root, meetings, policies, misc };
+    // single lowercase words: named after their titles too
+    await write(ideas, "todo.md", "---\ntype: note\ntitle: todo\n---\nThings.\n");
+    return { world, root, meetings, policies, misc, ideas };
   }
 
-  type Listed = { path: string; conventions: Record<string, unknown> }[];
+  type Listed = { id: string; path: string; conventions: Record<string, unknown> }[];
 
   it("reports each folder's types, tags, naming and index.md, and the workspace's", async () => {
     const { world } = await styled();
     const { call } = await connect(world);
     const folders = (await call("list_folders")).json() as Listed;
     expect(Object.fromEntries(folders.map((folder) => [folder.path, folder.conventions]))).toEqual({
-      "": { notes: 0, types: [], tags: [], naming: null, index: true, log: false },
-      Meetings: {
-        notes: 2,
-        types: [{ type: "Note", notes: 2 }],
-        tags: [],
-        naming: "title",
-        index: false,
-        log: false,
-      },
-      Misc: {
-        notes: 2,
-        types: [
-          { type: "Idea", notes: 1 },
-          { type: "Note", notes: 1 },
-        ],
-        tags: [],
-        naming: "mixed",
-        index: false,
-        log: false,
-      },
+      "": { notes: 0, index: true },
+      Ideas: { notes: 1, types: { note: 1 }, naming: "title" },
+      Meetings: { notes: 2, types: { Note: 2 }, naming: "title" },
+      Misc: { notes: 2, types: { Idea: 1, Note: 1 }, naming: "mixed" },
       policies: {
         notes: 2,
-        types: [{ type: "Policy", notes: 2 }],
-        tags: [
-          { tag: "hr", notes: 2 },
-          { tag: "money", notes: 1 },
-        ],
+        types: { Policy: 2 },
+        tags: { HR: 2, money: 1 },
         naming: "dashed",
         index: true,
         log: true,
@@ -1220,15 +1204,9 @@ describe("the conventions the notes show, for agents", () => {
     });
     const [listed] = (await call("list_workspaces")).json() as { conventions: unknown }[];
     expect(listed?.conventions).toEqual({
-      types: [
-        { type: "Note", notes: 3 },
-        { type: "Policy", notes: 2 },
-        { type: "Idea", notes: 1 },
-      ],
-      tags: [
-        { tag: "hr", notes: 2 },
-        { tag: "money", notes: 1 },
-      ],
+      // `note` and `Note` are one type, under the spelling most notes use
+      types: { Note: 4, Policy: 2, Idea: 1 },
+      tags: { HR: 2, money: 1 },
       naming: "mixed",
       rootIndex: true,
       rootLog: false,
@@ -1244,11 +1222,8 @@ describe("the conventions the notes show, for agents", () => {
     const [listed] = (await call("list_workspaces")).json() as { conventions: unknown }[];
     // the root, outside its folders, is unknown rather than without an index.md
     expect(listed?.conventions).toEqual({
-      types: [{ type: "Policy", notes: 2 }],
-      tags: [
-        { tag: "hr", notes: 2 },
-        { tag: "money", notes: 1 },
-      ],
+      types: { Policy: 2 },
+      tags: { HR: 2, money: 1 },
       naming: "dashed",
       rootIndex: null,
       rootLog: null,
@@ -1261,19 +1236,12 @@ describe("the conventions the notes show, for agents", () => {
     await world.createFolder("");
     const empty = await world.createFolder("Empty");
     const { call } = await connect(world);
-    const folders = (await call("list_folders")).json() as (Listed[number] & { id: string })[];
-    expect(folders.find((folder) => folder.id === empty)?.conventions).toEqual({
-      notes: 0,
-      types: [],
-      tags: [],
-      naming: null,
-      index: false,
-      log: false,
-    });
+    const folders = (await call("list_folders")).json() as Listed;
+    expect(folders.find((folder) => folder.id === empty)?.conventions).toEqual({ notes: 0 });
     const [listed] = (await call("list_workspaces")).json() as { conventions: unknown }[];
     expect(listed?.conventions).toEqual({
-      types: [],
-      tags: [],
+      types: {},
+      tags: {},
       naming: null,
       rootIndex: false,
       rootLog: false,
@@ -1288,22 +1256,66 @@ describe("the conventions the notes show, for agents", () => {
       const folders = (await call("list_folders")).json() as Listed;
       return folders.find((folder) => folder.path === path)?.conventions["naming"];
     };
+    const create = async (folder: string, title: string, name?: string) =>
+      (
+        await call("create_note", {
+          folder,
+          title,
+          text: "Agreed.",
+          ...(name === undefined ? {} : { name }),
+        })
+      ).json();
     expect(await naming("policies")).toBe("dashed");
-    expect(
-      (await call("create_note", { folder: "policies", title: "Sick Days", text: "Rest." })).json(),
-    ).toMatchObject({ mode: "written", name: "sick-days.md" });
-    // a title-named note makes the folder mixed, and the next note is named after its title
-    await call("create_note", {
-      folder: "policies",
-      name: "Remote work.md",
-      title: "Remote work",
-      text: "Yes.",
+    expect(await create("policies", "Sick Days")).toMatchObject({
+      mode: "written",
+      name: "sick-days.md",
     });
+    // a title-named note makes the folder mixed, and the next note is named after its title
+    await create("policies", "Remote work", "Remote work.md");
     expect(await naming("policies")).toBe("mixed");
-    expect(
-      (await call("create_note", { folder: "policies", title: "On call", text: "Paid." })).json(),
-    ).toMatchObject({ name: "On call.md" });
+    expect(await create("policies", "On call")).toMatchObject({ name: "On call.md" });
+    // a folder of single lowercase words is named after the titles
+    expect(await naming("Ideas")).toBe("title");
+    expect(await create("Ideas", "Weekly plan")).toMatchObject({ name: "Weekly plan.md" });
   });
+
+  it("keeps list_folders small for a big workspace", async () => {
+    const world = new World();
+    const web = world.web();
+    await world.createFolder("");
+    // 300 folders, each with notes of 4 types and 12 tags each: more than any folder shows
+    const words = ["pricing", "planning", "hiring", "roadmap", "customers", "support", "finance"];
+    const more = ["legal", "design", "research", "marketing", "operations"];
+    const types = ["Meeting", "Decision", "Policy", "Guide"];
+    for (let f = 0; f < 300; f++) {
+      const folderId = await world.createFolder(`Client ${String(f)} projects`);
+      for (let n = 0; n < 4; n++) {
+        const tags = [...words, ...more].map((word, t) =>
+          t + n < 12 ? `${word}-${String(f)}` : word,
+        );
+        await web.engine.writeNote({
+          noteId: newId("note"),
+          folderId,
+          baseVersion: 0,
+          name: `Note ${String(n)}.md`,
+          text: `---\ntype: ${types[n] ?? "Note"}\ntitle: Note ${String(n)}\ntags: [${tags.join(", ")}]\n---\nBody.\n`,
+        });
+      }
+    }
+    const { call } = await connect(world);
+    const answer = await call("list_folders");
+    const folders = JSON.parse(answer.text) as Listed;
+    expect(folders).toHaveLength(301);
+    expect(Object.keys(folders[1]?.conventions["types"] as object)).toHaveLength(3);
+    expect(Object.keys(folders[1]?.conventions["tags"] as object)).toHaveLength(3);
+    // Claude Code cuts an MCP answer past 25,000 tokens, and JSON like this runs at 3 to 4
+    // characters a token: 75 KB is that cap at the pessimistic 3, and 300 busy folders must fit in
+    // it (about 72 KB here, one folder per line), the conventions taking at most 150 bytes a
+    // folder (about 130 here).
+    const own = folders.reduce((sum, folder) => sum + JSON.stringify(folder.conventions).length, 0);
+    expect(own).toBeLessThan(300 * 150);
+    expect(answer.text.length).toBeLessThan(75_000);
+  }, 60_000);
 });
 
 describe("confirming a person's entries", () => {
